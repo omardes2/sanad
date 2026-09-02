@@ -1,0 +1,50 @@
+# SANAD — Local development infrastructure
+# Runs PostgreSQL and Redis only. The Laravel app, queue worker, scheduler
+# and Horizon are run on the host (see docs/LOCAL_DEVELOPMENT.md).
+#
+# Usage:
+#   docker compose up -d        # start postgres + redis
+#   docker compose ps           # check status
+#   docker compose down         # stop
+#
+# No real secrets live here. Values mirror .env.example and are for LOCAL use only.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sanad_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-sanad}
+      POSTGRES_USER: ${DB_USERNAME:-sanad}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - sanad_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-sanad} -d ${DB_DATABASE:-sanad}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sanad_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - sanad_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  sanad_pg_data:
+    driver: local
+  sanad_redis_data:
+    driver: local
