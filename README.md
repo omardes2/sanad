@@ -46,6 +46,8 @@ php artisan serve             # http://localhost:8000
 
 فحص الصحّة: `curl http://localhost:8000/api/health`
 
+محاكي المحادثة المحلي (يتطلب `php artisan horizon`): `http://localhost:8000/dev/chat` — متاح في local/testing فقط.
+
 الدليل الكامل: [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md).
 
 ## الجودة
@@ -61,6 +63,7 @@ npm run build            # بناء الأصول
 - [docs/PROJECT.md](docs/PROJECT.md) — فكرة المشروع والنطاق
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — المعمارية
 - [docs/DATABASE.md](docs/DATABASE.md) — نموذج البيانات والجداول والعلاقات
+- [docs/MESSAGE_PIPELINE.md](docs/MESSAGE_PIPELINE.md) — مسار الرسائل والمحاكي المحلي
 - [docs/ROADMAP.md](docs/ROADMAP.md) — خارطة الطريق و Sprints
 - [docs/DECISIONS.md](docs/DECISIONS.md) — سجل القرارات المعمارية
 - [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) — التشغيل المحلي

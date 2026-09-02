@@ -62,6 +62,7 @@ class DemoDataSeeder extends Seeder
             'user_id' => $user->id,
             'direction' => MessageDirection::Outbound,
             'type' => MessageType::Text,
+            'in_reply_to_message_id' => $inbound->id,
             'text_content' => 'تمام! أنشأتُ لك تذكيرًا.',
         ]);
 

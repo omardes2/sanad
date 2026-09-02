@@ -2,6 +2,48 @@
 
 > قرارات مختصرة تُوثّق "لماذا" اخترنا ما اخترنا. الأحدث في الأعلى.
 
+## ADR-0019 — عزل القنوات خلف `ChannelAdapter` + `ChannelRegistry`
+- **القرار:** كل قناة (Web/WhatsApp) تُنفّذ `ChannelAdapter`، ويُختار الـ Adapter عبر
+  `ChannelRegistry` باستخدام الحاوية و DI.
+- **السبب:** منع شروط `if (whatsapp/web)` المتناثرة؛ إضافة قناة جديدة = Adapter + تسجيل واحد.
+
+## ADR-0018 — `AgentOrchestrator` كعقد + Placeholder حتميّ
+- **القرار:** الوكيل خلف واجهة `AgentOrchestrator`، بتنفيذ `PlaceholderAgentOrchestrator` الآن.
+- **السبب:** بناء المسار كاملًا واختباره حتميًّا دون OpenAI؛ يُستبدل التنفيذ لاحقًا دون تغيير المتصلين.
+
+## ADR-0017 — معالجة الرسائل على طابور Redis (`messages`) عبر Job
+- **القرار:** المعالجة الثقيلة في `ProcessInboundMessage` (Job) لا في Livewire/Controller؛
+  طابور `messages`، `tries=3`, `backoff=[5,15,30]`, `ShouldBeUnique`.
+- **السبب:** استجابة سريعة، إعادة محاولة آمنة، وقابلية توسّع أفقي عبر Horizon.
+
+## ADR-0021 — التسليم الخارجي at-least-once حتى دعم المزوّد للـ idempotency
+- **القرار:** الإرسال عبر `ChannelAdapter::send()` يتم **خارج** أي DB transaction، وبعد نجاحه
+  فقط يُعتبر الوارد `processed`؛ فشل الإرسال يُعاد رميه لتعمل الطوابير مع إعادة استخدام سجل الرد.
+- **الأثر:** سجل الرد **واحد** مضمون داخليًا (قيد DB)، لكن الاستدعاء الخارجي قد يتكرر عند retry
+  ⇒ **at-least-once** ما لم يوفّر المزوّد idempotency (مفتاح لكل رسالة). يُعالَج عند تفعيل WhatsApp.
+
+## ADR-0020 — منع الرد المكرر بقيد قاعدة بيانات (لا JSON)
+- **القرار:** عمود صريح `messages.in_reply_to_message_id` (FK ذاتي) مع **unique**، يضمن ردًّا
+  صادرًا واحدًا لكل رسالة واردة على مستوى القاعدة. الـ Job ينشئ الرد مرة واحدة ويلتقط تعارض
+  الـ unique ليعيد استخدام الموجود.
+- **السبب:** `metadata->in_reply_to` (JSON) ليس حاجزًا كافيًا ضد عاملين متزامنين؛ القيد الفريد
+  في القاعدة هو الضمان الحقيقي. `ShouldBeUnique` طبقة دفاع إضافية لا الأساس.
+
+## ADR-0016 — Idempotency للرسالة الواردة عبر unique + معالجة race
+- **القرار:** الاعتماد على قيد `unique(external_message_id)` مع التقاط
+  `UniqueConstraintViolationException` وإرجاع **duplicate** عند تكرار تسليم الرسالة الواردة.
+- **السبب:** ضمان «رسالة واردة واحدة / Job واحد» حتى عند التسليم المكرر أو التزامن.
+  (منع الرد المكرر يُعالَج بـ ADR-0020.)
+
+## ADR-0015 — `/dev/chat` محصورة في local/testing
+- **القرار:** المحاكي المحلي متاح في `local`/`testing` فقط ويعيد 404 في production
+  (middleware `EnsureDevEnvironment` + حارس في `mount()`).
+- **السبب:** أداة تطوير يجب ألا تُعرَّض في الإنتاج.
+
+## ADR-0014 — CI على `push`/`pull_request` إلى main فقط
+- **القرار:** تشغيل CI على `pull_request` إلى main و`push` إلى main فقط (بدل `feature/**`).
+- **السبب:** منع التشغيل المزدوج عند دفع فرع الميزة ثم فتح PR؛ توفير موارد CI.
+
 ## ADR-0013 — PHP Backed Enums بدل `database enum`
 - **القرار:** تمثيل كل status/type/direction/priority/channel كـ PHP Backed Enum،
   وتخزينه كنص (`string`) في قاعدة البيانات.

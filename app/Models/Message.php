@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Message extends Model
 {
@@ -27,6 +28,7 @@ class Message extends Model
         'direction',
         'type',
         'external_message_id',
+        'in_reply_to_message_id',
         'text_content',
         'media_path',
         'metadata',
@@ -58,6 +60,27 @@ class Message extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * The inbound message this (outbound) message is a reply to.
+     *
+     * @return BelongsTo<Message, $this>
+     */
+    public function inReplyTo(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'in_reply_to_message_id');
+    }
+
+    /**
+     * The single outbound reply to this (inbound) message, if any.
+     * Enforced one-per-inbound by a UNIQUE constraint on in_reply_to_message_id.
+     *
+     * @return HasOne<Message, $this>
+     */
+    public function reply(): HasOne
+    {
+        return $this->hasOne(Message::class, 'in_reply_to_message_id');
     }
 
     /**
