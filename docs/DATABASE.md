@@ -52,6 +52,9 @@
 - `conversation_id` → `conversations` (**cascade**) · `user_id` → `users` (**cascade**)
 - `direction` enum `MessageDirection` · `type` enum `MessageType`
 - `external_message_id?` **unique** — يمنع معالجة نفس رسالة المزوّد مرتين (تُسمح قيم `null` متعددة للرسائل الصادرة)
+- `in_reply_to_message_id?` → `messages` (**nullOnDelete**) **unique** — يربط الرد الصادر برسالته
+  الواردة، والقيد الفريد يضمن **ردًّا واحدًا لكل رسالة واردة** (حاجز idempotency الأساسي للرد؛ أُضيف
+  في Sprint 0C). علاقتا Eloquent: `inReplyTo()` و`reply()`.
 - `text_content?` · `media_path?` · `metadata? json` · `processing_status` enum `MessageProcessingStatus` · `processed_at?`
 - index: (`conversation_id`,`created_at`)، (`direction`,`processing_status`).
 

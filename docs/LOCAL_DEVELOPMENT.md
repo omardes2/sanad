@@ -51,12 +51,25 @@ php artisan serve            # http://localhost:8000
 # مترجم الأصول مع Hot Reload
 npm run dev
 
-# معالج الطوابير عبر Horizon (يشرف على عمّال Redis)
+# معالج الطوابير عبر Horizon (يشرف على عمّال Redis) — لازم لطابور "messages"
 php artisan horizon
+# بديل: php artisan queue:work redis --queue=messages
 
 # المجدول (للمهام الدورية — مثل الملخّص اليومي لاحقًا)
 php artisan schedule:work
 ```
+
+### محاكي المحادثة المحلي `/dev/chat`
+
+بعد تشغيل الخادم و**عامل الطوابير** (Horizon أو `queue:work`)، افتح:
+
+```
+http://localhost:8000/dev/chat
+```
+
+اختر مستخدمًا تجريبيًا، اكتب رسالة (جرّب «مرحبا»)، وسيظهر رد سَنَد تلقائيًا بعد معالجة
+الـ Queue. الصفحة متاحة في **local/testing فقط** وتعيد **404** في production.
+راجع **[MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md)** لتفاصيل مسار الرسائل.
 
 > بديل عن Horizon أثناء التطوير: `php artisan queue:work redis`.
 

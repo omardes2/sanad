@@ -53,9 +53,17 @@
 1. **HTTP / Presentation** — مسارات الويب (Livewire) و API (health). لاحقًا: WhatsApp webhook.
 2. **Application / Domain** — نماذج البيانات (Users، Channels، Conversations، Messages،
    Tasks، Reminders، Memory، Expenses، Webhook/Usage/Audit) **مبنيّة في Sprint 0B**؛
-   منطق الأعمال فوقها لم يُبنَ بعد.
-3. **AI / Tooling** — طبقة تجريد لمزوّد الذكاء (OpenAI) و Function Calling — لم تُبنَ بعد.
-4. **Infrastructure** — PostgreSQL، Redis، Queues، Scheduler، Horizon.
+   و**مسار الرسائل** (DTOs، Adapters، MessageProcessor، Queue Job) **مبني في Sprint 0C**.
+3. **AI / Tooling** — `AgentOrchestrator` كعقد مجرّد، بتنفيذ `PlaceholderAgentOrchestrator`
+   حتميّ الآن؛ تنفيذ مدعوم بالذكاء (OpenAI + Function Calling) سيحلّ محلّه لاحقًا دون تغيير المتصلين.
+4. **Infrastructure** — PostgreSQL، Redis، Queues (طابور `messages`)، Scheduler، Horizon.
+
+### مسار الرسائل (Sprint 0C)
+
+قناة واردة → `ChannelAdapter::toInbound()` → `MessageProcessor` (idempotency + حفظ + dispatch)
+→ طابور `messages` → `ProcessInboundMessage` → `AgentOrchestrator` → حفظ الرد →
+`ChannelAdapter::send()`. اختيار القناة عبر `ChannelRegistry` (DI) لا شروط متناثرة.
+محاكي محلي على `/dev/chat` (local/testing فقط). التفاصيل في **[MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md)**.
 
 ### نموذج المجال (Sprint 0B)
 

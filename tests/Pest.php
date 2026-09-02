@@ -44,7 +44,44 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+use App\Data\InboundMessageData;
+use App\Enums\ChannelType;
+use App\Enums\MessageType;
+use App\Jobs\ProcessInboundMessage;
+use App\Models\ChannelAccount;
+use App\Models\User;
+
+/**
+ * Create a demo user with a Web channel account for pipeline tests.
+ */
+function pipelineWebAccount(): ChannelAccount
 {
-    // ..
+    $user = User::factory()->create();
+
+    return ChannelAccount::factory()->for($user)->create([
+        'channel' => ChannelType::Web,
+        'external_identifier' => 'web-user-'.$user->id,
+    ]);
+}
+
+/**
+ * Build an inbound web message DTO for the given account.
+ */
+function pipelineInbound(ChannelAccount $account, string $externalId, string $text = 'مرحبا'): InboundMessageData
+{
+    return new InboundMessageData(
+        channel: ChannelType::Web,
+        externalMessageId: $externalId,
+        externalUserId: $account->external_identifier,
+        type: MessageType::Text,
+        text: $text,
+    );
+}
+
+/**
+ * Execute the ProcessInboundMessage job synchronously (deps auto-injected).
+ */
+function pipelineRunJob(int $messageId): void
+{
+    app()->call([new ProcessInboundMessage($messageId), 'handle']);
 }

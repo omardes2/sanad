@@ -35,12 +35,28 @@
 **غير مشمول:** WhatsApp/OpenAI/Voice، إرسال التذكيرات، المصادقة، Dashboard،
 Billing، pgvector، Deployment.
 
-## 🔜 Sprint 0C — (مقترح)
+## ✅ Sprint 0C — Message Pipeline & Local Chat Simulator
 
-- [ ] المصادقة الأساسية (Fortify/Breeze) وبنية الجلسات لواجهة إدارية.
+نظام استقبال ومعالجة الرسائل، مستقل عن WhatsApp و OpenAI:
+
+- [x] DTOs: `InboundMessageData`, `OutboundMessageData`, `AgentResponseData`, `ProcessResult`.
+- [x] Contracts: `ChannelAdapter`, `AgentOrchestrator` + `ChannelRegistry` (DI).
+- [x] Adapters: `WebSimulatorChannelAdapter` (محلي)، `WhatsAppChannelAdapter` (هيكل يرمي عند الإرسال الحقيقي).
+- [x] `PlaceholderAgentOrchestrator` (رد حتمي دون OpenAI).
+- [x] `MessageProcessor` (idempotency، race-safe، accepted/duplicate/rejected).
+- [x] `ProcessInboundMessage` Job (طابور `messages`، tries/backoff، unique، status transitions، failed()).
+- [x] صفحة `/dev/chat` Livewire RTL (local/testing فقط، 404 في production).
+- [x] تعديل CI: `pull_request` + `push` إلى main فقط (لا تشغيل مزدوج).
+- [x] اختبارات Pest شاملة + `docs/MESSAGE_PIPELINE.md`.
+
+**غير مشمول:** WhatsApp/OpenAI حقيقيًا، Voice، وسائط، أدوات ذكية، مصادقة، Dashboard، Billing، Deployment.
+
+## 🔜 Sprint 0D — (مقترح)
+
+- [ ] هيكل استقبال WhatsApp webhook (توثيق العقد + تخزين `webhook_events` + `WhatsAppChannelAdapter::toInbound`).
+- [ ] المصادقة الأساسية (Fortify/Breeze) وواجهة إدارية.
 - [ ] تحليل ساكن: PHPStan/Larastan.
-- [ ] طبقة تجريد لمزوّد الذكاء (AI provider interface) دون ربط فعلي.
-- [ ] هيكل استقبال WhatsApp webhook (توثيق العقد + تخزين `webhook_events` فقط).
+- [ ] تنفيذ `AgentOrchestrator` مدعوم بالذكاء (OpenAI + Function Calling) خلف العقد الحالي.
 
 ## 🗺️ Sprints لاحقة (رؤية مبدئية)
 
