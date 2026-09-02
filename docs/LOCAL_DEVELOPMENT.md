@@ -26,9 +26,19 @@ docker compose up -d
 # 4. الهجرات
 php artisan migrate
 
-# 5. بناء ملفات الواجهة
+# 5. (اختياري) بيانات تجريبية للتطوير المحلي
+php artisan db:seed          # يشغّل DemoDataSeeder في local/testing فقط
+# أو صراحةً في أي بيئة:
+php artisan db:seed --class=DemoDataSeeder
+
+# 6. بناء ملفات الواجهة
 npm run build
 ```
+
+> **حماية production:** `DatabaseSeeder` يستدعي `DemoDataSeeder` **فقط** في بيئتَي
+> `local` و`testing`. تشغيل `php artisan db:seed` على production **لا** يُنشئ أي
+> مستخدم أو رسائل أو مصاريف تجريبية. لإجباره صراحةً استخدم
+> `php artisan db:seed --class=DemoDataSeeder`.
 
 ## 2) التشغيل اليومي
 

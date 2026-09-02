@@ -31,6 +31,13 @@ return [
     */
     'default_timezone' => env('DEFAULT_USER_TIMEZONE', 'Asia/Hebron'),
 
+    // Alias of default_timezone; both resolve to the same value. Kept so
+    // callers may use whichever reads more naturally in context.
+    'default_user_timezone' => env('DEFAULT_USER_TIMEZONE', 'Asia/Hebron'),
+
+    // Default UI locale for a new user until they choose their own.
+    'default_locale' => env('APP_LOCALE', 'ar'),
+
     /*
     |--------------------------------------------------------------------------
     | Default Currency

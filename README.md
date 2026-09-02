@@ -39,7 +39,7 @@ npm install
 cp .env.example .env
 php artisan key:generate
 docker compose up -d          # PostgreSQL + Redis
-php artisan migrate
+php artisan migrate --seed    # الجداول + بيانات تجريبية (DemoDataSeeder)
 npm run build
 php artisan serve             # http://localhost:8000
 ```
@@ -60,6 +60,7 @@ npm run build            # بناء الأصول
 
 - [docs/PROJECT.md](docs/PROJECT.md) — فكرة المشروع والنطاق
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — المعمارية
+- [docs/DATABASE.md](docs/DATABASE.md) — نموذج البيانات والجداول والعلاقات
 - [docs/ROADMAP.md](docs/ROADMAP.md) — خارطة الطريق و Sprints
 - [docs/DECISIONS.md](docs/DECISIONS.md) — سجل القرارات المعمارية
 - [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) — التشغيل المحلي
