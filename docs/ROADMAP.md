@@ -17,16 +17,30 @@
 
 **غير مشمول:** WhatsApp، OpenAI، الصوت، المهام، التذكيرات، الذاكرة، الفوترة، المصادقة، لوحة التحكم، النشر.
 
-## 🔜 Sprint 0B — Hardening & Tooling (مقترح)
+## ✅ Sprint 0B — Domain Model & Database Foundation
 
-تعزيز الأساس قبل بناء الميزات:
+نموذج بيانات سَنَد الأساسي، دون ربط WhatsApp أو OpenAI:
 
-- [ ] المصادقة الأساسية (Laravel Fortify/Breeze أو Livewire starter) وبنية المستخدمين.
-- [ ] تحليل ساكن: PHPStan/Larastan + قواعد Pint موسّعة.
-- [ ] هجرات أساسية للمستخدمين + بنية جاهزة لـ multi-tenant.
+- [x] 12 PHP Backed Enum في `app/Enums` (بدون `database enum`).
+- [x] تحديث جدول `users` (phone E.164، timezone/locale/currency، reply mode، status…).
+- [x] 10 جداول: channel_accounts، conversations، messages، tasks، reminders،
+      memories، expenses، webhook_events، usage_events، audit_logs.
+- [x] النماذج والعلاقات والـcasts والـscopes (`Reminder::due`، `Task::incomplete`،
+      `Message::inbound`، `WebhookEvent::pending`).
+- [x] Factories لكل النماذج + `DemoDataSeeder` ببيانات وهمية.
+- [x] فهارس وقيود idempotency (unique للهاتف/الرسالة/حدث الويبهوك).
+- [x] 15+ محور اختبار (Pest) على SQLite، وmigrations تعمل على PostgreSQL أيضًا.
+- [x] توثيق `docs/DATABASE.md`.
+
+**غير مشمول:** WhatsApp/OpenAI/Voice، إرسال التذكيرات، المصادقة، Dashboard،
+Billing، pgvector، Deployment.
+
+## 🔜 Sprint 0C — (مقترح)
+
+- [ ] المصادقة الأساسية (Fortify/Breeze) وبنية الجلسات لواجهة إدارية.
+- [ ] تحليل ساكن: PHPStan/Larastan.
 - [ ] طبقة تجريد لمزوّد الذكاء (AI provider interface) دون ربط فعلي.
-- [ ] هيكل استقبال WhatsApp webhook (توثيق العقد فقط، دون معالجة).
-- [ ] تغطية اختبارات أوسع + CI matrix (PHP 8.4).
+- [ ] هيكل استقبال WhatsApp webhook (توثيق العقد + تخزين `webhook_events` فقط).
 
 ## 🗺️ Sprints لاحقة (رؤية مبدئية)
 

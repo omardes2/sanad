@@ -51,9 +51,22 @@
 ## الطبقات (Layers)
 
 1. **HTTP / Presentation** — مسارات الويب (Livewire) و API (health). لاحقًا: WhatsApp webhook.
-2. **Application / Domain** — منطق الأعمال (Tasks، Reminders، Memory…) — لم يُبنَ بعد.
+2. **Application / Domain** — نماذج البيانات (Users، Channels، Conversations، Messages،
+   Tasks، Reminders، Memory، Expenses، Webhook/Usage/Audit) **مبنيّة في Sprint 0B**؛
+   منطق الأعمال فوقها لم يُبنَ بعد.
 3. **AI / Tooling** — طبقة تجريد لمزوّد الذكاء (OpenAI) و Function Calling — لم تُبنَ بعد.
 4. **Infrastructure** — PostgreSQL، Redis، Queues، Scheduler، Horizon.
+
+### نموذج المجال (Sprint 0B)
+
+أُرسي نموذج بيانات كامل يدعم: المستخدمين، حسابات القنوات، المحادثات، الرسائل،
+المهام، التذكيرات، الذاكرة، المصاريف، أحداث الـWebhook، تتبّع استخدام/تكلفة الذكاء
+الاصطناعي، وسجلّات التدقيق. التفاصيل الكاملة (الأعمدة، الفهارس، القيود، سياسة الحذف،
+قواعد UTC/العملات، وسبب تأجيل pgvector) في **[DATABASE.md](DATABASE.md)**.
+
+مبادئ رئيسية: PHP Backed Enums بدل `database enum` (توافق PostgreSQL/SQLite)،
+UTC داخليًا، `decimal` للأموال، cascade للبيانات الشخصية و`nullOnDelete` للسجلّات
+المحفوظة.
 
 ## التوقيت والتوطين (i18n)
 
