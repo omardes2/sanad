@@ -36,16 +36,10 @@ return [
     ],
 
     /*
-    | WhatsApp Cloud API — PLACEHOLDER credentials only. Not wired up in
-    | Sprint 0; declared here so later sprints have a conventional location.
+    | WhatsApp Cloud API configuration now lives in its own file: config/whatsapp.php
+    | (accessed via App\Support\WhatsApp\WhatsAppConfig). Kept out of here to
+    | avoid two divergent sources of the same settings.
     */
-    'whatsapp' => [
-        'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
-        'access_token' => env('WHATSAPP_ACCESS_TOKEN'),
-        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
-        'business_account_id' => env('WHATSAPP_BUSINESS_ACCOUNT_ID'),
-        'app_secret' => env('WHATSAPP_APP_SECRET'),
-    ],
 
     /*
     | OpenAI — PLACEHOLDER credential only. Not wired up in Sprint 0.

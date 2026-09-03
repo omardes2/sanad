@@ -51,9 +51,9 @@ php artisan serve            # http://localhost:8000
 # مترجم الأصول مع Hot Reload
 npm run dev
 
-# معالج الطوابير عبر Horizon (يشرف على عمّال Redis) — لازم لطابور "messages"
+# معالج الطوابير عبر Horizon (يشرف على عمّال Redis) — طابورا "messages" و"webhooks"
 php artisan horizon
-# بديل: php artisan queue:work redis --queue=messages
+# بديل: php artisan queue:work redis --queue=messages,webhooks
 
 # المجدول (للمهام الدورية — مثل الملخّص اليومي لاحقًا)
 php artisan schedule:work

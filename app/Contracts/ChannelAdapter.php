@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Contracts;
 
+use App\Data\ChannelDeliveryResult;
 use App\Data\InboundMessageData;
 use App\Data\OutboundMessageData;
 use App\Enums\ChannelType;
@@ -28,7 +29,9 @@ interface ChannelAdapter
     public function toInbound(array $payload): InboundMessageData;
 
     /**
-     * Deliver a reply to the user through this channel.
+     * Deliver a reply to the user through this channel, returning the delivery
+     * status (and provider message id, if any). Throws on failure so the queue
+     * can retry.
      */
-    public function send(OutboundMessageData $message): void;
+    public function send(OutboundMessageData $message): ChannelDeliveryResult;
 }

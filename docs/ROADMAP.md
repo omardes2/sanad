@@ -51,12 +51,27 @@ Billing، pgvector، Deployment.
 
 **غير مشمول:** WhatsApp/OpenAI حقيقيًا، Voice، وسائط، أدوات ذكية، مصادقة، Dashboard، Billing، Deployment.
 
-## 🔜 Sprint 0D — (مقترح)
+## ✅ Sprint 0D — WhatsApp Cloud API Text Transport
 
-- [ ] هيكل استقبال WhatsApp webhook (توثيق العقد + تخزين `webhook_events` + `WhatsAppChannelAdapter::toInbound`).
+تحويل محوّل واتساب من هيكل إلى تكامل نصّي جاهز للنشر (بلا اتصال حيّ بـ Meta):
+
+- [x] إعداد مركزي `config/whatsapp.php` + `WhatsAppConfig` (fail-closed).
+- [x] Webhook: `GET/POST /webhooks/whatsapp` بلا CSRF، توقيع HMAC-SHA256 على raw body.
+- [x] حفظ `WebhookEvent` idempotent (SHA-256 للغلاف) + `ProcessWhatsAppWebhook` (طابور `webhooks`).
+- [x] معالجة كل entry/changes/messages/statuses؛ نصّ فقط → `MessageProcessor`؛ الوسائط acknowledged.
+- [x] تطبيع الهاتف E.164؛ تجاهل ما لا يخصّ Phone Number ID/WABA المهيّأين.
+- [x] `WhatsAppChannelAdapter::send` عبر Graph API (retry: network/429/5xx فقط)؛ `ChannelDeliveryResult`.
+- [x] حالات التسليم `MessageDeliveryStatus` + انتقالات monotonic عبر status webhooks.
+- [x] اختبارات Pest شاملة (`Http::fake` فقط) + `docs/WHATSAPP_INTEGRATION.md`.
+
+**غير مشمول:** اتصال حيّ بـ Meta، Templates، وسائط/صوت، OpenAI، مصادقة/Dashboard، نشر.
+
+## 🔜 Sprint 0E — (مقترح)
+
 - [ ] المصادقة الأساسية (Fortify/Breeze) وواجهة إدارية.
 - [ ] تحليل ساكن: PHPStan/Larastan.
 - [ ] تنفيذ `AgentOrchestrator` مدعوم بالذكاء (OpenAI + Function Calling) خلف العقد الحالي.
+- [ ] onboarding تلقائي لمستخدمي واتساب الجدد + دعم الوسائط.
 
 ## 🗺️ Sprints لاحقة (رؤية مبدئية)
 

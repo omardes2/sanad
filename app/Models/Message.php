@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Enums\MessageDeliveryStatus;
 use App\Enums\MessageDirection;
 use App\Enums\MessageProcessingStatus;
 use App\Enums\MessageType;
@@ -34,6 +35,12 @@ class Message extends Model
         'metadata',
         'processing_status',
         'processed_at',
+        'provider_message_id',
+        'delivery_status',
+        'sent_at',
+        'delivered_at',
+        'read_at',
+        'delivery_error_code',
     ];
 
     /**
@@ -45,9 +52,41 @@ class Message extends Model
             'direction' => MessageDirection::class,
             'type' => MessageType::class,
             'processing_status' => MessageProcessingStatus::class,
+            'delivery_status' => MessageDeliveryStatus::class,
             'metadata' => 'array',
             'processed_at' => 'datetime',
+            'sent_at' => 'datetime',
+            'delivered_at' => 'datetime',
+            'read_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Apply an incoming delivery status, honouring monotonic ordering
+     * (never moves backwards; `failed` never overrides delivered/read).
+     * Returns true if the row was advanced, false if the update was a no-op.
+     */
+    public function applyDeliveryStatus(MessageDeliveryStatus $status, ?string $errorCode = null): bool
+    {
+        $current = $this->delivery_status ?? MessageDeliveryStatus::Pending;
+
+        if (! $status->isForwardFrom($current)) {
+            return false;
+        }
+
+        $attributes = ['delivery_status' => $status];
+
+        if (($column = $status->timestampColumn()) !== null && $this->{$column} === null) {
+            $attributes[$column] = now();
+        }
+
+        if ($status === MessageDeliveryStatus::Failed && $errorCode !== null) {
+            $attributes['delivery_error_code'] = $errorCode;
+        }
+
+        $this->forceFill($attributes)->save();
+
+        return true;
     }
 
     /** @return BelongsTo<Conversation, $this> */

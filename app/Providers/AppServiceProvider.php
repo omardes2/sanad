@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Agents\PlaceholderAgentOrchestrator;
 use App\Channels\ChannelRegistry;
 use App\Contracts\AgentOrchestrator;
+use App\Support\WhatsApp\WhatsAppConfig;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -20,6 +21,9 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(AgentOrchestrator::class, PlaceholderAgentOrchestrator::class);
 
         $this->app->singleton(ChannelRegistry::class);
+
+        // Resolved fresh each time so config overrides (tests, tenants) apply.
+        $this->app->bind(WhatsAppConfig::class, static fn (): WhatsAppConfig => WhatsAppConfig::fromConfig());
     }
 
     /**

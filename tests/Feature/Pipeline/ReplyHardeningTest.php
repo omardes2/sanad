@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use App\Channels\WebSimulatorChannelAdapter;
+use App\Data\ChannelDeliveryResult;
 use App\Data\OutboundMessageData;
+use App\Enums\MessageDeliveryStatus;
 use App\Enums\MessageDirection;
 use App\Enums\MessageProcessingStatus;
 use App\Enums\MessageType;
@@ -28,13 +30,15 @@ function flakyWebAdapter(int $failTimes): WebSimulatorChannelAdapter
 
         public function __construct(public int $failTimes) {}
 
-        public function send(OutboundMessageData $message): void
+        public function send(OutboundMessageData $message): ChannelDeliveryResult
         {
             $this->sendCount++;
 
             if ($this->sendCount <= $this->failTimes) {
                 throw new RuntimeException('adapter send failed (simulated)');
             }
+
+            return new ChannelDeliveryResult(status: MessageDeliveryStatus::Sent);
         }
     };
 }
