@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Channels;
 
 use App\Contracts\ChannelAdapter;
+use App\Data\ChannelDeliveryResult;
 use App\Data\InboundMessageData;
 use App\Data\OutboundMessageData;
 use App\Enums\ChannelType;
+use App\Enums\MessageDeliveryStatus;
 use App\Enums\MessageType;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Str;
@@ -43,9 +45,11 @@ class WebSimulatorChannelAdapter implements ChannelAdapter
         );
     }
 
-    public function send(OutboundMessageData $message): void
+    public function send(OutboundMessageData $message): ChannelDeliveryResult
     {
-        // No external transport: the simulator UI renders the persisted reply.
-        // Intentionally does nothing (and logs nothing sensitive).
+        // No external transport: the simulator UI renders the persisted reply,
+        // so it is considered delivered locally the instant it is "sent".
+        // Nothing sensitive is logged.
+        return new ChannelDeliveryResult(status: MessageDeliveryStatus::Sent);
     }
 }

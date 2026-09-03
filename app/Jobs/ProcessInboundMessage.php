@@ -7,9 +7,11 @@ namespace App\Jobs;
 use App\Channels\ChannelRegistry;
 use App\Contracts\AgentOrchestrator;
 use App\Data\OutboundMessageData;
+use App\Enums\MessageDeliveryStatus;
 use App\Enums\MessageDirection;
 use App\Enums\MessageProcessingStatus;
 use App\Models\Message;
+use App\Support\SafeError;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -77,7 +79,7 @@ class ProcessInboundMessage implements ShouldBeUnique, ShouldQueue
         if ($reply->processing_status !== MessageProcessingStatus::Processed) {
             $account = $inbound->conversation->channelAccount;
 
-            $channels->for($account->channel)->send(new OutboundMessageData(
+            $result = $channels->for($account->channel)->send(new OutboundMessageData(
                 channel: $account->channel,
                 externalUserId: $account->external_identifier,
                 type: $reply->type,
@@ -85,11 +87,22 @@ class ProcessInboundMessage implements ShouldBeUnique, ShouldQueue
                 metadata: ['in_reply_to_message_id' => $inbound->id],
             ));
 
-            // Delivery succeeded (no exception): record it.
-            $reply->forceFill([
+            // Delivery accepted (no exception): record processing + delivery state.
+            $attributes = [
                 'processing_status' => MessageProcessingStatus::Processed,
                 'processed_at' => now(),
-            ])->save();
+                'provider_message_id' => $result->providerMessageId,
+                'delivery_status' => $result->status,
+            ];
+
+            // A channel that reports "sent" immediately (e.g. the web simulator)
+            // stamps sent_at now; WhatsApp reports "accepted" and later status
+            // webhooks advance it to sent/delivered/read.
+            if ($result->status === MessageDeliveryStatus::Sent) {
+                $attributes['sent_at'] = now();
+            }
+
+            $reply->forceFill($attributes)->save();
         }
 
         // Inbound is "processed" only after the reply was delivered.
@@ -141,10 +154,9 @@ class ProcessInboundMessage implements ShouldBeUnique, ShouldQueue
     public function failed(?Throwable $exception): void
     {
         // Record the final failed state with a safe, non-sensitive note.
-        // Never logs message content — only the message id and error class.
-        $safe = $exception === null
-            ? 'unknown error'
-            : class_basename($exception).': '.mb_substr($exception->getMessage(), 0, 300);
+        // SafeError never echoes a framework/DB exception message (which can
+        // embed SQL bindings such as message text or phone numbers).
+        $safe = SafeError::summarize($exception);
 
         Message::where('id', $this->messageId)->update([
             'processing_status' => MessageProcessingStatus::Failed->value,

@@ -50,6 +50,7 @@ use App\Enums\MessageType;
 use App\Jobs\ProcessInboundMessage;
 use App\Models\ChannelAccount;
 use App\Models\User;
+use Illuminate\Testing\TestResponse;
 
 /**
  * Create a demo user with a Web channel account for pipeline tests.
@@ -84,4 +85,151 @@ function pipelineInbound(ChannelAccount $account, string $externalId, string $te
 function pipelineRunJob(int $messageId): void
 {
     app()->call([new ProcessInboundMessage($messageId), 'handle']);
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp test helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Configure the WhatsApp integration with deterministic test credentials.
+ *
+ * @param  array<string, mixed>  $overrides
+ */
+function whatsappConfigure(array $overrides = []): void
+{
+    config(array_merge([
+        'whatsapp.enabled' => true,
+        'whatsapp.graph_base_url' => 'https://graph.facebook.com',
+        'whatsapp.graph_version' => 'v21.0',
+        'whatsapp.access_token' => 'TEST_ACCESS_TOKEN',
+        'whatsapp.app_secret' => 'test-app-secret',
+        'whatsapp.verify_token' => 'test-verify-token',
+        'whatsapp.phone_number_id' => 'PNID_123',
+        'whatsapp.business_account_id' => 'WABA_123',
+        'whatsapp.request_timeout' => 10,
+    ], $overrides));
+}
+
+/**
+ * Compute the X-Hub-Signature-256 header for a raw body using the configured
+ * app secret.
+ */
+function whatsappSignature(string $raw): string
+{
+    return 'sha256='.hash_hmac('sha256', $raw, (string) config('whatsapp.app_secret'));
+}
+
+/**
+ * POST a raw body to the webhook with an optional signature header.
+ */
+function postWhatsAppRaw(string $raw, ?string $signature): TestResponse
+{
+    $server = ['CONTENT_TYPE' => 'application/json'];
+
+    if ($signature !== null) {
+        $server['HTTP_X_HUB_SIGNATURE_256'] = $signature;
+    }
+
+    return test()->call('POST', '/webhooks/whatsapp', [], [], [], $server, $raw);
+}
+
+/**
+ * POST a validly-signed envelope (array) to the webhook.
+ *
+ * @param  array<string, mixed>  $envelope
+ */
+function postWhatsAppEnvelope(array $envelope): TestResponse
+{
+    $raw = json_encode($envelope, JSON_UNESCAPED_UNICODE);
+
+    return postWhatsAppRaw($raw, whatsappSignature($raw));
+}
+
+/**
+ * Build a WhatsApp inbound TEXT envelope.
+ *
+ * @param  array<string, mixed>  $opts
+ * @return array<string, mixed>
+ */
+function whatsappTextEnvelope(string $wamid, string $from, string $text, array $opts = []): array
+{
+    return [
+        'object' => 'whatsapp_business_account',
+        'entry' => [[
+            'id' => $opts['waba_id'] ?? 'WABA_123',
+            'changes' => [[
+                'field' => 'messages',
+                'value' => [
+                    'messaging_product' => 'whatsapp',
+                    'metadata' => [
+                        'display_phone_number' => '15550000000',
+                        'phone_number_id' => $opts['phone_number_id'] ?? 'PNID_123',
+                    ],
+                    'contacts' => [[
+                        'profile' => ['name' => $opts['name'] ?? 'Tester'],
+                        'wa_id' => $from,
+                    ]],
+                    'messages' => [[
+                        'from' => $from,
+                        'id' => $wamid,
+                        'timestamp' => (string) ($opts['timestamp'] ?? 1757000000),
+                        'type' => $opts['type'] ?? 'text',
+                        'text' => ['body' => $text],
+                    ]],
+                ],
+            ]],
+        ]],
+    ];
+}
+
+/**
+ * Build a WhatsApp status envelope for a provider message id.
+ *
+ * @param  array<string, mixed>  $opts
+ * @return array<string, mixed>
+ */
+function whatsappStatusEnvelope(string $providerMessageId, string $status, array $opts = []): array
+{
+    $statusEntry = [
+        'id' => $providerMessageId,
+        'status' => $status,
+        'timestamp' => (string) ($opts['timestamp'] ?? 1757000100),
+        'recipient_id' => $opts['recipient_id'] ?? '970599000001',
+    ];
+
+    if ($status === 'failed') {
+        $statusEntry['errors'] = [['code' => $opts['error_code'] ?? 131047, 'title' => 'error']];
+    }
+
+    return [
+        'object' => 'whatsapp_business_account',
+        'entry' => [[
+            'id' => $opts['waba_id'] ?? 'WABA_123',
+            'changes' => [[
+                'field' => 'messages',
+                'value' => [
+                    'messaging_product' => 'whatsapp',
+                    'metadata' => [
+                        'display_phone_number' => '15550000000',
+                        'phone_number_id' => $opts['phone_number_id'] ?? 'PNID_123',
+                    ],
+                    'statuses' => [$statusEntry],
+                ],
+            ]],
+        ]],
+    ];
+}
+
+/**
+ * Create a user + WhatsApp channel account for the given E.164 number.
+ */
+function whatsappAccount(string $e164 = '+970599000001'): ChannelAccount
+{
+    $user = User::factory()->create();
+
+    return ChannelAccount::factory()->for($user)->create([
+        'channel' => ChannelType::WhatsApp,
+        'external_identifier' => $e164,
+    ]);
 }

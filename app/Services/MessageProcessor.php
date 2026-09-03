@@ -124,7 +124,9 @@ class MessageProcessor
     }
 
     /**
-     * Non-sensitive log context — identifiers only, never message content.
+     * Non-sensitive log context — identifiers only, never message content and
+     * never a full phone number (the external user id is redacted to its last
+     * 4 characters).
      *
      * @return array<string, mixed>
      */
@@ -133,8 +135,17 @@ class MessageProcessor
         return [
             'channel' => $data->channel->value,
             'external_message_id' => $data->externalMessageId,
-            'external_user_id' => $data->externalUserId,
+            'external_user_id' => $this->redact($data->externalUserId),
             'type' => $data->type->value,
         ];
+    }
+
+    private function redact(string $value): string
+    {
+        if (strlen($value) <= 4) {
+            return str_repeat('*', strlen($value));
+        }
+
+        return str_repeat('*', strlen($value) - 4).substr($value, -4);
     }
 }

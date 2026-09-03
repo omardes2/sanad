@@ -62,8 +62,18 @@
 
 قناة واردة → `ChannelAdapter::toInbound()` → `MessageProcessor` (idempotency + حفظ + dispatch)
 → طابور `messages` → `ProcessInboundMessage` → `AgentOrchestrator` → حفظ الرد →
-`ChannelAdapter::send()`. اختيار القناة عبر `ChannelRegistry` (DI) لا شروط متناثرة.
-محاكي محلي على `/dev/chat` (local/testing فقط). التفاصيل في **[MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md)**.
+`ChannelAdapter::send()` (يُعيد `ChannelDeliveryResult`). اختيار القناة عبر `ChannelRegistry`
+(DI) لا شروط متناثرة. محاكي محلي على `/dev/chat` (local/testing فقط). التفاصيل في
+**[MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md)**.
+
+### نقل واتساب النصّي (Sprint 0D)
+
+`WhatsAppChannelAdapter` أصبح تكاملًا فعليًا (نصّ فقط): استقبال عبر **Webhook موقّع**
+(`POST /webhooks/whatsapp`، توقيع HMAC-SHA256 على raw body، طابور `webhooks`،
+`ProcessWhatsAppWebhook`) وإرسال عبر **Graph API** (Laravel HTTP client، retry على
+network/429/5xx). حالات التسليم (`sent/delivered/read/failed`) تُتابَع منفصلة عن المعالجة
+الداخلية. الإعداد المركزي في `config/whatsapp.php` ويفشل بأمان (fail-closed). **لا اتصال حيّ
+بـ Meta ولا أسرار في المستودع.** التفاصيل في **[WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md)**.
 
 ### نموذج المجال (Sprint 0B)
 

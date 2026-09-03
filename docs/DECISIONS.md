@@ -16,6 +16,34 @@
   طابور `messages`، `tries=3`, `backoff=[5,15,30]`, `ShouldBeUnique`.
 - **السبب:** استجابة سريعة، إعادة محاولة آمنة، وقابلية توسّع أفقي عبر Horizon.
 
+## ADR-0026 — إعداد واتساب مركزي في `config/whatsapp.php` مع fail-closed
+- **القرار:** كل إعدادات واتساب في ملف واحد + `WhatsAppConfig` (بدل `config/services.php`).
+  عند التفعيل مع إعدادات ناقصة يفشل التكامل بأمان (403/استثناء) بدل العمل بمفتاح فارغ.
+- **السبب:** مصدر واحد للحقيقة، وأسرار لا تُسرّب، وسلوك آمن افتراضيًا.
+
+## ADR-0025 — Webhook بلا CSRF عبر التوقيع، على طابور `webhooks`
+- **القرار:** مسارات `/webhooks/whatsapp` تُسجَّل بلا middleware group (لا CSRF/session)؛
+  الهوية تُثبَت بالـ verify token (GET) وتوقيع HMAC-SHA256 على **raw body** (POST). المعالجة
+  الثقيلة تُؤجَّل إلى طابور `webhooks` (`ProcessWhatsAppWebhook`)، والرد HTTP سريع.
+- **السبب:** الـWebhooks آلات لا متصفّحات؛ CSRF غير منطبق، والتوقيع هو الحاجز الأمني.
+
+## ADR-0024 — SHA-256 للغلاف كحاجز idempotency ثانٍ
+- **القرار:** `webhook_events.external_event_id = SHA-256(raw payload)` + unique(provider, id).
+  يبقى `messages.external_message_id` (wamid) الحاجز الأساسي لتكرار رسائل Meta.
+- **السبب:** يمنع تكرار معالجة الغلاف كاملًا عند إعادة تسليم Meta، دون كسر idempotency الرسائل.
+
+## ADR-0023 — فصل حالة التسليم عن حالة المعالجة الداخلية
+- **القرار:** أعمدة تسليم منفصلة (`provider_message_id` unique، `delivery_status`،
+  `sent_at/delivered_at/read_at`، `delivery_error_code`) مع enum `MessageDeliveryStatus`
+  وانتقالات monotonic؛ **دون** إعادة استخدام `external_message_id` لمعنيين.
+- **السبب:** `processing_status` تصف pipeline سَنَد، بينما التسليم تحكمه status webhooks؛ خلطهما
+  يكسر idempotency ومعنى الحالة.
+
+## ADR-0022 — `ChannelAdapter::send()` يعيد `ChannelDeliveryResult`
+- **القرار:** تغيير عقد `send()` من `void` إلى `ChannelDeliveryResult` (حالة + provider id).
+  عُدِّل Web Simulator والـJob والاختبارات وفقًا لذلك.
+- **السبب:** الـJob يحتاج provider message id وحالة التسليم لتخزينها ومتابعة status webhooks.
+
 ## ADR-0021 — التسليم الخارجي at-least-once حتى دعم المزوّد للـ idempotency
 - **القرار:** الإرسال عبر `ChannelAdapter::send()` يتم **خارج** أي DB transaction، وبعد نجاحه
   فقط يُعتبر الوارد `processed`؛ فشل الإرسال يُعاد رميه لتعمل الطوابير مع إعادة استخدام سجل الرد.
