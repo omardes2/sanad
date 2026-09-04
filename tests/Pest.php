@@ -225,6 +225,28 @@ function whatsappStatusEnvelope(string $providerMessageId, string $status, array
 }
 
 /**
+ * Configure the AI orchestrator with a deterministic Groq test provider.
+ *
+ * @param  array<string, mixed>  $overrides
+ */
+function aiConfigure(array $overrides = []): void
+{
+    config(array_merge([
+        'ai.enabled' => true,
+        'ai.provider' => 'groq',
+        'ai.failure_behavior' => 'retry',
+        'ai.history_limit' => 10,
+        'ai.timeout' => 20,
+        'ai.max_output_tokens' => 600,
+        'ai.temperature' => 0.5,
+        'ai.fallback_message' => 'عذرًا، حدث خطأ مؤقت.',
+        'ai.providers.groq.base_url' => 'https://api.groq.com/openai/v1',
+        'ai.providers.groq.api_key' => 'test-groq-key',
+        'ai.providers.groq.model' => 'llama-3.3-70b-versatile',
+    ], $overrides));
+}
+
+/**
  * Store an envelope as a WebhookEvent and run the processing job synchronously.
  *
  * @param  array<string, mixed>  $envelope

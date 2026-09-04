@@ -73,6 +73,7 @@ npm run build            # بناء الأصول
 - [docs/MESSAGE_PIPELINE.md](docs/MESSAGE_PIPELINE.md) — مسار الرسائل والمحاكي المحلي
 - [docs/WHATSAPP_INTEGRATION.md](docs/WHATSAPP_INTEGRATION.md) — تكامل واتساب النصّي (Webhook + إرسال)
 - [docs/DASHBOARD.md](docs/DASHBOARD.md) — لوحة تحكّم المشغّل والمصادقة
+- [docs/AI_ORCHESTRATOR.md](docs/AI_ORCHESTRATOR.md) — طبقة الذكاء الاصطناعي (المزوّدون والمنسّق)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — خارطة الطريق و Sprints
 - [docs/DECISIONS.md](docs/DECISIONS.md) — سجل القرارات المعمارية
 - [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) — التشغيل المحلي

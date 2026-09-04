@@ -2,10 +2,13 @@
 
 namespace App\Providers;
 
+use App\Agents\AiAgentOrchestrator;
 use App\Agents\PlaceholderAgentOrchestrator;
 use App\Channels\ChannelRegistry;
 use App\Contracts\AgentOrchestrator;
+use App\Services\Ai\AiManager;
 use App\Support\WhatsApp\WhatsAppConfig;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -15,10 +18,17 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        // The message pipeline resolves the agent through this binding, so a
-        // real AI orchestrator can replace the placeholder without touching
-        // callers.
-        $this->app->bind(AgentOrchestrator::class, PlaceholderAgentOrchestrator::class);
+        $this->app->singleton(AiManager::class);
+
+        // The message pipeline resolves the agent through this binding. When AI
+        // is enabled the real orchestrator answers; otherwise the deterministic
+        // placeholder keeps the pipeline working (local/testing, or before a
+        // provider key is configured). Callers are untouched either way.
+        $this->app->bind(AgentOrchestrator::class, static function (Application $app): AgentOrchestrator {
+            return config('ai.enabled')
+                ? $app->make(AiAgentOrchestrator::class)
+                : $app->make(PlaceholderAgentOrchestrator::class);
+        });
 
         $this->app->singleton(ChannelRegistry::class);
 

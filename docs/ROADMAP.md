@@ -86,11 +86,27 @@ Billing، pgvector، Deployment.
 
 **غير مشمول:** تحرير البيانات من اللوحة، OpenAI، الوسائط، تعدّد المستخدمين، النشر.
 
+## ✅ Sprint 1.1 — WhatsApp Production Reliability & Onboarding
+
+- [x] Horizon يستهلك طوابير `webhooks`/`messages` تلقائيًا (config).
+- [x] onboarding تلقائي: كل رقم واتساب صالح ⇒ مشترك مستقل + channel account (بلا ربط بالمدير).
+- [x] تطبيع E.164 في كل المسارات + idempotency عبر القيد الفريد.
+
+## ✅ Sprint 2 — AI Orchestrator Foundation
+
+- [x] بنية مزوّدين قابلة للتبديل خلف عقد `AiProvider` + `AiManager` (Groq أولًا).
+- [x] `AiAgentOrchestrator` (بديل مباشر للـPlaceholder) — شخصية سَنَد عربية أولًا وتُطابِق لغة المستخدم.
+- [x] خطّ مساهمي سياق قابل للتوسّع (persona + history) — جاهز لطبقة الذاكرة والأدوات لاحقًا.
+- [x] معالجة timeout/429/5xx + fallback آمن دون تعطيل مسار واتساب، وتسجيل بلا أسرار.
+- [x] اختبارات `Http::fake` شاملة.
+
+**غير مشمول:** طبقة الذاكرة طويلة المدى، الأدوات/الإجراءات، الوسائط، الاشتراكات/الحصص.
+
 ## 🔜 Sprint التالي — (مقترح)
 
 - [ ] تحليل ساكن: PHPStan/Larastan.
-- [ ] تنفيذ `AgentOrchestrator` مدعوم بالذكاء (OpenAI + Function Calling) خلف العقد الحالي.
-- [ ] onboarding تلقائي لمستخدمي واتساب الجدد + دعم الوسائط.
+- [ ] طبقة ذاكرة المستخدم طويلة المدى (Contributor جديد على خطّ السياق).
+- [ ] الاشتراكات والحصص لكل رقم واتساب.
 
 ## 🗺️ Sprints لاحقة (رؤية مبدئية)
 
