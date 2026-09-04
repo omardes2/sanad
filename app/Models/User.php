@@ -31,6 +31,7 @@ class User extends Authenticatable
         'currency',
         'preferred_reply_mode',
         'status',
+        'is_admin',
         'onboarding_completed_at',
     ];
 
@@ -53,7 +54,17 @@ class User extends Authenticatable
             'password' => 'hashed',
             'preferred_reply_mode' => ReplyMode::class,
             'status' => UserStatus::class,
+            'is_admin' => 'boolean',
         ];
+    }
+
+    /**
+     * Whether this user may access the operator dashboard. Dashboard routes are
+     * gated on this flag (see the "admin" middleware / access-dashboard gate).
+     */
+    public function isAdmin(): bool
+    {
+        return $this->is_admin === true;
     }
 
     // ------------------------------------------------------------------

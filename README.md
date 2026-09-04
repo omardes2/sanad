@@ -48,7 +48,14 @@ php artisan serve             # http://localhost:8000
 
 محاكي المحادثة المحلي (يتطلب `php artisan horizon`): `http://localhost:8000/dev/chat` — متاح في local/testing فقط.
 
-الدليل الكامل: [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md).
+لوحة تحكّم المشغّل (RTL): أنشئ مديرًا ثم سجّل الدخول:
+
+```bash
+php artisan sanad:make-admin --name="مدير" --email="admin@sanad.local"  # كلمة المرور تُدخل مخفية
+# ثم افتح http://localhost:8000/login  (لا يوجد تسجيل عام)
+```
+
+الدليل الكامل: [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) · لوحة التحكم: [docs/DASHBOARD.md](docs/DASHBOARD.md).
 
 ## الجودة
 
@@ -65,6 +72,7 @@ npm run build            # بناء الأصول
 - [docs/DATABASE.md](docs/DATABASE.md) — نموذج البيانات والجداول والعلاقات
 - [docs/MESSAGE_PIPELINE.md](docs/MESSAGE_PIPELINE.md) — مسار الرسائل والمحاكي المحلي
 - [docs/WHATSAPP_INTEGRATION.md](docs/WHATSAPP_INTEGRATION.md) — تكامل واتساب النصّي (Webhook + إرسال)
+- [docs/DASHBOARD.md](docs/DASHBOARD.md) — لوحة تحكّم المشغّل والمصادقة
 - [docs/ROADMAP.md](docs/ROADMAP.md) — خارطة الطريق و Sprints
 - [docs/DECISIONS.md](docs/DECISIONS.md) — سجل القرارات المعمارية
 - [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) — التشغيل المحلي
