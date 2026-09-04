@@ -6,31 +6,13 @@ use App\Enums\MessageDeliveryStatus;
 use App\Enums\MessageDirection;
 use App\Enums\WebhookEventStatus;
 use App\Jobs\ProcessInboundMessage;
-use App\Jobs\ProcessWhatsAppWebhook;
 use App\Models\Message;
-use App\Models\WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 
 uses(RefreshDatabase::class);
 
-/**
- * Store an envelope as a WebhookEvent and run the processing job synchronously.
- */
-function runWhatsAppWebhook(array $envelope): WebhookEvent
-{
-    $event = WebhookEvent::create([
-        'provider' => 'whatsapp',
-        'external_event_id' => hash('sha256', json_encode($envelope).uniqid('', true)),
-        'payload' => $envelope,
-        'status' => WebhookEventStatus::Received,
-        'received_at' => now(),
-    ]);
-
-    app()->call([new ProcessWhatsAppWebhook($event->id), 'handle']);
-
-    return $event->fresh();
-}
+// runWhatsAppWebhook() lives in tests/Pest.php so every WhatsApp test can use it.
 
 beforeEach(function () {
     whatsappConfigure();

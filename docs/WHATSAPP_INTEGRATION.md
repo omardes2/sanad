@@ -124,7 +124,8 @@ php artisan horizon
 - **نصّ فقط.** الوسائط (صور/صوت/ملفات) تُقبل بـ200 وتُسجّل unsupported بدون رد.
 - **لا Templates**، لا إرسال استباقي.
 - الردّ يأتي من `PlaceholderAgentOrchestrator` (لا OpenAI بعد).
-- استقبال رسالة من رقم بلا `ChannelAccount` مطابق ⇒ **rejected** (لا onboarding تلقائي في هذا Sprint).
+- استقبال رسالة من رقم واتساب صالح غير معروف ⇒ **onboarding تلقائي**: يُنشأ مشترك
+  مستقل (`is_admin=false`) + `ChannelAccount` خاصّ به (انظر قسم الموثوقية أدناه).
 
 ## خطوات ربط Meta (بعد تجهيز HTTPS)
 
@@ -139,3 +140,33 @@ php artisan horizon
 
 > ⚠️ **تنبيه أمني:** لا تنسخ **Access Token** أو أي سرّ داخل المحادثات أو Git أو لقطات
 > الشاشة. تُحقن الأسرار عبر بيئة الخادم فقط.
+
+## الموثوقية والتشغيل في الإنتاج (Sprint 1.1)
+
+### استهلاك الطوابير تلقائيًا عبر Horizon
+`config/horizon.php` يضبط المشرف الافتراضي على الطوابير
+`['webhooks', 'messages', 'default']` (بترتيب الأولوية)، فيصرّفها Horizon تلقائيًا
+دون أي أمر يدوي. `timeout` (60ث) أقل من `retry_after` (90ث) لمنع تشغيل مزدوج.
+
+تشغيل الإنتاج:
+
+```sh
+php artisan horizon        # يستهلك webhooks + messages + default تلقائيًا
+```
+
+> لم يعد مطلوبًا الأمر اليدوي `queue:work redis --queue=webhooks ...`.
+
+### Onboarding تلقائي للمشتركين
+أول رسالة نصّية من رقم واتساب **صالح** غير معروف تُنشئ عبر
+`WhatsAppSubscriberProvisioner`:
+
+- مستخدمًا مشتركًا مستقلًا (`is_admin=false`, `status=active`, `phone=E.164`)،
+- و`ChannelAccount` (channel=whatsapp، `external_identifier=E.164`، `status=active`)،
+
+ثم تُعالَج الرسالة عبر `MessageProcessor` كالمعتاد. لا يُربط أي رقم بحساب المدير.
+
+### تطبيع المعرّفات إلى E.164
+معرّف المُرسِل يُطبَّع دائمًا عبر `WhatsAppPhone::toE164` (يضيف `+`) عند الاستقبال
+وإنشاء/إيجاد الحساب والمقارنة، فرقم بـ`+` أو بدونه يُطابق الحساب نفسه. رقم غير صالح
+يُتخطّى بأمان دون إنشاء أي سجل. القيد الفريد `(channel, external_identifier)` يضمن
+عدم التكرار وسلامة التزامن (idempotency).

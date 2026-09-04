@@ -10,6 +10,7 @@ use App\Enums\WebhookEventStatus;
 use App\Models\Message;
 use App\Models\WebhookEvent;
 use App\Services\MessageProcessor;
+use App\Services\WhatsApp\WhatsAppSubscriberProvisioner;
 use App\Support\SafeError;
 use App\Support\WhatsApp\WhatsAppConfig;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -61,8 +62,12 @@ class ProcessWhatsAppWebhook implements ShouldBeUnique, ShouldQueue
         return 'process-whatsapp-webhook:'.$this->webhookEventId;
     }
 
-    public function handle(WhatsAppChannelAdapter $adapter, MessageProcessor $processor, WhatsAppConfig $config): void
-    {
+    public function handle(
+        WhatsAppChannelAdapter $adapter,
+        MessageProcessor $processor,
+        WhatsAppConfig $config,
+        WhatsAppSubscriberProvisioner $provisioner,
+    ): void {
         $event = WebhookEvent::find($this->webhookEventId);
 
         if ($event === null || $event->status === WebhookEventStatus::Processed) {
@@ -108,7 +113,7 @@ class ProcessWhatsAppWebhook implements ShouldBeUnique, ShouldQueue
                         continue;
                     }
 
-                    $this->handleMessage($adapter, $processor, $message, $value, $metadata, $wabaId, $event->id);
+                    $this->handleMessage($adapter, $processor, $provisioner, $message, $value, $metadata, $wabaId, $event->id);
                 }
 
                 foreach ($this->arrayItems($value['statuses'] ?? null) as $status) {
@@ -145,6 +150,7 @@ class ProcessWhatsAppWebhook implements ShouldBeUnique, ShouldQueue
     private function handleMessage(
         WhatsAppChannelAdapter $adapter,
         MessageProcessor $processor,
+        WhatsAppSubscriberProvisioner $provisioner,
         array $message,
         array $value,
         array $metadata,
@@ -180,6 +186,13 @@ class ProcessWhatsAppWebhook implements ShouldBeUnique, ShouldQueue
 
             return;
         }
+
+        // First contact from an unknown-but-valid WhatsApp number onboards it as
+        // its own subscriber + channel account (never linked to the admin). The
+        // sender id is already normalized to E.164 by the adapter, so a number
+        // with or without "+" resolves to the same account. Race-safe via the
+        // unique (channel, external_identifier); reused on every later message.
+        $provisioner->resolve($dto->externalUserId, $dto->metadata['profile_name'] ?? null);
 
         // Idempotency is enforced downstream by MessageProcessor via the unique
         // messages.external_message_id (the wamid): the same wamid arriving in
