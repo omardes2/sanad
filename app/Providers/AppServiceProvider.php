@@ -3,10 +3,13 @@
 namespace App\Providers;
 
 use App\Agents\AiAgentOrchestrator;
+use App\Agents\MeteredAgentOrchestrator;
 use App\Agents\PlaceholderAgentOrchestrator;
 use App\Channels\ChannelRegistry;
 use App\Contracts\AgentOrchestrator;
 use App\Services\Ai\AiManager;
+use App\Services\Billing\UsageEngine;
+use App\Services\Billing\UsageLimitResponder;
 use App\Support\WhatsApp\WhatsAppConfig;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
@@ -21,13 +24,20 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(AiManager::class);
 
         // The message pipeline resolves the agent through this binding. When AI
-        // is enabled the real orchestrator answers; otherwise the deterministic
-        // placeholder keeps the pipeline working (local/testing, or before a
-        // provider key is configured). Callers are untouched either way.
+        // is enabled the real orchestrator answers, wrapped by the metering
+        // decorator (subscription/usage enforcement — transparent when
+        // billing.enforce is off). Otherwise the deterministic placeholder keeps
+        // the pipeline working (local/testing, or before a key is configured).
         $this->app->bind(AgentOrchestrator::class, static function (Application $app): AgentOrchestrator {
-            return config('ai.enabled')
-                ? $app->make(AiAgentOrchestrator::class)
-                : $app->make(PlaceholderAgentOrchestrator::class);
+            if (! config('ai.enabled')) {
+                return $app->make(PlaceholderAgentOrchestrator::class);
+            }
+
+            return new MeteredAgentOrchestrator(
+                $app->make(AiAgentOrchestrator::class),
+                $app->make(UsageEngine::class),
+                $app->make(UsageLimitResponder::class),
+            );
         });
 
         $this->app->singleton(ChannelRegistry::class);

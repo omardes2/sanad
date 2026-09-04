@@ -9,7 +9,10 @@ use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Messages;
 use App\Livewire\Dashboard\Overview;
+use App\Livewire\Dashboard\Plans;
 use App\Livewire\Dashboard\Reminders;
+use App\Livewire\Dashboard\SubscriberDetail;
+use App\Livewire\Dashboard\Subscribers;
 use App\Livewire\Dashboard\Tasks;
 use App\Livewire\Dashboard\WhatsAppStatus;
 use App\Livewire\Dev\Chat;
@@ -41,6 +44,11 @@ Route::middleware(['auth', 'admin'])
         Route::get('/reminders', Reminders::class)->name('dashboard.reminders');
         Route::get('/expenses', Expenses::class)->name('dashboard.expenses');
         Route::get('/whatsapp', WhatsAppStatus::class)->name('dashboard.whatsapp');
+
+        // Subscriptions, plans & usage.
+        Route::get('/plans', Plans::class)->name('dashboard.plans');
+        Route::get('/subscribers', Subscribers::class)->name('dashboard.subscribers');
+        Route::get('/subscribers/{subscriber}', SubscriberDetail::class)->name('dashboard.subscribers.show');
     });
 
 // Local chat simulator — 404 outside local/testing (see EnsureDevEnvironment).

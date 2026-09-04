@@ -9,6 +9,8 @@
         ['route' => 'dashboard.tasks', 'label' => 'المهام', 'icon' => '✅'],
         ['route' => 'dashboard.reminders', 'label' => 'التذكيرات', 'icon' => '⏰'],
         ['route' => 'dashboard.expenses', 'label' => 'المصروفات', 'icon' => '💰'],
+        ['route' => 'dashboard.subscribers', 'label' => 'المشتركون', 'icon' => '👥'],
+        ['route' => 'dashboard.plans', 'label' => 'الباقات', 'icon' => '🏷️'],
         ['route' => 'dashboard.whatsapp', 'label' => 'حالة واتساب', 'icon' => '🟢'],
     ];
 @endphp

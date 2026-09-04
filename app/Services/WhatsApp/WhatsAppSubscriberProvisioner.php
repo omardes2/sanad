@@ -9,6 +9,7 @@ use App\Enums\ChannelType;
 use App\Enums\UserStatus;
 use App\Models\ChannelAccount;
 use App\Models\User;
+use App\Services\Billing\SubscriptionService;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
@@ -31,6 +32,8 @@ use Illuminate\Support\Facades\DB;
  */
 class WhatsAppSubscriberProvisioner
 {
+    public function __construct(private readonly SubscriptionService $subscriptions) {}
+
     /**
      * Find the WhatsApp channel account for this E.164 number, creating the
      * subscriber and account on first contact.
@@ -52,13 +55,20 @@ class WhatsAppSubscriberProvisioner
                     'status' => UserStatus::Active,
                 ]);
 
-                return ChannelAccount::create([
+                $account = ChannelAccount::create([
                     'user_id' => $user->id,
                     'channel' => ChannelType::WhatsApp,
                     'external_identifier' => $e164,
                     'display_name' => $this->nullableName($profileName),
                     'status' => ChannelAccountStatus::Active,
                 ]);
+
+                // Channel-agnostic: onboarding a brand-new subscriber assigns the
+                // configured default/trial plan once (safe to disable; never a
+                // duplicate trial). The WhatsApp layer only triggers it.
+                $this->subscriptions->assignDefaultIfEnabled($user);
+
+                return $account;
             });
         } catch (UniqueConstraintViolationException) {
             // A concurrent first message from the same number won the race

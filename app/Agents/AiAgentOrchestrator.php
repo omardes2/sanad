@@ -66,7 +66,12 @@ class AiAgentOrchestrator implements AgentOrchestrator
         return new AgentResponseData(
             text: $response->text,
             type: MessageType::Text,
-            metadata: ['ai' => ['provider' => $providerName, 'model' => $response->model]],
+            metadata: ['ai' => [
+                'provider' => $providerName,
+                'model' => $response->model,
+                'prompt_tokens' => $response->promptTokens,
+                'completion_tokens' => $response->completionTokens,
+            ]],
         );
     }
 
