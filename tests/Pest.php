@@ -47,9 +47,12 @@ expect()->extend('toBeOne', function () {
 use App\Data\InboundMessageData;
 use App\Enums\ChannelType;
 use App\Enums\MessageType;
+use App\Enums\WebhookEventStatus;
 use App\Jobs\ProcessInboundMessage;
+use App\Jobs\ProcessWhatsAppWebhook;
 use App\Models\ChannelAccount;
 use App\Models\User;
+use App\Models\WebhookEvent;
 use Illuminate\Testing\TestResponse;
 
 /**
@@ -219,6 +222,26 @@ function whatsappStatusEnvelope(string $providerMessageId, string $status, array
             ]],
         ]],
     ];
+}
+
+/**
+ * Store an envelope as a WebhookEvent and run the processing job synchronously.
+ *
+ * @param  array<string, mixed>  $envelope
+ */
+function runWhatsAppWebhook(array $envelope): WebhookEvent
+{
+    $event = WebhookEvent::create([
+        'provider' => 'whatsapp',
+        'external_event_id' => hash('sha256', json_encode($envelope).uniqid('', true)),
+        'payload' => $envelope,
+        'status' => WebhookEventStatus::Received,
+        'received_at' => now(),
+    ]);
+
+    app()->call([new ProcessWhatsAppWebhook($event->id), 'handle']);
+
+    return $event->fresh();
 }
 
 /**

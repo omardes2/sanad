@@ -199,7 +199,13 @@ return [
     'defaults' => [
         'supervisor-1' => [
             'connection' => 'redis',
-            'queue' => ['default'],
+            // All application queues Horizon must drain automatically. The
+            // WhatsApp webhook pipeline uses "webhooks" (envelope processing)
+            // and "messages" (reply delivery); without them listed here Horizon
+            // silently ignores those queues and jobs pile up unconsumed. Order
+            // is priority order: inbound webhooks first, then replies, then the
+            // catch-all default.
+            'queue' => ['webhooks', 'messages', 'default'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 1,
@@ -207,6 +213,8 @@ return [
             'maxJobs' => 0,
             'memory' => 128,
             'tries' => 1,
+            // Must stay below the redis connection's retry_after (90s) so a
+            // long job is never released and run a second time concurrently.
             'timeout' => 60,
             'nice' => 0,
         ],
