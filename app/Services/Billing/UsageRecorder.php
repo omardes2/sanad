@@ -6,6 +6,7 @@ namespace App\Services\Billing;
 
 use App\Data\Billing\RecordResult;
 use App\Data\Billing\UsageRecord;
+use App\Enums\UsageDimension;
 use App\Models\Subscription;
 use App\Models\UsageEvent;
 use Carbon\CarbonImmutable;
@@ -41,20 +42,26 @@ class UsageRecorder
         $subscription = $this->subscriptionSnapshot($record);
         $cost = $this->costs->cost($record->dimension, $record->quantity, $record->inputUnits, $record->outputUnits);
 
-        $providerCost = round((float) $cost['cost'], 6);
-        $communicationCost = 0.0;
+        // Attribute the (configurable) service cost to the right component by
+        // dimension: WhatsApp dimensions are communication cost, everything
+        // else is provider cost. External APIs get their own component later.
+        $serviceCost = round((float) $cost['cost'], 6);
+        $isCommunication = in_array($record->dimension, [UsageDimension::WhatsAppInbound, UsageDimension::WhatsAppOutbound], true);
+        $providerCost = $isCommunication ? 0.0 : $serviceCost;
+        $communicationCost = $isCommunication ? $serviceCost : 0.0;
         $externalCost = 0.0;
         $totalCost = round($providerCost + $communicationCost + $externalCost, 6);
 
         $row = [
             'user_id' => $record->subscriber->id,
+            'subscriber_id' => $record->subscriber->id, // immutable attribution snapshot
             'subscription_id' => $subscription?->id,
             'plan_id' => $subscription?->plan_id,
             'plan_slug' => $subscription?->plan?->slug,
             'type' => $record->dimension->value,
             'operation' => $record->operation,
             'channel' => $record->channel,
-            'outcome' => $record->outcome->value,
+            'outcome' => $record->outcome->value, // always explicit for recorded rows
             'idempotency_key' => $record->idempotencyKey,
             'correlation_id' => $record->correlationId,
             'provider' => $record->provider,

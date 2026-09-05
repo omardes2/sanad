@@ -9,6 +9,7 @@ use App\Models\Subscription;
 use App\Models\UsageCharge;
 use App\Models\UsageCounter;
 use App\Models\UsageEvent;
+use App\Models\User;
 use App\Services\Billing\SubscriptionService;
 use App\Services\Billing\UsageRecorder;
 use App\Support\Billing\UsageKeys;
@@ -147,4 +148,48 @@ it('can record billable consumption whose downstream stage failed', function () 
     $event = recorder()->record(usageRecord(['outcome' => UsageEventOutcome::DownstreamFailed]))->event;
 
     expect($event->outcome)->toBe(UsageEventOutcome::DownstreamFailed);
+});
+
+it('keeps historical attribution to the subscriber after the user is hard-deleted', function () {
+    $subscriber = billingSubscriber(billingPlan());
+    $ownerId = $subscriber->id;
+
+    $event = recorder()->record(usageRecord(['subscriber' => $subscriber]))->event;
+    expect($event->user_id)->toBe($ownerId)->and($event->subscriber_id)->toBe($ownerId);
+
+    User::whereKey($ownerId)->delete(); // existing policy: usage events retained, user_id nulled
+
+    $event = $event->fresh();
+    expect($event)->not->toBeNull()
+        ->and($event->user_id)->toBeNull()
+        ->and($event->subscriber_id)->toBe($ownerId); // pseudonymous owner never lost
+});
+
+it('attributes WhatsApp dimensions to communication cost, not provider cost', function () {
+    config(['billing.cost_rates.whatsapp_outbound' => ['unit' => 'event', 'rate' => 0.05]]);
+
+    $event = recorder()->record(usageRecord([
+        'dimension' => UsageDimension::WhatsAppOutbound,
+        'idempotencyKey' => 'whatsapp_outbound:message:9#1',
+    ]))->event;
+
+    expect((float) $event->communication_cost)->toBe(0.05)
+        ->and((float) $event->provider_cost)->toBe(0.0)
+        ->and((float) $event->total_cost)->toBe(0.05);
+});
+
+it('derives invocation identity deterministically — never from existing rows', function () {
+    $correlation = UsageKeys::correlationForMessage(7);
+    $key = UsageKeys::invocation(UsageDimension::AiReply, $correlation);
+
+    // Pure function of its inputs: identical before and after rows exist,
+    // so concurrent workers handling the same invocation compute the same key.
+    expect($key)->toBe('ai_reply:message:7#1');
+    recorder()->record(usageRecord(['correlationId' => $correlation, 'idempotencyKey' => $key]));
+    recorder()->record(usageRecord(['correlationId' => $correlation, 'idempotencyKey' => $key]));
+
+    expect(UsageKeys::invocation(UsageDimension::AiReply, $correlation))->toBe($key)
+        ->and(UsageEvent::where('correlation_id', $correlation)->count())->toBe(1)
+        // A genuinely new invocation is a different but equally stable key.
+        ->and(UsageKeys::invocation(UsageDimension::AiReply, $correlation, 2))->toBe('ai_reply:message:7#2');
 });

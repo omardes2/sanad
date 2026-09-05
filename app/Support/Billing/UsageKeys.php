@@ -19,6 +19,14 @@ use App\Models\Message;
  *                      transcription — gets a different sequence number, so the
  *                      unique key never blocks legitimate multiple charges for
  *                      one message.
+ *
+ * Determinism contract: both identifiers are PURE functions of their inputs.
+ * The sequence number is assigned by the caller from the STRUCTURE of the
+ * request (e.g. round index, fallback attempt index) — never derived from
+ * counting existing rows. So a retry of the same invocation always reproduces
+ * the same key, a genuinely new invocation gets a different but stable key,
+ * and two concurrent workers handling the same invocation can never compute
+ * two different keys for it.
  */
 final class UsageKeys
 {

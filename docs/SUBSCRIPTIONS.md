@@ -67,9 +67,10 @@ WhatsApp transport → MessageProcessor → AgentOrchestrator
 - **`UsageRecorder`** هو **المالك الوحيد** للكتابة إلى `usage_events`: يسجّل ما استهلكه المزوّد وكم كلّفنا،
   **دائمًا** (لا يقرأ `billing.enforce`)، لا يلمس العدّادات، ولا يقرّر السماح/المنع. الإدراج
   `INSERT … ON CONFLICT (idempotency_key) DO NOTHING` ⇒ idempotent وآمن ضد التزامن. التكلفة تُحسب
-  **وقت الحدث وتُخزَّن على الصف** (immutable؛ `cost` مرآة لـ`total_cost`). يلتقط **snapshot**
-  للاشتراك/الباقة (`subscription_id`, `plan_id`, `plan_slug` — مراجع بلا FK) فيبقى التاريخ صحيحًا بعد
-  الترقية أو الحذف.
+  **وقت الحدث وتُخزَّن على الصف** (immutable؛ `cost` مرآة لـ`total_cost`). يلتقط **snapshots** بلا FK:
+  `subscriber_id` (نسبة التكلفة لصاحبها — يبقى بعد حذف المستخدم بينما `user_id` يُصفَّر؛ معرّف داخلي
+  بلا بيانات شخصية)، و`subscription_id`/`plan_id`/`plan_slug` (الباقة وقت الحدث) فيبقى التاريخ صحيحًا
+  بعد الترقية أو الحذف. `outcome` يُكتب **صريحًا** لكل صف جديد؛ الصفوف التاريخية تبقى `NULL` (مجهولة).
 - **`UsageEngine`** = الإنفاذ فقط: entitlement، حدود، `usage_counters`، وسجلّ استهلاك حصص خاصّ به
   `usage_charges` (idempotent بمفتاح فريد داخل نفس معاملة الزيادة الذرّية). **لا يكتب الـledger أبدًا.**
   عند `BILLING_ENFORCE=false` يعود `NotEnforced` ولا يلمس شيئًا.
@@ -83,7 +84,7 @@ WhatsApp transport → MessageProcessor → AgentOrchestrator
   جولة ثانية بعد أداة، تفريغ صوتي) = `#n` مختلف ⇒ القيد الفريد لا يمنع عدة عمليات شرعية لرسالة واحدة.
 
 ### Billable ≠ نجاح العملية للمستخدم
-الـledger يسجّل **ما استهلكه المزوّد** (تكلفة حقيقية) مع `outcome` (`succeeded` / `downstream_failed`):
+الـledger يسجّل **ما استهلكه المزوّد** (تكلفة حقيقية) مع `outcome` (`succeeded` / `downstream_failed`؛ `NULL` = مجهول للصفوف القديمة):
 إن استهلك المزوّد شيئًا ثم فشل الإرسال لاحقًا، تبقى التكلفة مسجّلة. إن لم يستهلك شيئًا (فشل المزوّد)
 ⇒ لا صف أصلًا. استهلاك الحصّة قد يتبع منطقًا مختلفًا لكل عملية.
 

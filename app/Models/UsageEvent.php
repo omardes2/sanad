@@ -14,9 +14,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * The usage/cost LEDGER — one row per billable invocation, written only by
  * UsageRecorder (always on, independent of enforcement).
  *
- * Historical by design: subscription_id / plan_id / plan_slug are snapshots
- * taken at record time (no foreign keys), so the row keeps saying which plan
- * the subscriber was on even after upgrades or deletions. `type` is the usage
+ * Historical by design: subscriber_id / subscription_id / plan_id / plan_slug
+ * are snapshots taken at record time (no foreign keys). user_id is the live FK
+ * (nulled if the user is hard-deleted); subscriber_id keeps the pseudonymous
+ * owner forever, so a cost never loses who caused it. `outcome` is explicit
+ * for recorded rows and NULL (unknown) for rows that pre-date the ledger. `type` is the usage
  * dimension; `cost` mirrors `total_cost` for backward compatibility.
  */
 class UsageEvent extends Model
@@ -29,6 +31,7 @@ class UsageEvent extends Model
      */
     protected $fillable = [
         'user_id',
+        'subscriber_id',
         'subscription_id',
         'plan_id',
         'plan_slug',
