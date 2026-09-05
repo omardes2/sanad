@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Auth\LogoutController;
+use App\Http\Controllers\Dashboard\ProviderCredentialController;
 use App\Http\Controllers\Dashboard\UsageExportController;
 use App\Http\Middleware\EnsureDevEnvironment;
 use App\Livewire\Auth\Login;
+use App\Livewire\Dashboard\Ai\Health as AiHealth;
 use App\Livewire\Dashboard\Ai\Models as AiModels;
 use App\Livewire\Dashboard\Ai\Pricing as AiPricing;
 use App\Livewire\Dashboard\Ai\Providers as AiProviders;
@@ -75,6 +77,13 @@ Route::middleware(['auth', 'admin'])
         Route::get('/ai/models', AiModels::class)->middleware('permission:ai.models.manage')->name('dashboard.ai.models');
         Route::get('/ai/pricing', AiPricing::class)->middleware('permission:ai.pricing.view')->name('dashboard.ai.pricing');
         Route::get('/ai/routing', AiRouting::class)->middleware('permission:ai.routing.manage')->name('dashboard.ai.routing');
+        // Credentials + provider health (Phase C3): the secret is posted ONCE
+        // through a plain form (write-only); lifecycle in CredentialManager.
+        Route::post('/ai/providers/{provider}/credentials', [ProviderCredentialController::class, 'store'])->middleware('permission:ai.credentials.manage')->name('dashboard.ai.credentials.store');
+        Route::post('/ai/credentials/{credential}/activate', [ProviderCredentialController::class, 'activate'])->middleware('permission:ai.credentials.manage')->name('dashboard.ai.credentials.activate');
+        Route::post('/ai/credentials/{credential}/revoke', [ProviderCredentialController::class, 'revoke'])->middleware('permission:ai.credentials.manage')->name('dashboard.ai.credentials.revoke');
+        Route::get('/ai/health', AiHealth::class)->middleware('permission:ai.health.view')->name('dashboard.ai.health');
+
         Route::get('/usage', Usage::class)->middleware('permission:usage.view')->name('dashboard.usage');
         Route::get('/usage/export', UsageExportController::class)->middleware('permission:usage.export')->name('dashboard.usage.export');
     });

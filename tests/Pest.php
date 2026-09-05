@@ -363,3 +363,58 @@ function settings(): SettingsRepository
 {
     return app(SettingsRepository::class);
 }
+
+// ---- Credentials / health (Phase C3) -------------------------------------------
+
+use App\Models\AiModel;
+use App\Models\AiProvider;
+use App\Services\Ai\Catalog\CatalogCache;
+
+/**
+ * A fresh CREDENTIALS_KEY value (base64 of 32 random bytes).
+ */
+function c3Key(): string
+{
+    return 'base64:'.base64_encode(random_bytes(32));
+}
+
+/**
+ * Point the vault at a key (and optional previous keys) for this test.
+ */
+function c3VaultOn(?string $key = null, string $previous = ''): string
+{
+    $key ??= c3Key();
+    config(['credentials.key' => $key, 'credentials.previous_keys' => $previous, 'credentials.cipher' => 'aes-256-gcm']);
+
+    return $key;
+}
+
+function c3VaultOff(): void
+{
+    config(['credentials.key' => null, 'credentials.previous_keys' => '']);
+}
+
+/**
+ * Database catalog with two configured providers: groq (preferred via
+ * AI_PROVIDER, priority 100) and openai (priority 10), one chat model each.
+ *
+ * @return array{groq: AiProvider, openai: AiProvider, llama: AiModel, mini: AiModel}
+ */
+function c3Catalog(): array
+{
+    aiConfigure([
+        'ai.providers.openai.base_url' => 'https://api.openai.com/v1',
+        'ai.providers.openai.api_key' => 'test-openai-key',
+        'ai.providers.openai.model' => 'gpt-4.1-mini',
+        'ai.catalog_source' => 'database',
+    ]);
+
+    $groq = AiProvider::factory()->create(['key' => 'groq', 'driver' => 'groq', 'priority' => 100, 'credentials_ref' => 'GROQ_API_KEY']);
+    $openai = AiProvider::factory()->create(['key' => 'openai', 'driver' => 'openai', 'priority' => 10, 'credentials_ref' => 'OPENAI_API_KEY']);
+    $llama = AiModel::factory()->for($groq, 'provider')->create(['external_id' => 'llama-3.3-70b-versatile', 'priority' => 5]);
+    $mini = AiModel::factory()->for($openai, 'provider')->create(['external_id' => 'gpt-4.1-mini']);
+
+    CatalogCache::flush();
+
+    return compact('groq', 'openai', 'llama', 'mini');
+}

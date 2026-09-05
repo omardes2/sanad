@@ -94,6 +94,7 @@ class Routing extends Component
             'unknown_provider' => 'لا يوجد adapter لهذا المزوّد',
             'provider_unsupported_operation' => 'الـadapter لا يدعم العملية',
             'unconfigured' => 'المزوّد بلا مفتاح/إعداد في البيئة',
+            'credential_failed' => 'مفتاح الخزنة الفعّال لا يمكن فتحه — المزوّد مغلق',
             'cost_guardrail' => 'التكلفة المقدّرة تتجاوز الحد',
         ];
     }

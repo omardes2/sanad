@@ -25,6 +25,9 @@
         <env name="AI_ENABLED" value=""/>
         <env name="AI_CATALOG_SOURCE" value=""/>
         <env name="BILLING_ENFORCE" value=""/>
+        <env name="AI_CREDENTIALS_MODE" value=""/>
+        <env name="CREDENTIALS_KEY" value=""/>
+        <env name="CREDENTIALS_PREVIOUS_KEYS" value=""/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>

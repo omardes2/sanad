@@ -4,10 +4,24 @@
         <p class="mt-1 text-sm text-slate-500">
             بيانات تشغيلية فقط. التفضيل الفعلي للتوجيه هو <code dir="ltr" class="rounded bg-slate-100 px-1">AI_PROVIDER={{ $preferred }}</code>؛
             مصدر الكتالوج: <span class="font-medium">{{ $sourceMode }}</span> (الفعّال الآن: <span class="font-medium">{{ $sourceActive }}</span>).
-            لا مفاتيح ولا اختبار اتصال هنا (مرحلة C3)؛ <code dir="ltr" class="rounded bg-slate-100 px-1">is_primary</code> للقراءة فقط (C4)؛ <code dir="ltr" class="rounded bg-slate-100 px-1">base_url</code> يُخزَّن ولا يُطبَّق.
+            المفاتيح تُدخل مرة واحدة وتُعرض كبصمة فقط؛ اختبار الاتصال يدوي؛ <code dir="ltr" class="rounded bg-slate-100 px-1">is_primary</code> للقراءة فقط (C4)؛ <code dir="ltr" class="rounded bg-slate-100 px-1">base_url</code> يُخزَّن ولا يُطبَّق.
         </p>
     </header>
 
+    <p class="mb-4 text-xs text-slate-500">
+        وضع المفاتيح: <span class="font-medium">{{ $credentialsMode }}</span> ·
+        الخزنة: @if ($vaultAvailable)<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">متاحة</span> <code dir="ltr">{{ $vaultKeyId }}</code>@else<span class="rounded-full bg-slate-200 px-2 py-0.5 text-slate-700">غير متاحة</span>@endif
+        · الأسرار تُعرض كبصمة فقط ولا تُقرأ أبدًا من اللوحة.
+    </p>
+    @if (session('credential_status'))
+        <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ session('credential_status') }}</div>
+    @endif
+    @if (session('credential_error'))
+        <div class="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{{ session('credential_error') }}</div>
+    @endif
+    @if ($errors->any())
+        <div class="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{{ $errors->first() }}</div>
+    @endif
     @if ($notice)
         <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ $notice }}</div>
     @endif
@@ -27,7 +41,7 @@
                         <th class="px-4 py-3 font-medium">المفتاح في البيئة</th>
                         <th class="px-4 py-3 font-medium">base_url</th>
                         <th class="px-4 py-3 font-medium">النماذج</th>
-                        @if ($canManage)<th class="px-4 py-3 font-medium"></th>@endif
+                        <th class="px-4 py-3 font-medium"></th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100 align-top">
@@ -46,9 +60,11 @@
                             </td>
                             <td class="px-4 py-3 font-mono text-xs" dir="ltr">{{ $p->priority }}</td>
                             <td class="px-4 py-3 text-xs">
-                                @if ($row['configured'] === true)<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">موجود</span>
+                                @if ($row['runtime_failure'])<span class="rounded-full bg-rose-100 px-2 py-0.5 text-rose-800">مغلق</span>
+                                @elseif ($row['configured'] === true)<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">موجود</span>
                                 @elseif ($row['configured'] === false)<span class="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">غير موجود</span>
                                 @else<span class="text-slate-400">—</span>@endif
+                                @if ($row['runtime_source'])<div class="mt-1 text-[11px] text-slate-500">{{ $row['runtime_source'] }}</div>@endif
                                 @if ($p->credentials_ref)<div class="mt-1 font-mono text-[11px] text-slate-400" dir="ltr">{{ $p->credentials_ref }}</div>@endif
                             </td>
                             <td class="px-4 py-3 font-mono text-xs" dir="ltr">
@@ -56,12 +72,22 @@
                                 @if ($p->base_url)<span class="ms-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">مخزَّن فقط</span>@endif
                             </td>
                             <td class="px-4 py-3 font-mono text-xs" dir="ltr">{{ $p->models_count }}</td>
-                            @if ($canManage)
-                                <td class="px-4 py-3 text-left">
+                            <td class="px-4 py-3 text-left">
+                                @if ($row['driver_known'])
+                                    <button type="button" wire:click="toggle({{ $p->id }})" class="rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50">{{ $open === $p->id ? 'إخفاء المفاتيح' : 'المفاتيح والاختبار' }}</button>
+                                @endif
+                                @if ($canManage)
                                     <button type="button" wire:click="edit({{ $p->id }})" class="rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50">تعديل</button>
-                                </td>
-                            @endif
+                                @endif
+                            </td>
                         </tr>
+                        @if ($open === $p->id && $row['driver_known'])
+                            <tr wire:key="provider-credentials-{{ $p->id }}">
+                                <td colspan="8" class="bg-slate-50 px-4 py-4">
+                                    @include('livewire.dashboard.ai._credentials', ['row' => $row])
+                                </td>
+                            </tr>
+                        @endif
                         @if ($canManage && $editing === $p->id)
                             <tr wire:key="provider-edit-{{ $p->id }}">
                                 <td colspan="8" class="bg-slate-50 px-4 py-4">

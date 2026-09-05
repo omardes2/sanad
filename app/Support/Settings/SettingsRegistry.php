@@ -32,6 +32,8 @@ final class SettingsRegistry
 
     public const GROUP_GUARDRAILS = 'guardrails';
 
+    public const GROUP_HEALTH = 'health';
+
     public const GROUP_EMERGENCY = 'emergency';
 
     /** @var array<string, SettingDefinition>|null */
@@ -97,6 +99,7 @@ final class SettingsRegistry
             self::GROUP_BILLING_MESSAGES => 'رسائل الفوترة',
             self::GROUP_SUBSCRIPTIONS => 'الاشتراكات',
             self::GROUP_GUARDRAILS => 'الحواجز المالية',
+            self::GROUP_HEALTH => 'صحة المزوّدين',
             self::GROUP_EMERGENCY => 'مفاتيح الطوارئ',
         ];
     }
@@ -301,7 +304,34 @@ final class SettingsRegistry
                 rules: ['required', 'integer', 'min:1', 'max:100000'],
             ),
 
+            // ---- Provider health (settings.manage) ---------------------------
+            new SettingDefinition(
+                key: 'ai.health.scheduled',
+                type: SettingType::Boolean,
+                group: self::GROUP_HEALTH,
+                label: 'فحوصات الصحة المجدولة',
+                description: 'معطّل افتراضيًا. عند التفعيل يُشغَّل فحص المصادقة غير المفوتر فقط كل 15 دقيقة للمزوّدين الذين يعلنون دعمه. لا يُجدوَل أي استدلال مفوتر أبدًا.',
+                permission: Permission::SettingsManage,
+                precedence: SettingPrecedence::Operational,
+                defaultConfigPath: 'ai.health.scheduled',
+                rules: ['required', 'boolean'],
+            ),
+
             // ---- Emergency switches (settings.manage_emergency — super_admin) -
+            new SettingDefinition(
+                key: 'ai.credentials_mode',
+                type: SettingType::Enum,
+                group: self::GROUP_EMERGENCY,
+                label: 'مصدر مفاتيح المزوّدين',
+                description: 'env = مفاتيح البيئة فقط (الرجوع الفوري). vault = مفتاح الخزنة الفعّال أولًا؛ مزوّد بلا مفتاح فعّال يعود إلى البيئة أثناء الانتقال؛ مفتاح فعّال لا يمكن فتحه ⇒ المزوّد يُغلق. AI_CREDENTIALS_MODE في البيئة يتقدّم على هذه القيمة.',
+                permission: Permission::SettingsManageEmergency,
+                precedence: SettingPrecedence::Emergency,
+                defaultConfigPath: 'ai.credentials_mode',
+                rules: ['required', 'string'],
+                options: ['env', 'vault'],
+                envKey: 'AI_CREDENTIALS_MODE',
+                overrideConfigPath: 'ai.overrides.credentials_mode',
+            ),
             new SettingDefinition(
                 key: 'ai.enabled',
                 type: SettingType::Boolean,

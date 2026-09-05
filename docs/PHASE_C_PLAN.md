@@ -1,7 +1,7 @@
 # Phase C — Sanad Admin Control Center
 
 > المرجع المعماري العام: [ARCHITECTURE.md](ARCHITECTURE.md). Phase B2: [PHASE_B2_PLAN.md](PHASE_B2_PLAN.md).
-> الحالة: **C0 مدمجة**، **C1 مدمجة**، **C2 منفَّذة** (PR C2). C3–C4 مخطَّطتان ولا تبدآن إلا بموافقة صريحة لكل واحدة.
+> الحالة: **C0 مدمجة**، **C1 مدمجة**، **C2 مدمجة**، **C3 منفَّذة** (PR C3). C4 مخطَّطة ولا تبدأ إلا بموافقة صريحة.
 
 ## 1) Audit للوضع قبل Phase C (main `7c3fd63`)
 
@@ -67,6 +67,7 @@
 | `ai.routing.manage` | ✓ | ✓ | | |
 | `ai.credentials.manage` | ✓ | | | |
 | `ai.credentials.test` | ✓ | ✓ | | |
+| `ai.health.view` (C3) | ✓ | ✓ | | |
 | `settings.manage` | ✓ | ✓ | | |
 | `settings.manage_billing` (C1) | ✓ | | | |
 | `settings.manage_emergency` (C1) | ✓ | | | |
@@ -146,12 +147,46 @@
 
 **النشر لـC2:** لا migrations. `php artisan sanad:rbac:bootstrap` (dry-run) ثم `--apply` لإنشاء `usage.export` ومنحها لـ`super_admin`/`finance`. لا تغيير في `.env` ولا `AI_PROVIDER` ولا `BILLING_ENFORCE`، ولا تغيير على أي Provider/Model أثناء النشر.
 
-## 7) C3–C4 (مخطَّطة)
+## 7) C3 — Credentials + Provider Health + Test Connection (منفَّذة)
 
-- **C3:** `provider_credentials` (مشفّر بـ`CredentialVault` على `CREDENTIALS_KEY` + مفاتيح سابقة للتدوير، fail-closed بدون المفتاح)، `CredentialResolver` (الخزنة ثم env)، إدخال write-only عبر POST عادي، masking (fingerprint/last4)، Rotate/Revoke مُدقَّق؛ `ProviderHealthCheck` abstraction لكل Adapter (القرار C) + `provider_health_checks` + Test Connection يدوي مع SSRF re-validation.
+**القرارات المثبَّتة قبل التنفيذ:**
+
+| الموضوع | القرار | التنفيذ |
+|---|---|---|
+| Credential lifecycle | `pending / active / revoked`؛ أي مفتاح جديد أو Rotation يبدأ `pending` ولا يؤثر على الـruntime؛ المسار: create pending → Test Connection → activate → revoke previous active | `CredentialManager` (الكاتب الوحيد): `create()` يختم بالخزنة ويُدرج pending؛ `activate()` داخل transaction واحدة مع `FOR UPDATE` على صف `ai_providers`: يجب أن يكون الصف pending ويُفتح بالخزنة الحالية، ثم يُلغى الفعّال السابق ويُفعَّل الجديد معًا — فشل أي خطوة (بما فيها الـAudit) يترك القديم Active. فهرس partial unique `provider_credentials_one_active_per_provider`. اختبار PostgreSQL حقيقي بعمليات نظام متزامنة (`sanad:ai-credential-probe`): 10 تفعيلات متزامنة لمفاتيح مختلفة ⇒ Active واحد بالضبط؛ 10 تفعيلات للمفتاح نفسه ⇒ واحد ينجح و9 تُرفض بنظافة. |
+| Runtime base_url | لا يُطبَّق DB `base_url` على الـRuntime في C3 (لا env ولا vault) | `ProviderRuntimeConfigFactory::for()` يُبقي `base_url` من config/env؛ DB `base_url` يُختبر فقط كـcandidate من Test Connection عبر `OutboundGuard`. تطبيقه على الـRuntime cutover مستقل لاحقًا. |
+| Vault failure semantics | في `vault`: لا مفتاح فعّال ⇒ fallback إلى env (انتقال)؛ فعّال صالح ⇒ يُستخدم؛ فعّال لكن missing key / undecryptable / tampered / provider mismatch ⇒ **fail closed** بلا fallback صامت؛ الطوارئ `AI_CREDENTIALS_MODE=env` | `CredentialResolver` يعيد `ResolvedCredential` بـ`failure`؛ الـadapter يعلن `credentialFailure()` (`ReportsCredentialState`) فيتخطاه الموجّه بسبب `credential_failed`؛ تحذير في اللوج + Audit `ai.credentials.resolve_failed` مرة كل 15 دقيقة لكل صف؛ الواجهة تعرض «مغلق». `ai.credentials_mode` مفتاح طوارئ (ENV `AI_CREDENTIALS_MODE` > DB > config `env`). |
+| Secret display | Env = fingerprint فقط؛ Vault = fingerprint + last4؛ SHA-256 prefix بطول 16 hex | `SecretString::fingerprint()/last4()`؛ `ProviderCredential::masked()`. |
+| Encryption | `CREDENTIALS_KEY` مستقل عن `APP_KEY`؛ AES-256-GCM؛ لا runtime `env()`؛ `#[SensitiveParameter]` | تحقق رسمي: `Illuminate\Encryption\Encrypter::$supportedCiphers` يتضمن `aes-256-gcm` (AEAD، مفتاح 32 بايت) في Laravel 13.30.1 وOpenSSL 3.0.13 يوفّره. `config/credentials.php` (`key`, `previous_keys`, `cipher`) يُقرأ بـ`config()` فقط. `CredentialVault` يبني `Encrypter` مستقلًا؛ الغلاف `{v, kid, ct}` والنص المشفَّر `{p: provider, s: secret}` فلا يُنقل صف بين مزوّدين. `SecretString` يمنع كل مخارج التسريب (string cast/JSON/var_dump/serialize) ويُكشف فقط بـ`reveal()` عند بناء الـAuthorization header. |
+| Secret rotation vs master-key rotation | Credential rotation = append-only (pending جديد ثم القديم revoked)؛ Master-key rotation تعيد تشفير الصف نفسه وتحدّث `ciphertext + key_id` | `sanad:credentials:rotate-key` (dry-run افتراضيًا، `--apply`): يفتح بالمفاتيح السابقة (`CREDENTIALS_PREVIOUS_KEYS`) ويختم بالحالي؛ الصف الذي لا يُفتح يُتخطّى ويُبلَّغ؛ Audit `ai.credentials.key_rotated` (ids فقط). `sanad:credentials:generate-key` يطبع مفتاحًا ولا يكتب شيئًا. |
+| Provider Health | لا افتراض أن `GET /models` مجاني؛ الـAdapter يعلن `supportsNonBillableAuthProbe`؛ scheduled default OFF؛ لا scheduled inference أبدًا؛ بلا auth probe ⇒ `skipped/unsupported`، وconnectivity لا يُحتسب auth | `SupportsHealthChecks::healthCapabilities()`: OpenAI وGroq يعلنان probe غير مفوتر على `/models`؛ الـbase المتوافق لا يعلن شيئًا. `ProviderHealthService` يسجّل في `provider_health_checks` (status/latency/http/error class+code/details آمنة فقط). `sanad:ai:health:run` مجدول كل 15 دقيقة خلف `ai.health.scheduled` (افتراضي false) ويشغّل auth فقط؛ `sanad:ai:health:prune` يوميًا (90 يومًا). |
+| Billable inference test | يدوي + typed confirmation؛ يُسجَّل في `usage_events` كـsystem-attributed `health_check` بلا subscriber وبلا quota لكنه تكلفة على الشركة ويرتبط بـ`usage_event_id` | تأكيد مكتوب `COST`؛ `UsageRecord::$subscriber` أصبح nullable لهذه الحالة فقط (`user_id/subscriber_id/subscription_id` NULL، `operation=health_check`, `channel=admin`, metadata `attribution=system`)؛ لا يمرّ بـ`UsageEngine` فلا يُحتسب على أي حصة؛ يُسعَّر بدفتر الأسعار كأي حدث. |
+| SSRF | عند كل outbound يستخدم candidate DB URL: resolve A/AAAA، منع loopback/private/link-local/metadata، pin العنوان العام، disable redirects؛ Config/env URLs بلا تغيير | `OutboundGuard::pin()` = `UrlPolicy` مع resolver (`HostResolver` → `DnsHostResolver`) + `CURLOPT_RESOLVE` + `allow_redirects=false` عبر `http_options` في الـadapter. اختبارات: DNS خاص/مختلط/بلا حلّ ⇒ مرفوض بلا صف صحة؛ عام ⇒ الطلب إلى الـcandidate بينما chat يبقى على endpoint الـconfig. |
+| RBAC | `ai.health.view` = super_admin + operations؛ `ai.credentials.manage` = super_admin فقط؛ `ai.credentials.test` = super_admin + operations | المصفوفة §4؛ المسارات صارمة `permission:`؛ إعادة فحص server-side في `CredentialManager` و`ProviderHealthService` والـController. |
+| Write-only secret input | السر يُدخل مرة واحدة ولا يظهر في Livewire/Audit/Logs/Exceptions/Validation | POST عادي `dashboard.ai.credentials.store/activate/revoke` (ليس خاصية Livewire)؛ `dontFlash(secret, api_key, credential)`؛ `ProviderCredential::$hidden=ciphertext` + `HasSensitiveAttributes`؛ اختبار تسريب: الجلسة، الـAudit، اللوج، HTML الصفحة، وsnapshot الـLivewire لا تحوي السر. |
+| Scheduled checks | scheduler code فقط؛ لا cron على الإنتاج الآن | `routes/console.php`؛ لا خطوة نشر تضيف cron. |
+
+**Resolver matrix:**
+
+| mode | صف vault فعّال | النتيجة |
+|---|---|---|
+| env | أي | env key (أو none) |
+| vault | لا يوجد (أو pending فقط) | env key (انتقال) أو none |
+| vault | فعّال ويُفتح | vault |
+| vault | فعّال ولا يُفتح (missing key / undecryptable / provider_mismatch) | **closed** — لا secret، `credential_failed` في الموجّه |
+
+**المخطّط (migrations إضافية فقط):** `provider_credentials` (ciphertext, key_id, fingerprint, last4, status, rotated_from_id, created_by/_ref, revoked_by_ref, activated_at, revoked_at, last_verified_at؛ partial unique على active) و`provider_health_checks` (kind, trigger, status, credential_id, credential_source, candidate_base_url, latency_ms, http_status, error_class, error_code, cost_incurred, usage_event_id, checked_by_ref, details, checked_at).
+
+**الحدود المحترمة:** لا Routing cutover؛ `AI_PROVIDER` الحاكم؛ `is_primary` لا يؤثر؛ لا تغيير على credentials الإنتاج؛ لا `CREDENTIALS_KEY` على الإنتاج؛ لا تعديل `.env` الإنتاج؛ `phpunit.xml` يفرّغ `AI_CREDENTIALS_MODE`/`CREDENTIALS_KEY`/`CREDENTIALS_PREVIOUS_KEYS`.
+
+**النشر لـC3 (بعد الدمج، بموافقة مستقلة لكل خطوة):** `migrate --force` (جدولان إضافيان) → `sanad:rbac:bootstrap` dry-run ثم `--apply` لإنشاء `ai.health.view` → الوضع يبقى `env` بلا أي تغيير سلوكي. لاحقًا وبموافقة: توليد `CREDENTIALS_KEY` خارج الخادم ونسخه احتياطيًا → إضافته إلى `.env` → `config:cache` + `horizon:terminate` → إدخال المفتاح عبر النموذج (pending) → اختبار المصادقة عليه → تفعيله → تبديل `ai.credentials_mode=vault` من الإعدادات → المراقبة. الرجوع: `ai.credentials_mode=env` من الإعدادات أو `AI_CREDENTIALS_MODE=env` في البيئة. cron لـ`schedule:run` قرار تشغيلي مستقل غير مُدرج.
+
+## 8) C4 (مخطَّطة)
+
+ `provider_credentials` (مشفّر بـ`CredentialVault` على `CREDENTIALS_KEY` + مفاتيح سابقة للتدوير، fail-closed بدون المفتاح)، `CredentialResolver` (الخزنة ثم env)، إدخال write-only عبر POST عادي، masking (fingerprint/last4)، Rotate/Revoke مُدقَّق؛ `ProviderHealthCheck` abstraction لكل Adapter (القرار C) + `provider_health_checks` + Test Connection يدوي مع SSRF re-validation.
 - **C4:** `ai.routing.mode` (`env` افتراضي / `db`) مع `AI_ROUTING_MODE` كـemergency override، محاكاة قبل التبديل، تبديل مُدقَّق لـSuper Admin، `is_primary=groq` أولًا ثم التبديل بلا فرق ثم تغيير الأساسي بقرار مقصود.
 
-## 8) ترتيب النشر لـC0
+## 9) ترتيب النشر لـC0
 
 1. دمج PR C0 بموافقة صريحة.
 2. `php artisan migrate --force` (جداول Spatie + أعمدة `audit_logs`).

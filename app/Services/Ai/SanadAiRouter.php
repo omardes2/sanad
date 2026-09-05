@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Ai;
 
 use App\Contracts\Ai\CatalogSource;
+use App\Contracts\Ai\ReportsCredentialState;
 use App\Data\Ai\Catalog\ModelSpec;
 use App\Data\Ai\Catalog\ResolvedRoute;
 use App\Data\Ai\Catalog\RouteEvaluation;
@@ -131,6 +132,12 @@ class SanadAiRouter
 
         if (! $provider->supports($operation)) {
             return ['skipped', 'provider_unsupported_operation', null];
+        }
+
+        if ($provider instanceof ReportsCredentialState && $provider->credentialFailure() !== null) {
+            // Phase C3: the active vault credential could not be opened —
+            // the provider is FAILED CLOSED, never silently on env.
+            return ['skipped', 'credential_failed', null];
         }
 
         if (! $provider->isConfigured()) {
