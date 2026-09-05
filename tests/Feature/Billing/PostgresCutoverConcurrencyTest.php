@@ -64,6 +64,9 @@ function cutoverConcurrencyFixture(bool $groqPrimary): array
 function cutoverConcurrencyCleanup(): void
 {
     $providerIds = AiProvider::whereIn('key', ['groq', 'openai'])->pluck('id');
+    // The managed-setting write is audited as settings.updated on the AppSetting row too.
+    $settingIds = AppSetting::query()->whereIn('key', ['ai.catalog_source', 'ai.routing.mode'])->pluck('id');
+    AuditLog::where('subject_type', (new AppSetting)->getMorphClass())->whereIn('subject_id', $settingIds)->delete();
     AuditLog::whereIn('action', ['ai.routing.mode_changed', 'ai.routing.primary_changed', 'ai.catalog.source_changed', 'ai.routing.env_fallback_used'])->delete();
     ProviderHealthCheck::whereIn('provider_id', $providerIds)->delete();
     AiModel::whereIn('provider_id', $providerIds)->delete();
