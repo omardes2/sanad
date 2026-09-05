@@ -1,109 +1,153 @@
 # المعمارية | Architecture — SANAD
 
-> نظرة على المعمارية كما هي في **Sprint 0**، مع الإشارة إلى نقاط التوسّع المستقبلية.
+> **المرجع الرسمي للمشروع.** أي قرار معماري كبير يُحدَّث هنا مع تنفيذه.
+> سَنَد هو **Personal AI Agent Platform** — وليس WhatsApp Bot. واتساب هو القناة الأولى فقط.
 
-## نظرة عامة
+## 1) المبادئ الحاكمة
 
-سَنَد تطبيق **Laravel** أحادي (Monolith) قابل للتحوّل إلى **Multi-user SaaS**.
-في مرحلة الإنتاج ستكون البوابة الأساسية للتفاعل هي **WhatsApp Cloud API** (webhook)،
-مع واجهة ويب إدارية بسيطة مبنية على **Livewire**.
+1. **كل شيء يرتكز على Subscriber (`user_id`)** — لا على هوية القناة. واتساب/التطبيق/الويب
+   Adapters فوق نفس المستخدم والذاكرة والاشتراك.
+2. **Data Ownership:** قاعدة بيانات سَنَد + Storage سَنَد هما **Source of Truth**. المزوّد
+   الخارجي (OpenAI/Groq/اتصالات/صور…) **Processor فقط**؛ تبديله لا يفقد أي بيانات.
+3. **Recording ≠ Enforcement:** تسجيل الاستخدام والتكلفة **يعمل دائمًا** لكل عملية ناجحة.
+   الحجب عند تجاوز الحدود فقط خلف `BILLING_ENFORCE` (وهو `false` أثناء التطوير).
+4. **الإعداد التشغيلي في قاعدة البيانات:** Providers/Models/Pricing/Routing/Persona/Prompts
+   تُدار من Sanad Admin. `config/*.php` = bootstrap/defaults/seed + مراجع أسرار فقط.
+   **لا Deploy لتبديل نموذج أو تعديل سعر أو شخصية.**
+5. **تجريدات موحّدة:** Provider · Channel · Tool · Notification · Artifact — عقود + Adapters،
+   فإضافة أي مزوّد/قناة = Adapter، بلا إعادة تصميم للوحة الإدارة أو القلب.
+6. **API-first:** منطق الأعمال في Services لا في Livewire/Controllers/Adapters، فيعيد
+   استخدامه تطبيق الموبايل/الويب لاحقًا بلا إعادة بناء.
+7. **Sanad Admin = Control Center / Operating System** للمشروع: تشغيل، تكلفة، ربحية، تحكّم.
+
+## 2) المخطّط الطبقي المستهدف
 
 ```
-                ┌────────────────────────────────────────────┐
-                │                  المستخدم                    │
-                │            (WhatsApp — مستقبلًا)              │
-                └───────────────────┬────────────────────────┘
-                                    │  webhook (لاحقًا)
-                                    ▼
-   ┌──────────────────────────────────────────────────────────────┐
-   │                     تطبيق Laravel (SANAD)                      │
-   │                                                                │
-   │   HTTP Layer                                                   │
-   │   ├── routes/web.php    → صفحة Livewire الرئيسية (RTL)         │
-   │   └── routes/api.php    → GET /api/health                      │
-   │                                                                │
-   │   Domain (مستقبلًا): Tasks · Reminders · Memory · Expenses     │
-   │   AI Layer (مستقبلًا): Function Calling / Tools                │
-   │                                                                │
-   │   Queues (Redis) ── Jobs ──► Horizon (إشراف)                   │
-   │   Scheduler ──────────────► المهام الدورية (الملخّص اليومي)     │
-   └───────────┬───────────────────────────────┬──────────────────┘
-               │                               │
-        ┌──────▼──────┐                 ┌──────▼──────┐
-        │ PostgreSQL  │                 │    Redis    │
-        │ (بيانات)     │                 │ cache/queue │
-        │             │                 │  /session   │
-        └─────────────┘                 └─────────────┘
+Channel Adapter (WhatsApp | Sanad App | Web | Voice)
+   → Conversation Layer → Sanad AI Router → AI Providers (OpenAI primary · Groq fallback · …)
+                                 ├─ Memory · Tools · Jobs/Workflows · Calls
+                                 → Response → Channel Adapter / Notification Layer
+   كل عملية ناجحة ⇒ Usage/Cost Event (Subscriber + Subscription + Operation [+ Job/Step/Tool])
+   Billing · Usage · Cost Accounting · Finance · Admin ← تقرأ من نفس الأحداث
 ```
 
-## المكوّنات في Sprint 0
+## 3) الحالة الحالية (ما هو مبني)
 
-| المكوّن | التقنية | الحالة |
-|---------|---------|--------|
-| إطار العمل | Laravel 13 (PHP 8.4) | ✅ |
-| الواجهة | Livewire 3 + Blade | ✅ (صفحة مؤقتة) |
-| التنسيق | Tailwind CSS 4 (Vite) + RTL | ✅ |
-| قاعدة البيانات | PostgreSQL 16 | ✅ |
-| الكاش/الطوابير/الجلسات | Redis 7 | ✅ |
-| مراقبة الطوابير | Laravel Horizon | ✅ (مهيّأ) |
-| Health Check | `GET /api/health` | ✅ |
+| المجال | الحالة |
+|---|---|
+| إطار العمل | Laravel 13 (PHP 8.4)، Livewire 3، Tailwind 4 RTL، PostgreSQL 16، Redis، Horizon، Pest |
+| القنوات | `ChannelType` + `ChannelAdapter` + `ChannelRegistry`؛ `WhatsAppChannelAdapter` (webhook موقّع + Graph API)، محاكي ويب محلي. **تجريد نظيف قائم.** |
+| المحادثات | `Conversation`/`Message`، `MessageProcessor`، `ProcessInboundMessage` (idempotent، ردّ واحد لكل وارد). |
+| الهوية | `User` (subscriber) + `ChannelAccount` (هوية لكل قناة) — مقعد Unified Identity قائم. |
+| طبقة الذكاء (Phase A) | عقود قدرات + `OpenAIProvider` + `GroqChatProvider` + `SanadAiRouter` + `CatalogSource` + DTOs محايدة للمزوّد (انظر §4). |
+| الاشتراكات | `Plan` (limits/features JSON قابلة للتوسّع عبر `UsageDimension`/`PlanFeature`)، `Subscription`، `SubscriptionService`، محرّر إدارة enum-driven. |
+| الاستخدام | `usage_counters` (حدود) + `usage_events` (ledger) — حاليًا **مقترنان بالإنفاذ** (تُفصل في Phase B). |
+| المجال | `Task`/`Reminder`/`Expense`/`Memory` نماذج وجداول كاملة (بلا خدمات/أدوات بعد). |
+| الإدارة | لوحة Livewire: Overview، Plans، Subscribers، SubscriberDetail، Messages، Conversations، Tasks/Reminders/Expenses، WhatsAppStatus. |
 
-## الطبقات (Layers)
+مبادئ ثابتة منذ Sprint 0: UTC داخليًا (`APP_TIMEZONE=UTC`) والعرض بتوقيت المستخدم
+(الافتراضي `Asia/Hebron`)، `decimal` للأموال، PHP Backed Enums، cascade للبيانات الشخصية
+و`nullOnDelete` للسجلّات المحفوظة. تفاصيل: [DATABASE.md](DATABASE.md)،
+[MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md)، [WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md)،
+[SUBSCRIPTIONS.md](SUBSCRIPTIONS.md).
 
-1. **HTTP / Presentation** — مسارات الويب (Livewire) و API (health). لاحقًا: WhatsApp webhook.
-2. **Application / Domain** — نماذج البيانات (Users، Channels، Conversations، Messages،
-   Tasks، Reminders، Memory، Expenses، Webhook/Usage/Audit) **مبنيّة في Sprint 0B**؛
-   و**مسار الرسائل** (DTOs، Adapters، MessageProcessor، Queue Job) **مبني في Sprint 0C**.
-3. **AI / Tooling** — `AgentOrchestrator` كعقد مجرّد، بتنفيذ `PlaceholderAgentOrchestrator`
-   حتميّ الآن؛ تنفيذ مدعوم بالذكاء (OpenAI + Function Calling) سيحلّ محلّه لاحقًا دون تغيير المتصلين.
-4. **Infrastructure** — PostgreSQL، Redis، Queues (طابور `messages`)، Scheduler، Horizon.
+## 4) طبقة الذكاء الاصطناعي — Provider abstraction + Router (Phase A)
 
-### مسار الرسائل (Sprint 0C)
+```
+AiAgentOrchestrator ─▶ PromptBuilder (Persona · History · [Memory · Tools لاحقًا])
+        │
+        ▼
+SanadAiRouter.route(AiOperation, RoutingContext) ─▶ CatalogSource.candidates()
+        │            (تفضيل → أولوية → مُفعّل → معروف → مهيّأ → يدعم العملية)
+        ▼
+ResolvedRoute{provider, model, alternatives} ─▶ SupportsChat::chat(AiRequest.withModel())
+                                                  OpenAIProvider | GroqChatProvider | …
+```
 
-قناة واردة → `ChannelAdapter::toInbound()` → `MessageProcessor` (idempotency + حفظ + dispatch)
-→ طابور `messages` → `ProcessInboundMessage` → `AgentOrchestrator` → حفظ الرد →
-`ChannelAdapter::send()` (يُعيد `ChannelDeliveryResult`). اختيار القناة عبر `ChannelRegistry`
-(DI) لا شروط متناثرة. محاكي محلي على `/dev/chat` (local/testing فقط). التفاصيل في
-**[MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md)**.
+- **`AiProvider`** (الجذر): `name()` · `supports(AiOperation)` · `isConfigured()`.
+  **عقود القدرات:** `SupportsChat`، `SupportsTools` (والقادمة: Vision/Transcription/…).
+  كل مزوّد ينفّذ ما يقدر عليه فقط؛ الـRouter لا يخمّن.
+- **`OpenAICompatibleChatProvider`** قاعدة مشتركة (payload، ترجمة الأدوات، تحويل الأخطاء،
+  تحليل الردّ + usage/cached/duration/tool_calls). `OpenAIProvider` (أساسي؛
+  `max_completion_tokens` + رؤوس org/project) و`GroqChatProvider` (اختياري/fallback) يرثانها.
+- **`SanadAiRouter`**: يختار (provider, model) لكل `AiOperation`. **تبديل النموذج الأساسي =
+  بيانات لا كود.** السياسة تتوسّع لاحقًا (plan/cost/profitability/guardrails) عبر
+  `RoutingContext` دون تغيير المستدعين.
+- **`CatalogSource`**: `ConfigCatalogSource` الآن (يستنتج الكتالوج من `ai.providers` إن كان
+  `ai.catalog` فارغًا — فيبقى سلوك النشر الحالي كما هو). مصدر DB يُدار من Admin يحلّ محلّه
+  لاحقًا **بنفس العقد**.
+- **DTOs داخلية:** `AiOperation`، `AiRequest` (+model/operation/tools)، `AiResponse`
+  (+cached/duration/toolCalls/provider)، `AiMessage`/`AiRole` (+tool)، وتجريد الأدوات
+  المحايد للمزوّد **`AiToolDefinition` / `AiToolCall` / `ToolResult`** — المزوّد يترجم فقط؛
+  التنفيذ للمنصّة (`ToolRunner` لاحقًا).
+- **Groq يبقى** مزوّدًا كاملًا؛ الإنتاج يتابع عليه حتى يُضبط `OPENAI_API_KEY` ويُبدَّل
+  `AI_PROVIDER` — بلا حذف ولا تبديل قسري.
 
-### نقل واتساب النصّي (Sprint 0D)
+## 5) DB مقابل Config
 
-`WhatsAppChannelAdapter` أصبح تكاملًا فعليًا (نصّ فقط): استقبال عبر **Webhook موقّع**
-(`POST /webhooks/whatsapp`، توقيع HMAC-SHA256 على raw body، طابور `webhooks`،
-`ProcessWhatsAppWebhook`) وإرسال عبر **Graph API** (Laravel HTTP client، retry على
-network/429/5xx). حالات التسليم (`sent/delivered/read/failed`) تُتابَع منفصلة عن المعالجة
-الداخلية. الإعداد المركزي في `config/whatsapp.php` ويفشل بأمان (fail-closed). **لا اتصال حيّ
-بـ Meta ولا أسرار في المستودع.** التفاصيل في **[WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md)**.
+| Config فقط (bootstrap/defaults/seed/مراجع أسرار) | Database-backed (تشغيلي، يُدار من Admin) |
+|---|---|
+| مفتاح التشفير، المزوّد المفضّل للإقلاع (`AI_PROVIDER`)، أعلام تتطلّب Deploy، **بذور** الكتالوج/الأسعار/الشخصية، مهل الشبكة | Providers، Credentials (مشفّرة at-rest، مقنّعة، Rotate/Replace، Audit)، Models، Capabilities، **Pricing تاريخي** (`effective_from/until`)، Routing rules، Primary/Fallback، Enabled/Disabled، Plan routing، **Cost guardrails**، Persona/Prompts/إعدادات AI التشغيلية، Plan limits/features، `app_settings` |
 
-### نموذج المجال (Sprint 0B)
+## 6) الطبقات الأساسية — الهدف المعماري
 
-أُرسي نموذج بيانات كامل يدعم: المستخدمين، حسابات القنوات، المحادثات، الرسائل،
-المهام، التذكيرات، الذاكرة، المصاريف، أحداث الـWebhook، تتبّع استخدام/تكلفة الذكاء
-الاصطناعي، وسجلّات التدقيق. التفاصيل الكاملة (الأعمدة، الفهارس، القيود، سياسة الحذف،
-قواعد UTC/العملات، وسبب تأجيل pgvector) في **[DATABASE.md](DATABASE.md)**.
+| الطبقة | الملخّص |
+|---|---|
+| **Identity** | Subscriber واحد لعدة هويات قنوات (`channel_accounts`)؛ مستقبلًا auth للتطبيق + devices. لا حساب منفصل لكل قناة. |
+| **Channels** | Adapters فقط. كل صادر عبر `ChannelRegistry`/طبقة الإشعارات — لا نداءات واتساب مباشرة من المنطق. |
+| **Conversations** | مرتبطة بـ`user_id` + `channel_account_id`؛ summaries عبر Memory لاحقًا. |
+| **AI Providers / Router / Models / Pricing** | §4 + §5. الأسعار DB تاريخية؛ **التكلفة تُحسب وتُخزَّن على الحدث وقت وقوعه (immutable)** مع `price_id`. |
+| **Memory** | SoT في سَنَد (`memories`)؛ `UserMemoryContributor` مقعد جاهز؛ embeddings لاحقًا. |
+| **Tools** | Simple Tool Actions (create_reminder/create_task/log_expense) عبر Registry/Runner، validation، gating بالميزة، idempotency (`tool_invocations`)، تسجيل التكلفة على النجاح فقط، **تأكيد حتمي** من البيانات المُنشأة. |
+| **Jobs / Workflows** | مهام طويلة (`SanadJob/JobRun/JobStep/JobTarget/JobResult/JobArtifact`)، حالات queued→…→cancelled، تقدّم/تكلفة/تقدير، queue-based مع concurrency/throttle/retry/resume/cancel/timeout/duplicate-prevention، تحكّم من Admin وللمستخدم. |
+| **Calls / Batch Calls** | Telephony كـProvider ضمن نفس التجريد؛ `calls` بنتائج **منظّمة** (status/duration/outcome/sentiment/summary/next action)؛ **Safety** (consent/lawful-use، DNC، allowed hours، rate limits، country rules، abuse detection، emergency stop). |
+| **Artifacts** | `artifacts` مرتبطة بالمستخدم والـJob (DOCX/PDF/XLSX/CSV) عبر filesystem disks (S3-ready)؛ الوصول ليس واتساب-only. |
+| **Notifications** | `NotificationService`/`NotificationChannel` محايد؛ أول Adapter واتساب، ثم push/in-app/email توسيعًا لا إعادة بناء. |
+| **Billing / Usage / Cost Accounting** | Recording دائم لكل عملية ناجحة على `usage_events` العام (subscriber/subscription/operation/provider/model/price/units/cached/duration/مكوّنات التكلفة/occurred_at + مراجع job/step/tool/channel **بلا FK مصطنعة**)؛ Enforcement خلف `BILLING_ENFORCE`؛ Cost Guardrails داخلية لكل Plan. |
+| **Finance** | Calculated (D) ← ثم Reconciled (E): Collected Revenue، Refunds، Gateway fees، Provider invoices، Adjustments؛ Gross Profit/Margin، MRR/ARR/ARPU/Churn، ربحية لكل مشترك، **drill-down حتى الحدث/الدفعة/الفاتورة**. |
+| **Admin** | Providers/Models/Pricing/Routing/Credentials/Usage/Finance/Jobs/Calls/Artifacts/Channel Analytics/Settings/Audit/Roles — تُرسم من الجداول الموحّدة. |
 
-مبادئ رئيسية: PHP Backed Enums بدل `database enum` (توافق PostgreSQL/SQLite)،
-UTC داخليًا، `decimal` للأموال، cascade للبيانات الشخصية و`nullOnDelete` للسجلّات
-المحفوظة.
+### مصطلحات المال (واضحة في الكود واللوحة)
+- **Phase D — تقديري/محاسبي داخلي:** `Calculated Revenue`، `Calculated Cost`، `Estimated Gross Profit`،
+  `Estimated Margin` — **ليست ربحية نهائية**.
+- **بعد Phase E — فعلي بعد التسوية:** `Collected Revenue`، `Actual Provider Cost`، `Reconciled Cost`،
+  `Reconciled Gross Profit`، `Reconciled Margin`.
 
-## التوقيت والتوطين (i18n)
+## 7) ما يُبنى الآن بشكل عام (لمنع إعادة الكتابة)
+1. Usage/Cost Event عام بحقول مرجعية محجوزة (`job/step/tool/channel/operation/subscription`).
+2. Recording دائم مفصول عن Enforcement.
+3. كل نداء AI عبر Provider abstraction + Router + `CatalogSource`.
+4. Tool-call DTOs محايدة للمزوّد.
+5. Pricing في DB تاريخي + تكلفة مخزّنة على الحدث.
+6. كل صادر عبر Channel/Notification abstraction.
+7. كل بيانات ترتبط بـ`user_id`؛ Storage عبر filesystem disks.
+8. المنطق في Services (API-first).
 
-- **التخزين الداخلي دائمًا UTC** (`APP_TIMEZONE=UTC`). أي وقت في قاعدة البيانات بتوقيت UTC.
-- **العرض للمستخدم** يُحوَّل إلى منطقته الزمنية؛ الافتراضي `Asia/Hebron`
-  (`config('sanad.default_timezone')`).
-- اللغة الافتراضية `ar` والاحتياطية `en` (`config('app.locale')` / `fallback_locale`).
-- العملة الافتراضية `ILS` (`config('sanad.default_currency')`).
+## 8) خريطة الطريق (PR مستقل لكل مرحلة، دمج بموافقة صريحة)
 
-## الجاهزية لـ Multi-user SaaS
+| Phase | المحتوى | migrations |
+|---|---|---|
+| **A — AI Platform Foundation** ✅ | Provider abstraction، capability contracts، `OpenAIProvider`، `SanadAiRouter`، `CatalogSource` (config الآن)، DTOs + tool-call abstraction، Groq يبقى | لا |
+| **B — Metering & Pricing Foundation** | Recording always-on؛ توسيع `usage_events` العام (مراجع بلا FK مصطنعة)؛ `ai_providers`/`ai_models`/`model_prices` (DB تاريخي)؛ `CostCalculator` بمكوّنات؛ `CatalogSource` من DB | نعم (إضافية) |
+| **C — Admin Control Center** | Providers/Models/Pricing/Routing/Credentials(مشفّرة)/Health + Test Connection + Sync jobs + `app_settings` + Persona/Prompts من DB. **يسبقه/يبدأ معه RBAC أساسي** يحمي الأسطح الحسّاسة؛ Credentials لـSuper Admin أو صلاحية صريحة فقط | نعم |
+| **D — Financials & Analytics (Calculated)** | Finance Overview، MRR (`subscription_events`)، ربحية المشترك، drill-down، الرئيسية | نعم |
+| **E — Reconciliation & Payments (Reconciled)** | `provider_invoices`، `cost_adjustments`، `customer_payments`، مطابقة Calculated vs Actual | نعم |
+| **F — RBAC الكامل + Config History** | `spatie/laravel-permission` (Super/Operations/Finance/Support) + Audit لكل تغيير حسّاس | نعم |
+| **G — Simple Tools + Reminder Delivery** | Registry/Runner + 3 أدوات + `tool_invocations` + تسليم تذكيرات كامل (scheduler/job/outbound/retries/sent_at/failed/idempotency) عبر Notification abstraction + تأكيد حتمي | نعم |
+| **H → N (مستقبلي مُلزِم)** | H Jobs/Workflow Engine · I Calls/Telephony + Safety · J Artifacts/Reports · K Notifications متعدّد · L API-first + Mobile · M Unified Identity + auth · N Payment Gateway | — |
 
-الأساس مُهيّأ للتوسّع دون إعادة هيكلة كبرى:
+التبعيات: A → B → (C ∥ D) → E → F → G → (H → I → J) ∥ K ∥ (L, M, N).
 
-- **الإعدادات مركزية** في `config/sanad.php` (منطقة زمنية/عملة افتراضية لكل مستخدم لاحقًا).
-- **الطوابير على Redis** تسمح بمعالجة غير متزامنة قابلة للتوسّع أفقيًا.
-- **فصل التوقيت** (UTC داخليًا) شرط أساسي لخدمة مستخدمين في مناطق زمنية مختلفة.
-- عند إضافة المصادقة لاحقًا، سيرتبط كل مورد (مهمة/تذكير/ذاكرة) بـ `user_id`،
-  مع إمكانية إضافة عزل على مستوى المستأجر (tenant) إذا لزم.
+## 9) القرارات المعتمدة (سجلّ)
+- سَنَد = Personal AI Agent Platform؛ واتساب Channel Adapter فقط.
+- كل البيانات الأساسية ترتبط بـUser/Subscriber؛ Sanad DB + Storage = Source of Truth؛ Providers = processors.
+- Recording دائم لكل عملية ناجحة؛ Enforcement منفصل خلف `BILLING_ENFORCE` (يبقى `false` أثناء التطوير).
+- AI Provider abstraction، `OpenAIProvider` أساسي، Groq اختياري/fallback لا يُحذف، `SanadAiRouter`، Tool-calling DTOs محايدة.
+- Pricing تاريخي DB-backed؛ تكلفة immutable وقت الحدث؛ Cost accounting لكل Subscriber/Subscription/Operation؛ Cost Guardrails؛ Calculated vs Actual/Reconciled.
+- `usage_events` يُهيّأ من Phase B بمراجع job/step/tool/channel/operation **بدون FK إلى جداول غير موجودة** (تُضاف العلاقات بهجرة مستقلة لاحقًا).
+- Notification abstraction تبدأ مع أول احتياج حقيقي (Reminder Delivery في G)؛ Phase K توسّعها.
+- RBAC: `spatie/laravel-permission`؛ أساس يحمي الأسطح الحسّاسة قبل/مع C؛ التنفيذ الكامل في F.
+- Admin Control Center؛ API-first services؛ Channel abstraction؛ Jobs/Calls/Artifacts/Unified Identity معماريات مستقبلية مُلزِمة.
+- PR مستقل لكل Phase؛ لا دمج بلا موافقة صريحة؛ لا تعديل `.env` الإنتاج ولا Seeders على الإنتاج ولا اشتراكات المستخدمين من الكود.
 
-## قرارات معمارية
-
-انظر [DECISIONS.md](DECISIONS.md) لسجل القرارات (ADR).
+سجلّ القرارات التفصيلي (ADR): [DECISIONS.md](DECISIONS.md).

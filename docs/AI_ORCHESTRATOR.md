@@ -16,11 +16,16 @@ MessageProcessor → ProcessInboundMessage → AgentOrchestrator (عقد قائ�
 AiAgentOrchestrator  ── يبني السياق ──▶ PromptBuilder ──▶ ContextContributor[]
         │                                   (PersonaContributor, ConversationHistoryContributor)
         ▼
-AiManager.provider()  ──▶  AiProvider (عقد)  ──▶  GroqChatProvider (HTTP)
+SanadAiRouter.route(AiOperation::Chat) ──▶ CatalogSource (config الآن، DB لاحقًا)
+        │
+        ▼
+ResolvedRoute{provider, model} ──▶ SupportsChat::chat() ──▶ OpenAIProvider | GroqChatProvider (HTTP)
 ```
 
-- **transport ↔ orchestration ↔ providers** مفصولة تمامًا. النقل لا يعرف المزوّد،
-  والمنسّق لا يعرف Groq، والمزوّد لا يعرف WhatsApp.
+- **transport ↔ orchestration ↔ routing ↔ providers** مفصولة تمامًا. النقل لا يعرف المزوّد،
+  والمنسّق لا يسمّي أي مزوّد (يطلب عملية من الـRouter)، والمزوّد لا يعرف WhatsApp.
+- **تبديل النموذج/المزوّد الأساسي = بيانات** (`AI_PROVIDER`/`ai.catalog` الآن، وSanad Admin
+  لاحقًا) — لا كود. Groq يبقى مزوّدًا اختياريًا/fallback.
 - المنسّق **بديل مباشر** لـ`PlaceholderAgentOrchestrator` عبر نفس عقد
   `App\Contracts\AgentOrchestrator` — لم يتغيّر مسار الرسائل.
 
@@ -28,15 +33,19 @@ AiManager.provider()  ──▶  AiProvider (عقد)  ──▶  GroqChatProvide
 
 | المكوّن | المسار |
 |---------|--------|
-| الإعداد | `config/ai.php` |
-| عقد المزوّد | `App\Contracts\Ai\AiProvider` |
-| مزوّد Groq | `App\Providers\Ai\GroqChatProvider` (OpenAI-compatible) |
-| مدير المزوّدين | `App\Services\Ai\AiManager` (`provider()` + `extend()`) |
+| الإعداد | `config/ai.php` (bootstrap/defaults فقط — الكتالوج يصبح DB لاحقًا) |
+| عقود المزوّد | `App\Contracts\Ai\AiProvider` (الجذر: `name/supports/isConfigured`) + قدرات `SupportsChat`، `SupportsTools` |
+| القاعدة المشتركة | `App\Providers\Ai\OpenAICompatibleChatProvider` (payload، ترجمة الأدوات، أخطاء، usage) |
+| المزوّدون | `App\Providers\Ai\OpenAIProvider` (أساسي) · `App\Providers\Ai\GroqChatProvider` (اختياري/fallback) |
+| سجلّ المزوّدين | `App\Services\Ai\AiManager` (`provider()` + `has()` + `extend()`) |
+| الـRouter | `App\Services\Ai\SanadAiRouter` (`route(AiOperation, RoutingContext): ResolvedRoute`) |
+| مصدر الكتالوج | `App\Contracts\Ai\CatalogSource` ← `App\Services\Ai\Catalog\ConfigCatalogSource` |
 | المنسّق | `App\Agents\AiAgentOrchestrator` |
 | بناء السياق | `App\Services\Ai\PromptBuilder` + `App\Support\Ai\PromptContext` |
 | المساهمون | `App\Support\Ai\Contributors\{Persona,ConversationHistory}Contributor` |
-| DTOs | `App\Data\Ai\{AiRole,AiMessage,AiRequest,AiResponse}` |
-| الاستثناءات | `App\Exceptions\Ai\*` (Timeout/RateLimit/Server/Request/Configuration) |
+| DTOs | `App\Data\Ai\{AiRole,AiMessage,AiRequest,AiResponse}` · `App\Enums\AiOperation` · كتالوج `App\Data\Ai\Catalog\{ModelSpec,RoutingContext,ResolvedRoute}` |
+| أدوات (محايدة للمزوّد) | `App\Data\Ai\{AiToolDefinition,AiToolCall,ToolResult}` — المزوّد يترجم فقط؛ التنفيذ للمنصّة لاحقًا |
+| الاستثناءات | `App\Exceptions\Ai\*` (Timeout/RateLimit/Server/Request/Configuration — تشمل `noRoute`) |
 
 ## الشخصية واللغة
 `PersonaContributor` يضيف شخصية سَنَد (config `ai.persona`): عربية فصحى مبسّطة
@@ -51,9 +60,11 @@ AiManager.provider()  ──▶  AiProvider (عقد)  ──▶  GroqChatProvide
 سَنَد **ليس** مبنيًّا على تاريخ المحادثة فقط. تجميع السياق يمرّ عبر قائمة
 `ai.context_contributors`. إضافة **طبقة ذاكرة المستخدم** طويلة المدى (تفضيلات، لهجة،
 روتين، حقائق) أو **أدوات/إجراءات** (تذكيرات، تقويم، حجوزات، إجراءات ويب) مستقبلًا =
-إضافة `Contributor` جديد إلى هذه القائمة، **دون إعادة كتابة المنسّق**. كذلك `AiRequest`
-هو نقطة التوسّع لدعم tool/function-calling لاحقًا (يُضاف حقل `tools` والمزوّدون
-يتجاهلون ما لا يستخدمونه).
+إضافة `Contributor` جديد إلى هذه القائمة، **دون إعادة كتابة المنسّق**. أما tool/function-calling
+فتجريده جاهز: `AiRequest::$tools` (قائمة `AiToolDefinition`) و`AiResponse::$toolCalls`
+(قائمة `AiToolCall`) و`ToolResult::toMessage()` — كلها بشكل سَنَد الداخلي، وكل مزوّد
+`SupportsTools` يترجم من/إلى صيغته (OpenAI وGroq معًا عبر القاعدة المشتركة). تنفيذ الأدوات
+(`ToolRegistry`/`ToolRunner`) مرحلة لاحقة ولا يعتمد على مزوّد بعينه.
 
 ## معالجة الأعطال (لا تعطّل معالجة واتساب، ولا ردود عبثية)
 | الحالة | التصنيف | السلوك (failure_behavior=retry) |
@@ -61,7 +72,7 @@ AiManager.provider()  ──▶  AiProvider (عقد)  ──▶  GroqChatProvide
 | Timeout / اتصال | retryable | يُعاد رميه ⇒ الطابور يعيد المحاولة (backoff) |
 | 429 | retryable | يُعاد رميه ⇒ إعادة محاولة |
 | 5xx | retryable | يُعاد رميه ⇒ إعادة محاولة |
-| 4xx / رد فارغ / إعداد ناقص | non-retryable | رسالة عربية مؤقتة واضحة (`ai.fallback_message`) |
+| 4xx / رد فارغ / إعداد ناقص / لا مسار مهيّأ للعملية | non-retryable | رسالة عربية مؤقتة واضحة (`ai.fallback_message`) |
 
 عند `failure_behavior=reply` تُرسَل الرسالة المؤقتة في كل الأعطال دون إعادة محاولة.
 لا تُرسَل أبدًا ردود placeholder عبثية عندما يكون الذكاء مفعّلًا.
@@ -74,13 +85,18 @@ AiManager.provider()  ──▶  AiProvider (عقد)  ──▶  GroqChatProvide
 ## المتغيّرات البيئية (بدون قيم)
 ```env
 AI_ENABLED=false
-AI_PROVIDER=groq
+AI_PROVIDER=groq               # المزوّد المفضّل؛ الـRouter يمرّ إلى أي مزوّد مهيّأ آخر
 AI_FAILURE_BEHAVIOR=retry      # retry | reply
 AI_HISTORY_LIMIT=10
 AI_TIMEOUT=20
 AI_MAX_OUTPUT_TOKENS=600
 AI_TEMPERATURE=0.5
 # AI_FALLBACK_MESSAGE=  AI_PERSONA=
+
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_API_KEY=                # سرّ — من بيئة الخادم فقط
+OPENAI_MODEL=gpt-4.1-mini
+# OPENAI_ORGANIZATION=  OPENAI_PROJECT=   (اختياريان)
 
 GROQ_BASE_URL=https://api.groq.com/openai/v1
 GROQ_API_KEY=                  # سرّ — من بيئة الخادم فقط
@@ -89,16 +105,26 @@ GROQ_MODEL=llama-3.3-70b-versatile
 > `AI_ENABLED=false` ⇒ يبقى `PlaceholderAgentOrchestrator` (بلا اتصال خارجي) — وهو
 > وضع الاختبار/التطوير الافتراضي.
 
-## إضافة مزوّد جديد (Gemini / Ollama)
-1. أنشئ صنفًا ينفّذ `AiProvider` (مثل Groq — HTTP OpenAI-compatible).
+## كيف يختار الـRouter؟
+`SanadAiRouter` يطلب مرشّحي العملية من `CatalogSource` (إن كان `ai.catalog` فارغًا يُستنتج
+من `ai.providers`: إدخال واحد لكل مزوّد له نموذج)، ثم يرتّب: **المزوّد المفضّل أولًا** ← الأولوية
+← ويتخطّى أي مرشّح **معطّلًا** أو مزوّده **غير معروف** أو **غير مهيّأ** (بلا مفتاح) أو **لا يدعم
+العملية**. لا مرشّح ⇒ `AiConfigurationException::noRoute` ⇒ الرسالة المؤقتة (بلا اتصال).
+مثال: `AI_PROVIDER=openai` بلا `OPENAI_API_KEY` وبمفتاح Groq ⇒ يمرّ إلى Groq تلقائيًا.
+
+## إضافة مزوّد جديد (Gemini / Ollama / …)
+1. أنشئ صنفًا ينفّذ عقود القدرات المناسبة (`SupportsChat` …) — إن كان OpenAI-compatible
+   فيكفي أن يرث `OpenAICompatibleChatProvider`.
 2. أضف `case` في `AiManager::provider()` وكتلة إعداد في `config/ai.php`.
-3. اضبط `AI_PROVIDER` والمفاتيح في البيئة.
+3. اضبط المفاتيح في البيئة؛ يظهر في الكتالوج تلقائيًا (أو أدرجه في `ai.catalog`).
+   لاحقًا: يُدار كله من Sanad Admin (DB-backed).
 
 > Gemini: ثبّت **نموذجًا حاليًا غير مهمَل** عبر `GEMINI_MODEL` (لا تستخدم نموذجًا قديمًا).
 > Ollama: محلي/خاص، بلا مفتاح — الأنسب للخصوصية الكاملة.
 
 ## التشغيل في الإنتاج
-1. اضبط في البيئة: `AI_ENABLED=true`, `AI_PROVIDER=groq`, `GROQ_API_KEY=<سرّي>`,
-   `GROQ_MODEL=<نموذج حالي>`.
+1. اضبط في البيئة: `AI_ENABLED=true`، ومفتاح المزوّد المفضّل (`OPENAI_API_KEY` أو
+   `GROQ_API_KEY`) مع `AI_PROVIDER` المطابق ونموذج حالي. النشر الحالي على Groq يستمر كما هو
+   حتى تضبط OpenAI وتبدّل `AI_PROVIDER=openai`.
 2. أعد تشغيل Horizon (`php artisan horizon:terminate`) والعمّال ليقرؤوا الإعداد.
 3. `AI_TIMEOUT` (20ث) أقل من مهلة العامل (60ث) وأقل من `retry_after` (90ث).
