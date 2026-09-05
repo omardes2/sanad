@@ -109,7 +109,13 @@ it('activation requires a recent SUCCESSFUL auth verification of the same creden
     ProviderHealthCheck::query()->create(['provider_id' => $groq->id, 'kind' => 'connectivity', 'trigger' => 'manual', 'status' => 'ok', 'credential_id' => $row->id, 'credential_source' => 'vault', 'checked_at' => now()]);
     expect(fn () => $this->manager->activate($row, null))->toThrow(CredentialLifecycleException::class);
 
-    c3Verify($row);
+    // The window is 30 minutes by default: 31 minutes old ⇒ stale, 29 minutes old ⇒ eligible.
+    expect(CredentialManager::verificationWindowMinutes())->toBe(30);
+    c3Verify($row, 'ok', now()->subMinutes(31)->toImmutable());
+    expect(fn () => $this->manager->activate($row, null))->toThrow(CredentialLifecycleException::class, 'فحص مصادقة ناجح')
+        ->and($row->fresh()->status)->toBe(CredentialStatus::Pending);
+
+    c3Verify($row, 'ok', now()->subMinutes(29)->toImmutable());
     $this->manager->activate($row, null);
     expect($row->fresh()->status)->toBe(CredentialStatus::Active)->and($other->fresh()->status)->toBe(CredentialStatus::Pending);
 });

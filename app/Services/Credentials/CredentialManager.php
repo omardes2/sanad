@@ -179,7 +179,7 @@ class CredentialManager
 
     public static function verificationWindowMinutes(): int
     {
-        return max(1, (int) config('ai.health.verification_window_minutes', 1440));
+        return max(1, (int) config('ai.health.verification_window_minutes', 30));
     }
 
     /**

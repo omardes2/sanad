@@ -62,8 +62,9 @@ return [
         'retention_days' => 90,
         'manual_per_minute' => 6,
         // A pending credential may be activated only with a successful auth
-        // probe of ITS OWN row inside this window (minutes).
-        'verification_window_minutes' => 1440,
+        // probe of ITS OWN row inside this window (minutes): the verification
+        // must be RECENT. History retention (above) is a separate concern.
+        'verification_window_minutes' => 30,
     ],
 
     // PREFERRED provider key (see the "providers" map below). The router ranks
