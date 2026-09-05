@@ -39,6 +39,6 @@ final readonly class EffectiveSetting
      */
     public function editable(): bool
     {
-        return ! $this->definition->readOnly && ! $this->envForced();
+        return ! $this->definition->readOnly && ! $this->definition->managed && ! $this->envForced();
     }
 }

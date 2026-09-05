@@ -50,6 +50,12 @@ final readonly class SettingDefinition
         public bool $nullable = false,
         /** Reserved for later phases; C1 registers no sensitive setting. */
         public bool $sensitive = false,
+        /**
+         * Phase C4: written ONLY by a dedicated cutover service (readiness +
+         * simulation + typed confirmation + audit). The generic settings
+         * editor shows it read-only; SettingsRepository refuses a direct write.
+         */
+        public bool $managed = false,
     ) {
         if ($this->precedence === SettingPrecedence::Emergency && $this->overrideConfigPath === null) {
             throw new InvalidArgumentException("Emergency setting [{$this->key}] needs an override config path.");

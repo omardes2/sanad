@@ -38,6 +38,9 @@
                                 @if ($def->readOnly)
                                     <span class="rounded-full bg-slate-200 px-2 py-0.5 font-medium text-slate-700">للعرض فقط</span>
                                 @endif
+                                @if ($def->managed)
+                                    <span class="rounded-full bg-indigo-100 px-2 py-0.5 font-medium text-indigo-800">يُغيَّر من صفحة Cutover فقط</span>
+                                @endif
                                 @if ($e->invalid)
                                     <span class="rounded-full bg-rose-100 px-2 py-0.5 font-medium text-rose-800">القيمة المخزَّنة غير صالحة وتحتاج تصحيحًا — يُستخدم الافتراضي</span>
                                 @endif
@@ -84,7 +87,7 @@
                                         {{ $e->value === null || $e->value === '' ? '—' : $e->value }}
                                     @endif
                                 </div>
-                                @if (! $def->readOnly && ! $e->envForced())
+                                @if (! $def->readOnly && ! $def->managed && ! $e->envForced())
                                     <p class="mt-1 text-[11px] text-slate-400">تحتاج صلاحية {{ $def->permission->value }} للتعديل.</p>
                                 @endif
                             @endif

@@ -18,7 +18,7 @@ it('registers exactly the C1 + C3 keys with a default, a group, a permission and
         'billing.auto_trial', 'billing.default_plan_slug',
         'ai.guardrails.max_cost_per_request', 'ai.guardrails.estimate_input_tokens', 'ai.guardrails.estimate_output_tokens',
         'ai.health.scheduled',
-        'ai.credentials_mode', 'ai.enabled', 'ai.catalog_source', 'billing.enforce',
+        'ai.credentials_mode', 'ai.enabled', 'ai.catalog_source', 'ai.routing.mode', 'billing.enforce',
     ]);
 
     foreach ($registry->all() as $definition) {

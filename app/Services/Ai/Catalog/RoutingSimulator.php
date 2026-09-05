@@ -21,6 +21,9 @@ use App\Services\Ai\SanadAiRouter;
  *    provider/model attributes (is_enabled, priority) were changed — used by
  *    CatalogAdmin to block a change that leaves `chat` with no candidate and
  *    to demand a typed confirmation when the selected route would change.
+ *    Phase C4 adds what-if overrides for the preferred provider and the
+ *    catalog source ('config' / 'database'), so a catalog-source or routing
+ *    cutover is previewed with the exact router before anything is written.
  *
  * proposed() follows the catalog-source setting exactly like the resolver:
  * `config` → database rows never influence routing, so the config catalog is
@@ -46,10 +49,14 @@ class RoutingSimulator
      * @param  array<int, array{is_enabled?: bool, priority?: int}>  $providerOverrides  provider id => proposed attributes
      * @param  array<int, array{is_enabled?: bool, priority?: int}>  $modelOverrides  model id => proposed attributes
      */
-    public function proposed(array $providerOverrides = [], array $modelOverrides = [], AiOperation $operation = AiOperation::Chat): RouteEvaluation
+    /**
+     * @param  string|null  $preferredProvider  what-if preference (Phase C4 primary / mode cutover); null = live preference
+     * @param  string|null  $catalogSource  what-if catalog source 'config' | 'database'; null = the live mode
+     */
+    public function proposed(array $providerOverrides = [], array $modelOverrides = [], AiOperation $operation = AiOperation::Chat, ?string $preferredProvider = null, ?string $catalogSource = null): RouteEvaluation
     {
-        $context = new RoutingContext;
-        $mode = $this->resolver->mode();
+        $context = new RoutingContext(preferredProvider: $preferredProvider);
+        $mode = $catalogSource ?? $this->resolver->mode();
 
         if ($mode === 'config') {
             return $this->router->evaluate($operation, $context, $this->config->candidates($operation, $context));

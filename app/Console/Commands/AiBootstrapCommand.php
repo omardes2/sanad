@@ -9,6 +9,7 @@ use App\Models\AiModel;
 use App\Models\AiProvider;
 use App\Services\Ai\AiManager;
 use App\Services\Ai\Catalog\CatalogCache;
+use App\Services\Ai\Catalog\CatalogSourceResolver;
 use App\Services\Audit\AuditLogger;
 use App\Support\Audit\AuditActions;
 use Illuminate\Console\Command;
@@ -44,9 +45,19 @@ class AiBootstrapCommand extends Command
 
     protected $description = 'Register AI providers/models in the database catalog from config or explicit options (dry run by default, never writes prices)';
 
-    public function handle(AiManager $manager, AuditLogger $audit): int
+    public function handle(AiManager $manager, AuditLogger $audit, CatalogSourceResolver $resolver): int
     {
         $apply = (bool) $this->option('apply');
+
+        // Phase C4 Stage A: with `auto`, the first enabled model would flip the
+        // runtime to the database catalog by itself. Bootstrapping is allowed
+        // only while the effective source is pinned explicitly (config or
+        // database), so the catalog is populated WITHOUT being used.
+        if ($apply && $resolver->mode() === 'auto') {
+            $this->error('Refusing --apply: the effective ai.catalog_source is "auto", so writing models would switch the runtime catalog automatically. Pin it to "config" from the cutover page (or AI_CATALOG_SOURCE=config) first.');
+
+            return self::FAILURE;
+        }
 
         if ($apply && ! $this->confirmToProceed('Application is in production — write to the AI catalog?')) {
             return self::FAILURE;
@@ -67,6 +78,7 @@ class AiBootstrapCommand extends Command
             array_map(static fn (array $row): array => [$row['kind'], $row['handle'], $row['action'], $row['details']], $plan),
         );
         $this->line('Prices are never written by this command; publish them explicitly with sanad:ai:price.');
+        $this->line('Effective catalog source: '.$resolver->mode().' (active: '.$resolver->activeName().'). The runtime keeps using it; switching to the database catalog is a separate cutover.');
 
         if (! $apply) {
             return self::SUCCESS;

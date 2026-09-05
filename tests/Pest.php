@@ -371,6 +371,8 @@ use App\Models\AiProvider;
 use App\Models\ProviderCredential;
 use App\Models\ProviderHealthCheck;
 use App\Services\Ai\Catalog\CatalogCache;
+use App\Services\Settings\SettingsCache;
+use App\Support\Security\SecretString;
 use Carbon\CarbonImmutable;
 
 /**
@@ -433,4 +435,42 @@ function c3Verify(ProviderCredential $credential, string $status = 'ok', ?Carbon
         'credential_id' => $credential->id, 'credential_source' => 'vault', 'checked_by_ref' => 'user:test',
         'checked_at' => $at ?? CarbonImmutable::now(),
     ]);
+}
+
+// ---- Routing cutover (Phase C4) --------------------------------------------------
+
+/**
+ * A successful ENV-credential auth probe for a provider, carrying the
+ * fingerprint snapshot of the key the runtime uses (what a passing Test
+ * Connection writes) — the exact-credential readiness proof.
+ */
+function c4EnvHealth(AiProvider $provider, ?string $secret = null, ?CarbonImmutable $at = null): ProviderHealthCheck
+{
+    $secret ??= (string) config("ai.providers.{$provider->key}.api_key");
+
+    return ProviderHealthCheck::query()->create([
+        'provider_id' => $provider->id, 'kind' => 'auth', 'trigger' => 'manual', 'status' => 'ok',
+        'credential_id' => null, 'credential_source' => 'env', 'checked_by_ref' => 'user:test',
+        'details' => ['credential_fingerprint' => SecretString::fingerprintOf($secret)],
+        'checked_at' => $at ?? CarbonImmutable::now(),
+    ]);
+}
+
+/**
+ * Stage-C ready state: the database catalog mirrors the config route (groq
+ * preferred, openai second), the source is pinned to `config`, and both env
+ * keys have a fresh auth proof.
+ *
+ * @return array{groq: AiProvider, openai: AiProvider, llama: AiModel, mini: AiModel}
+ */
+function c4Catalog(): array
+{
+    $fx = c3Catalog();
+    config(['ai.catalog_source' => 'config', 'ai.routing.mode' => 'env', 'ai.overrides.catalog_source' => null, 'ai.overrides.routing_mode' => null]);
+    c4EnvHealth($fx['groq']);
+    c4EnvHealth($fx['openai']);
+    CatalogCache::flush();
+    app(SettingsCache::class)->flush();
+
+    return $fx;
 }

@@ -20,6 +20,7 @@
         ['route' => 'dashboard.ai.pricing', 'label' => 'الأسعار', 'icon' => '💵', 'can' => 'ai.pricing.view'],
         ['route' => 'dashboard.ai.routing', 'label' => 'التوجيه', 'icon' => '🧭', 'can' => 'ai.routing.manage'],
         ['route' => 'dashboard.ai.health', 'label' => 'صحة المزوّدين', 'icon' => '🩺', 'can' => 'ai.health.view'],
+        ['route' => 'dashboard.ai.cutover', 'label' => 'Cutover', 'icon' => '🔀', 'can' => 'ai.routing.cutover'],
         ['route' => 'dashboard.settings', 'label' => 'الإعدادات', 'icon' => '⚙️', 'can' => 'settings.manage'],
         ['route' => 'dashboard.audit', 'label' => 'سجل التدقيق', 'icon' => '🧾', 'can' => 'audit.view'],
     ];

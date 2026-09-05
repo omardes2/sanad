@@ -54,15 +54,15 @@ it('proposed() applies overrides in memory and never writes', function () {
 it('proposed() follows the catalog-source mode: config ignores rows, auto falls back to config when no row would remain', function () {
     ['llama' => $llama, 'mini' => $mini] = $this->fx;
 
-    settings()->set('ai.catalog_source', 'config');
+    config(['ai.catalog_source' => 'config']);
     expect($this->sim->proposed([], [$llama->id => ['is_enabled' => false], $mini->id => ['is_enabled' => false]])->hasRoute())->toBeTrue();
 
-    settings()->set('ai.catalog_source', 'auto');
+    config(['ai.catalog_source' => 'auto']);
     // Disabling every database model → auto uses the config catalog → groq still routes.
     $eval = $this->sim->proposed([], [$llama->id => ['is_enabled' => false], $mini->id => ['is_enabled' => false]]);
     expect($eval->hasRoute())->toBeTrue()->and($eval->selectedHandle())->toBe('groq:llama-3.3-70b-versatile');
 
-    settings()->set('ai.catalog_source', 'database');
+    config(['ai.catalog_source' => 'database']);
     expect($this->sim->proposed([], [$llama->id => ['is_enabled' => false], $mini->id => ['is_enabled' => false]])->hasRoute())->toBeFalse();
 });
 

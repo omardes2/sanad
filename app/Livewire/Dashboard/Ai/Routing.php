@@ -8,6 +8,7 @@ use App\Enums\AiOperation;
 use App\Services\Ai\AiManager;
 use App\Services\Ai\Catalog\CatalogSourceResolver;
 use App\Services\Ai\Catalog\RoutingSimulator;
+use App\Services\Ai\Routing\RoutingPreference;
 use App\Services\Billing\Pricing\CostEstimator;
 use App\Support\Rbac\Permission;
 use Livewire\Attributes\Layout;
@@ -39,7 +40,7 @@ class Routing extends Component
         abort_unless(auth()->user()?->can(Permission::AiRoutingManage->value) ?? false, 403);
     }
 
-    public function render(RoutingSimulator $simulator, CatalogSourceResolver $resolver, AiManager $manager, CostEstimator $estimator)
+    public function render(RoutingSimulator $simulator, CatalogSourceResolver $resolver, AiManager $manager, CostEstimator $estimator, RoutingPreference $preference)
     {
         $user = auth()->user();
         $showCosts = ($user?->can(Permission::UsageViewCosts->value) ?? false) || ($user?->can(Permission::AiPricingView->value) ?? false);
@@ -72,7 +73,8 @@ class Routing extends Component
             'providersKnown' => $manager->names(),
             'sourceMode' => $resolver->mode(),
             'sourceActive' => $resolver->activeName(),
-            'envPreferred' => (string) config('ai.provider', 'groq'),
+            'envPreferred' => $preference->envProvider(),
+            'resolution' => $preference->resolve(),
             'live' => $live,
             'liveRows' => $rows($live),
             'whatIf' => $whatIf,
