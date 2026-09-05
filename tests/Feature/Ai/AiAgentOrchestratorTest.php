@@ -71,6 +71,22 @@ it('includes the Arabic persona and the user message in the prompt', function ()
     });
 });
 
+it('makes Sanad time-aware using the user timezone', function () {
+    Http::fake(groqReply('رد'));
+    [$user, $conversation, $message] = aiConversation('ذكّرني غدًا');
+    $user->forceFill(['timezone' => 'Asia/Dubai'])->save();
+
+    app(AiAgentOrchestrator::class)->handle($user->refresh(), $conversation, $message);
+
+    Http::assertSent(function ($request) {
+        $system = $request['messages'][0];
+
+        return $system['role'] === 'system'
+            && str_contains($system['content'], 'Asia/Dubai')
+            && str_contains($system['content'], 'التاريخ والوقت');
+    });
+});
+
 it('never leaks another conversation into the prompt (privacy)', function () {
     Http::fake(groqReply('رد'));
 
