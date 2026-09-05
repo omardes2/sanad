@@ -6,8 +6,8 @@ use App\Enums\SubscriptionStatus;
 use App\Enums\UsageDimension;
 use App\Models\Plan;
 use App\Models\Subscription;
+use App\Models\UsageCharge;
 use App\Models\UsageCounter;
-use App\Models\UsageEvent;
 use App\Models\User;
 use App\Services\Billing\UsageEngine;
 use Illuminate\Support\Facades\DB;
@@ -78,15 +78,15 @@ it('never exceeds the daily cap under real concurrent processes (row-creation ra
         }
 
         $counterUsed = app(UsageEngine::class)->usage($subscriber->fresh(), UsageDimension::AiReply)['daily'];
-        $ledgerRows = UsageEvent::where('user_id', $subscriber->id)->count();
+        $chargeRows = UsageCharge::where('subscriber_id', $subscriber->id)->count();
 
         // The invariant: exactly `cap` charges succeeded, the counter equals the
-        // cap (never more), and the ledger has exactly `cap` rows.
+        // cap (never more), and the charge log has exactly `cap` rows.
         expect($allowed)->toBe($cap)
             ->and($counterUsed)->toBe($cap)
-            ->and($ledgerRows)->toBe($cap);
+            ->and($chargeRows)->toBe($cap);
     } finally {
-        UsageEvent::where('user_id', $subscriber->id)->delete();
+        UsageCharge::where('subscriber_id', $subscriber->id)->delete();
         UsageCounter::where('subscriber_id', $subscriber->id)->delete();
         Subscription::where('subscriber_id', $subscriber->id)->delete();
         User::whereKey($subscriber->id)->delete();
@@ -126,9 +126,9 @@ it('does not double-charge duplicate keys under real concurrent processes', func
         }
 
         expect(app(UsageEngine::class)->usage($subscriber->fresh(), UsageDimension::AiReply)['daily'])->toBe(1)
-            ->and(UsageEvent::where('idempotency_key', 'same-dup-key')->count())->toBe(1);
+            ->and(UsageCharge::where('idempotency_key', 'same-dup-key')->count())->toBe(1);
     } finally {
-        UsageEvent::where('user_id', $subscriber->id)->delete();
+        UsageCharge::where('subscriber_id', $subscriber->id)->delete();
         UsageCounter::where('subscriber_id', $subscriber->id)->delete();
         Subscription::where('subscriber_id', $subscriber->id)->delete();
         User::whereKey($subscriber->id)->delete();

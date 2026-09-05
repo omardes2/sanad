@@ -103,7 +103,7 @@ ResolvedRoute{provider, model, alternatives} ─▶ SupportsChat::chat(AiRequest
 | **Calls / Batch Calls** | Telephony كـProvider ضمن نفس التجريد؛ `calls` بنتائج **منظّمة** (status/duration/outcome/sentiment/summary/next action)؛ **Safety** (consent/lawful-use، DNC، allowed hours، rate limits، country rules، abuse detection، emergency stop). |
 | **Artifacts** | `artifacts` مرتبطة بالمستخدم والـJob (DOCX/PDF/XLSX/CSV) عبر filesystem disks (S3-ready)؛ الوصول ليس واتساب-only. |
 | **Notifications** | `NotificationService`/`NotificationChannel` محايد؛ أول Adapter واتساب، ثم push/in-app/email توسيعًا لا إعادة بناء. |
-| **Billing / Usage / Cost Accounting** | Recording دائم لكل عملية ناجحة على `usage_events` العام (subscriber/subscription/operation/provider/model/price/units/cached/duration/مكوّنات التكلفة/occurred_at + مراجع job/step/tool/channel **بلا FK مصطنعة**)؛ Enforcement خلف `BILLING_ENFORCE`؛ Cost Guardrails داخلية لكل Plan. |
+| **Billing / Usage / Cost Accounting** | Recording دائم لكل استدعاء قابل للفوترة على `usage_events` (`UsageRecorder` المالك الوحيد: subscriber + snapshot اشتراك/باقة، operation/provider/model، units/cached/duration، مكوّنات التكلفة مخزّنة وقت الحدث، `occurred_at`، `correlation_id` + `idempotency_key`، `outcome`، مراجع job/step/tool/channel **بلا FK مصطنعة**)؛ Enforcement (`UsageEngine`: entitlement/حدود/`usage_counters` + سجلّ حصص `usage_charges`) خلف `BILLING_ENFORCE` ولا يكتب الـledger؛ Cost Guardrails داخلية لكل Plan. |
 | **Finance** | Calculated (D) ← ثم Reconciled (E): Collected Revenue، Refunds، Gateway fees، Provider invoices، Adjustments؛ Gross Profit/Margin، MRR/ARR/ARPU/Churn، ربحية لكل مشترك، **drill-down حتى الحدث/الدفعة/الفاتورة**. |
 | **Admin** | Providers/Models/Pricing/Routing/Credentials/Usage/Finance/Jobs/Calls/Artifacts/Channel Analytics/Settings/Audit/Roles — تُرسم من الجداول الموحّدة. |
 
@@ -128,7 +128,8 @@ ResolvedRoute{provider, model, alternatives} ─▶ SupportsChat::chat(AiRequest
 | Phase | المحتوى | migrations |
 |---|---|---|
 | **A — AI Platform Foundation** ✅ | Provider abstraction، capability contracts، `OpenAIProvider`، `SanadAiRouter`، `CatalogSource` (config الآن)، DTOs + tool-call abstraction، Groq يبقى | لا |
-| **B — Metering & Pricing Foundation** | Recording always-on؛ توسيع `usage_events` العام (مراجع بلا FK مصطنعة)؛ `ai_providers`/`ai_models`/`model_prices` (DB تاريخي)؛ `CostCalculator` بمكوّنات؛ `CatalogSource` من DB | نعم (إضافية) |
+| **B1 — Metering Foundation** ✅ | **Recording ≠ Enforcement**: `UsageRecorder` مالك وحيد لـ`usage_events` (دائمًا، idempotent، snapshots بلا FK للمشترك/الاشتراك/الباقة، مراجع job/tool بلا FK، `correlation_id` + `idempotency_key`، `outcome`، مكوّنات التكلفة مخزّنة وقت الحدث)؛ `UsageEngine` = إنفاذ فقط بسجلّ `usage_charges` | نعم (إضافية، backward-compatible) |
+| **B2 — Provider / Model / Pricing Foundation** | `ai_providers`/`ai_models`/`model_prices` (تاريخي)، `CatalogSource` من DB، `CostCalculator` بأسعار DB، مرجع السعر على الحدث، أساس Cost guardrails | نعم (إضافية) |
 | **C — Admin Control Center** | Providers/Models/Pricing/Routing/Credentials(مشفّرة)/Health + Test Connection + Sync jobs + `app_settings` + Persona/Prompts من DB. **يسبقه/يبدأ معه RBAC أساسي** يحمي الأسطح الحسّاسة؛ Credentials لـSuper Admin أو صلاحية صريحة فقط | نعم |
 | **D — Financials & Analytics (Calculated)** | Finance Overview، MRR (`subscription_events`)، ربحية المشترك، drill-down، الرئيسية | نعم |
 | **E — Reconciliation & Payments (Reconciled)** | `provider_invoices`، `cost_adjustments`، `customer_payments`، مطابقة Calculated vs Actual | نعم |
@@ -144,7 +145,8 @@ ResolvedRoute{provider, model, alternatives} ─▶ SupportsChat::chat(AiRequest
 - Recording دائم لكل عملية ناجحة؛ Enforcement منفصل خلف `BILLING_ENFORCE` (يبقى `false` أثناء التطوير).
 - AI Provider abstraction، `OpenAIProvider` أساسي، Groq اختياري/fallback لا يُحذف، `SanadAiRouter`، Tool-calling DTOs محايدة.
 - Pricing تاريخي DB-backed؛ تكلفة immutable وقت الحدث؛ Cost accounting لكل Subscriber/Subscription/Operation؛ Cost Guardrails؛ Calculated vs Actual/Reconciled.
-- `usage_events` يُهيّأ من Phase B بمراجع job/step/tool/channel/operation **بدون FK إلى جداول غير موجودة** (تُضاف العلاقات بهجرة مستقلة لاحقًا).
+- `usage_events` يُهيّأ من Phase B1 بمراجع job/step/tool/channel/operation **بدون FK إلى جداول غير موجودة** (تُضاف العلاقات بهجرة مستقلة لاحقًا)، وبـsnapshots بلا FK للمشترك (`subscriber_id`) والاشتراك/الباقة (التاريخ المالي لا يفقد صاحبه بحذف User، ولا يضيع بحذف Subscription أو تغيير Plan). الصفوف التاريخية: `outcome`/`operation` مجهولان (`NULL`)، و`cost` القديم يُعامَل كإجمالي فقط دون إعادة تصنيفه.
+- Phase B مقسومة إلى **B1** (Metering Foundation — Recorder مالك وحيد للـledger، Engine إنفاذ فقط بسجلّ `usage_charges` خاصّ) و**B2** (Providers/Models/Pricing). `correlation_id` ≠ `idempotency_key`؛ Billable ≠ نجاح العملية للمستخدم (`outcome`).
 - Notification abstraction تبدأ مع أول احتياج حقيقي (Reminder Delivery في G)؛ Phase K توسّعها.
 - RBAC: `spatie/laravel-permission`؛ أساس يحمي الأسطح الحسّاسة قبل/مع C؛ التنفيذ الكامل في F.
 - Admin Control Center؛ API-first services؛ Channel abstraction؛ Jobs/Calls/Artifacts/Unified Identity معماريات مستقبلية مُلزِمة.

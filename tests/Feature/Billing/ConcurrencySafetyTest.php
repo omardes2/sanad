@@ -11,9 +11,12 @@ use App\Enums\UsageOutcome;
 use App\Models\ChannelAccount;
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Models\UsageCharge;
 use App\Models\UsageEvent;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
+use App\Services\Billing\UsageRecorder;
+use App\Support\Billing\UsageKeys;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 
@@ -34,7 +37,7 @@ it('does not charge a duplicate message twice (two messages arriving together, s
     expect($first->outcome)->toBe(UsageOutcome::Allowed)
         ->and($second->outcome)->toBe(UsageOutcome::AlreadyCharged)
         ->and($engine->usage($subscriber, UsageDimension::AiReply)['daily'])->toBe(1) // charged once
-        ->and(UsageEvent::where('idempotency_key', 'ai_reply:777')->count())->toBe(1);
+        ->and(UsageCharge::where('idempotency_key', 'ai_reply:777')->count())->toBe(1);
 });
 
 it('charges only one of two distinct messages at the daily boundary (cap not exceeded)', function () {
@@ -47,7 +50,7 @@ it('charges only one of two distinct messages at the daily boundary (cap not exc
     expect($a->outcome)->toBe(UsageOutcome::Allowed)
         ->and($b->outcome)->toBe(UsageOutcome::LimitReached)
         ->and($engine->usage($subscriber, UsageDimension::AiReply)['daily'])->toBe(1) // never 2
-        ->and(UsageEvent::count())->toBe(1);
+        ->and(UsageCharge::count())->toBe(1);
 });
 
 it('a burst of many messages never pushes the counter past the daily cap', function () {
@@ -63,10 +66,10 @@ it('a burst of many messages never pushes the counter past the daily cap', funct
 
     expect($allowed)->toBe(3)
         ->and($engine->usage($subscriber, UsageDimension::AiReply)['daily'])->toBe(3)
-        ->and(UsageEvent::count())->toBe(3);
+        ->and(UsageCharge::count())->toBe(3);
 });
 
-it('through the orchestrator: a duplicated inbound message is charged only once', function () {
+it('through the orchestrator: a duplicated inbound message is recorded once and charged once', function () {
     aiConfigure();
     config(['billing.enforce' => true]);
     Http::fake(['api.groq.com/*' => Http::response([
@@ -88,12 +91,16 @@ it('through the orchestrator: a duplicated inbound message is charged only once'
         app(AiAgentOrchestrator::class),
         app(UsageEngine::class),
         app(UsageLimitResponder::class),
+        app(UsageRecorder::class),
     );
 
-    // Same inbound message handled twice (idempotency key = ai_reply:{message id}).
+    // Same inbound message handled twice (retry / duplicate webhook).
     $metered->handle($subscriber, $conversation, $message);
     $metered->handle($subscriber, $conversation, $message);
 
+    $key = UsageKeys::invocation(UsageDimension::AiReply, UsageKeys::correlationForMessage($message));
+
     expect(app(UsageEngine::class)->usage($subscriber, UsageDimension::AiReply)['daily'])->toBe(1)
-        ->and(UsageEvent::where('idempotency_key', 'ai_reply:'.$message->id)->count())->toBe(1);
+        ->and(UsageCharge::where('idempotency_key', $key)->count())->toBe(1)
+        ->and(UsageEvent::where('idempotency_key', $key)->count())->toBe(1);
 });

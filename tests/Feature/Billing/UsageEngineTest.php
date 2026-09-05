@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Enums\UsageDimension;
 use App\Enums\UsageOutcome;
+use App\Models\UsageCharge;
 use App\Models\UsageCounter;
 use App\Models\UsageEvent;
 use App\Services\Billing\UsageEngine;
@@ -20,14 +21,16 @@ function engine(): UsageEngine
     return app(UsageEngine::class);
 }
 
-it('records usage: charging increments counters and writes one ledger row', function () {
+it('consumes quota: charging increments counters and logs one charge row — never the cost ledger', function () {
     $subscriber = billingSubscriber(billingPlan(['daily' => 5, 'monthly' => 50]));
 
     $decision = engine()->charge($subscriber, UsageDimension::AiReply, 'k1');
 
     expect($decision->outcome)->toBe(UsageOutcome::Allowed)
         ->and(engine()->usage($subscriber, UsageDimension::AiReply))->toBe(['daily' => 1, 'monthly' => 1])
-        ->and(UsageEvent::where('idempotency_key', 'k1')->count())->toBe(1);
+        ->and(UsageCharge::where('idempotency_key', 'k1')->count())->toBe(1)
+        // Enforcement never writes usage_events; that is UsageRecorder's job.
+        ->and(UsageEvent::count())->toBe(0);
 });
 
 it('enforces the daily limit', function () {
@@ -59,9 +62,9 @@ it('allows unlimited dimensions (null caps) without blocking', function () {
         expect(engine()->charge($subscriber, UsageDimension::AiReply, "u{$i}")->allowed())->toBeTrue();
     }
 
-    // No counter rows are created for uncapped windows.
+    // No counter rows are created for uncapped windows; each charge is still logged.
     expect(UsageCounter::count())->toBe(0)
-        ->and(UsageEvent::count())->toBe(20);
+        ->and(UsageCharge::count())->toBe(20);
 });
 
 it('denies a dimension the plan does not include (disabled)', function () {
@@ -71,7 +74,7 @@ it('denies a dimension the plan does not include (disabled)', function () {
     $decision = engine()->charge($subscriber, UsageDimension::VoiceMinute, 'v1');
 
     expect($decision->outcome)->toBe(UsageOutcome::Disabled)
-        ->and(UsageEvent::count())->toBe(0);
+        ->and(UsageCharge::count())->toBe(0);
 });
 
 it('denies when the subscriber has no entitled subscription', function () {
@@ -90,7 +93,7 @@ it('is idempotent: the same key charges only once', function () {
     expect($again->outcome)->toBe(UsageOutcome::AlreadyCharged)
         ->and($again->allowed())->toBeTrue()
         ->and(engine()->usage($subscriber, UsageDimension::AiReply)['daily'])->toBe(1)
-        ->and(UsageEvent::where('idempotency_key', 'dup')->count())->toBe(1);
+        ->and(UsageCharge::where('idempotency_key', 'dup')->count())->toBe(1);
 });
 
 it('isolates usage between subscribers', function () {
@@ -105,7 +108,7 @@ it('isolates usage between subscribers', function () {
         ->and(engine()->usage($b, UsageDimension::AiReply)['daily'])->toBe(0);
 });
 
-it('does not enforce or charge when billing.enforce is off', function () {
+it('does not enforce or consume quota when billing.enforce is off', function () {
     config(['billing.enforce' => false]);
     $subscriber = billingSubscriber(billingPlan(['daily' => 1, 'monthly' => 1]));
 
@@ -113,7 +116,8 @@ it('does not enforce or charge when billing.enforce is off', function () {
     $second = engine()->charge($subscriber, UsageDimension::AiReply, 'n2');
 
     expect($second->outcome)->toBe(UsageOutcome::NotEnforced)
-        ->and(UsageEvent::count())->toBe(0);
+        ->and(UsageCharge::count())->toBe(0)
+        ->and(UsageCounter::count())->toBe(0);
 });
 
 it('never exceeds the hard cap across sequential charges (enforcement invariant)', function () {
