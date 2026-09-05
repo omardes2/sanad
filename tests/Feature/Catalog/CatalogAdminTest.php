@@ -21,6 +21,7 @@ use App\Support\Rbac\Role;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 uses(RefreshDatabase::class);
@@ -253,6 +254,55 @@ it('invalidates the catalog cache after the commit, and tolerates a failing cach
     expect($llama->fresh()->name)->toBe('Llama')
         ->and(AuditLog::where('action', AuditActions::AiModelUpdated)->count())->toBe(2);
     Log::shouldHaveReceived('warning')->with('sanad.ai.catalog_cache_unavailable', Mockery::any())->atLeast()->once();
+});
+
+it('invalidates the cache only after the OUTERMOST transaction commits, and never when that transaction rolls back', function () {
+    $llama = $this->fx['llama'];
+    $version = static fn (): int => (int) Cache::get('ai.catalog.version', 1);
+    $auditCount = static fn (): int => AuditLog::where('action', AuditActions::AiModelUpdated)->count();
+
+    // 1) Wrapped in a caller's transaction: the write (and the Eloquent
+    //    saved hook) must NOT bump the version until the outer commit.
+    $before = $version();
+
+    DB::transaction(function () use ($llama, $version, $before): void {
+        $this->admin->updateModel($llama, modelInput(['external_id' => $llama->external_id, 'name' => 'Renamed', 'priority' => 5, 'is_enabled' => true]));
+
+        expect($llama->fresh()->name)->toBe('Renamed')
+            ->and($version())->toBe($before, 'no invalidation may be visible before the outer commit');
+    });
+
+    expect($version())->toBeGreaterThan($before)
+        ->and($auditCount())->toBe(1);
+
+    // 2) The outer transaction rolls back after the write: no change, no
+    //    audit row, and no invalidation ever reached the cache.
+    $settled = $version();
+
+    try {
+        DB::transaction(function () use ($llama): void {
+            $this->admin->updateModel($llama->fresh(), modelInput(['external_id' => $llama->external_id, 'name' => 'Rolled back', 'priority' => 5, 'is_enabled' => true]));
+
+            throw new RuntimeException('outer failure after the catalog write');
+        });
+    } catch (RuntimeException) {
+    }
+
+    expect($llama->fresh()->name)->toBe('Renamed')
+        ->and($auditCount())->toBe(1)
+        ->and($version())->toBe($settled, 'a rolled-back outer transaction must not invalidate');
+
+    // 3) Same guarantee for a plain Eloquent save (the B2 model hooks).
+    try {
+        DB::transaction(function () use ($llama): void {
+            $llama->fresh()->update(['name' => 'Hook write']);
+
+            throw new RuntimeException('rollback');
+        });
+    } catch (RuntimeException) {
+    }
+
+    expect($version())->toBe($settled);
 });
 
 it('records no audit entry when nothing changed', function () {

@@ -59,8 +59,8 @@ class AiModel extends Model
 
     protected static function booted(): void
     {
-        static::saved(static fn () => CatalogCache::flush());
-        static::deleted(static fn () => CatalogCache::flush());
+        static::saved(static fn () => CatalogCache::flushAfterCommit());
+        static::deleted(static fn () => CatalogCache::flushAfterCommit());
     }
 
     /** @return BelongsTo<AiProvider, $this> */

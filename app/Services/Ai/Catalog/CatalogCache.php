@@ -6,6 +6,7 @@ namespace App\Services\Ai\Catalog;
 
 use Closure;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -13,7 +14,8 @@ use Throwable;
  * Short-lived cache for the database-backed catalog and model resolution.
  * Entries are namespaced by a version number; flush() bumps the version, so
  * every entry is invalidated at once without cache tags (the models bump it
- * on save/delete, as do the artisan commands).
+ * on save/delete, as do the artisan commands) — always AFTER the outermost
+ * commit, see flushAfterCommit().
  *
  * The cache is an optimisation, never a dependency: if the cache store is
  * unreachable, callbacks run directly (uncached) and routing keeps working —
@@ -39,6 +41,22 @@ final class CatalogCache
             Log::warning('sanad.ai.catalog_cache_unavailable', ['error' => $e::class]);
 
             return $callback();
+        }
+    }
+
+    /**
+     * Invalidate only once the OUTERMOST database transaction has really
+     * committed (Phase C2 decision 5): inside a transaction the flush is
+     * deferred to the root commit and discarded on rollback, so no worker
+     * ever sees an invalidation for a change that was not (or not yet)
+     * committed. Outside a transaction it flushes immediately.
+     */
+    public static function flushAfterCommit(): void
+    {
+        try {
+            DB::afterCommit(static fn () => self::flush());
+        } catch (Throwable $e) {
+            Log::warning('sanad.ai.catalog_cache_unavailable', ['error' => $e::class]);
         }
     }
 

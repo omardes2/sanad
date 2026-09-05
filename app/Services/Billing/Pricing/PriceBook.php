@@ -138,7 +138,7 @@ class PriceBook
             return $price;
         });
 
-        CatalogCache::flush();
+        CatalogCache::flushAfterCommit();
 
         return $price;
     }

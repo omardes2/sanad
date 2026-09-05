@@ -43,9 +43,10 @@ use Illuminate\Support\Facades\Validator;
  *         must equal the NEW route handle, else RoutingChangeConfirmationRequired;
  *  4. the row and its audit entry (before/after + simulation result) are
  *     written in that same transaction — an audit failure rolls the change back;
- *  5. the catalog cache is invalidated AFTER a successful commit. Invalidation
- *     failure never fails the write (CatalogCache logs a warning; TTL expiry
- *     bounds the staleness).
+ *  5. the catalog cache is invalidated AFTER the outermost transaction has
+ *     committed (DB::afterCommit — never on a savepoint, never on rollback).
+ *     Invalidation failure never fails the write (CatalogCache logs a
+ *     warning; TTL expiry bounds the staleness).
  *
  * Out of scope by decision: provider key/driver/credentials_ref (Phase C3),
  * is_primary (read-only until the Phase C4 cutover), base_url is validated by
@@ -256,9 +257,10 @@ class CatalogAdmin
             return $callback($provider);
         });
 
-        // After a successful commit only. Tolerant: a cache failure is logged,
-        // never raised — the TTL bounds how long a stale catalog can be served.
-        CatalogCache::flush();
+        // After the OUTERMOST commit only (deferred when a caller wraps us in
+        // its own transaction; discarded on its rollback). Tolerant: a cache
+        // failure is logged, never raised — the TTL bounds the staleness.
+        CatalogCache::flushAfterCommit();
 
         return $result;
     }

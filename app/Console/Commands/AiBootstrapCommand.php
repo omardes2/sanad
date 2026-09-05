@@ -101,7 +101,7 @@ class AiBootstrapCommand extends Command
             ]);
         });
 
-        CatalogCache::flush();
+        CatalogCache::flushAfterCommit();
         $this->info('Catalog bootstrap applied.');
 
         return self::SUCCESS;
