@@ -35,9 +35,9 @@ final class UsageQuery
      *
      * @throws InvalidArgumentException when the window is missing, reversed or too long
      */
-    public static function build(CarbonImmutable $from, CarbonImmutable $to, array $filters = []): Builder
+    public static function build(CarbonImmutable $from, CarbonImmutable $to, array $filters = [], int $maxDays = self::MAX_DAYS): Builder
     {
-        self::assertWindow($from, $to);
+        self::assertWindow($from, $to, $maxDays);
 
         $query = UsageEvent::query()
             ->where('occurred_at', '>=', $from)
@@ -104,14 +104,14 @@ final class UsageQuery
     /**
      * @throws InvalidArgumentException
      */
-    public static function assertWindow(CarbonImmutable $from, CarbonImmutable $to): void
+    public static function assertWindow(CarbonImmutable $from, CarbonImmutable $to, int $maxDays = self::MAX_DAYS): void
     {
         if ($to <= $from) {
             throw new InvalidArgumentException('نهاية النطاق يجب أن تكون بعد بدايته.');
         }
 
-        if ($from->diffInDays($to) > self::MAX_DAYS) {
-            throw new InvalidArgumentException('النطاق الأقصى '.self::MAX_DAYS.' يومًا.');
+        if ($from->diffInDays($to) > $maxDays) {
+            throw new InvalidArgumentException('النطاق الأقصى '.$maxDays.' يومًا.');
         }
     }
 

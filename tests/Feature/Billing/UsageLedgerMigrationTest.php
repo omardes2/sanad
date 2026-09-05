@@ -16,13 +16,16 @@ uses(RefreshDatabase::class);
  * columns back-filled by the migration itself (no separate command).
  */
 it('back-fills derived ledger columns for rows that pre-date the ledger and stays reversible', function () {
-    // Undo the two C3 migrations (provider_health_checks, provider_credentials),
-    // the C1 migration (app_settings), the two C0 migrations (audit context,
-    // permission tables), the four B2 migrations (pricing refs, model_prices,
-    // ai_models, ai_providers) and the two B1 migrations (usage_charges, ledger).
-    Artisan::call('migrate:rollback', ['--step' => 11, '--force' => true]);
+    // Undo the two D1 migrations (finance_mrr_snapshots, finance indexes), the
+    // two C3 migrations (provider_health_checks, provider_credentials), the C1
+    // migration (app_settings), the two C0 migrations (audit context, permission
+    // tables), the four B2 migrations (pricing refs, model_prices, ai_models,
+    // ai_providers) and the two B1 migrations (usage_charges, ledger).
+    Artisan::call('migrate:rollback', ['--step' => 13, '--force' => true]);
 
-    expect(Schema::hasTable('provider_health_checks'))->toBeFalse()
+    expect(Schema::hasTable('finance_mrr_snapshots'))->toBeFalse()
+        ->and(Schema::hasIndex('usage_events', 'usage_events_occurred_idx'))->toBeFalse()
+        ->and(Schema::hasTable('provider_health_checks'))->toBeFalse()
         ->and(Schema::hasTable('provider_credentials'))->toBeFalse()
         ->and(Schema::hasColumn('usage_events', 'total_cost'))->toBeFalse()
         ->and(Schema::hasColumn('usage_events', 'cost_source'))->toBeFalse()
@@ -77,5 +80,9 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
         ->and(Schema::hasTable('model_prices'))->toBeTrue()
         ->and(Schema::hasTable('permissions'))->toBeTrue()
         ->and(Schema::hasColumn('audit_logs', 'actor'))->toBeTrue()
-        ->and(Schema::hasTable('app_settings'))->toBeTrue();
+        ->and(Schema::hasTable('app_settings'))->toBeTrue()
+        ->and(Schema::hasTable('finance_mrr_snapshots'))->toBeTrue()
+        ->and(Schema::hasIndex('usage_events', 'usage_events_occurred_idx'))->toBeTrue()
+        ->and(Schema::hasIndex('usage_events', 'usage_events_plan_occurred_idx'))->toBeTrue()
+        ->and(Schema::hasIndex('usage_events', 'usage_events_provider_model_occurred_idx'))->toBeTrue();
 });

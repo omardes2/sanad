@@ -29,6 +29,13 @@ it('the role matrix grants credentials management to super_admin only and costs 
         ->and(RoleMatrix::grants(Role::Operations, Permission::UsageViewCosts))->toBeFalse()
         ->and(RoleMatrix::grants(Role::Support, Permission::UsageViewCosts))->toBeFalse()
         ->and(RoleMatrix::grants(Role::Support, Permission::PlansManage))->toBeFalse()
+        // Phase D1: calculated financials are finance-only (plus super_admin).
+        ->and(RoleMatrix::grants(Role::Finance, Permission::FinanceView))->toBeTrue()
+        ->and(RoleMatrix::grants(Role::Finance, Permission::FinanceExport))->toBeTrue()
+        ->and(RoleMatrix::grants(Role::Operations, Permission::FinanceView))->toBeFalse()
+        ->and(RoleMatrix::grants(Role::Operations, Permission::FinanceExport))->toBeFalse()
+        ->and(RoleMatrix::grants(Role::Support, Permission::FinanceView))->toBeFalse()
+        ->and(RoleMatrix::grants(Role::Support, Permission::FinanceExport))->toBeFalse()
         ->and(count(RoleMatrix::permissionsFor(Role::SuperAdmin)))->toBe(count(Permission::cases()));
 });
 

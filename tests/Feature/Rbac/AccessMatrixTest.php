@@ -122,3 +122,18 @@ it('the Gate::before bypass is granted ONLY by the super_admin role, never by is
     // And on the wire: is_admin + a non-privileged role still cannot open the strict page.
     $this->actingAs($legacyWithRole)->get(route('dashboard.audit'))->assertForbidden();
 });
+
+it('grants the Phase D1 finance permissions to super_admin and finance only', function () {
+    expect(userWithRole(Role::SuperAdmin)->can('finance.view'))->toBeTrue()
+        ->and(userWithRole(Role::Finance)->can('finance.view'))->toBeTrue()
+        ->and(userWithRole(Role::Finance)->can('finance.export'))->toBeTrue()
+        ->and(userWithRole(Role::Operations)->can('finance.view'))->toBeFalse()
+        ->and(userWithRole(Role::Operations)->can('finance.export'))->toBeFalse()
+        ->and(userWithRole(Role::Support)->can('finance.view'))->toBeFalse()
+        ->and(userWithRole(Role::Support)->can('finance.export'))->toBeFalse();
+
+    rbacSync();
+    $legacy = User::factory()->create(['is_admin' => true]);
+
+    expect($legacy->can('finance.view'))->toBeFalse()->and($legacy->can('finance.export'))->toBeFalse();
+});

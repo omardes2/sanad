@@ -82,4 +82,50 @@ final class DecimalMath
 
         return $remainder * 2 >= $divisor ? $quotient + 1 : $quotient;
     }
+
+    /**
+     * scaled × $multiplier ÷ $divisor with ROUND HALF UP, entirely in integers.
+     * Used to normalise a price to a monthly figure (× 52 ÷ 12, × 365 ÷ 12, ÷ 12).
+     */
+    public static function mulDiv(int $scaled, int $multiplier, int $divisor): int
+    {
+        if ($divisor <= 0 || $multiplier < 0 || $scaled < 0) {
+            throw new InvalidArgumentException('mulDiv expects a non-negative amount and multiplier and a positive divisor.');
+        }
+
+        if ($multiplier !== 0 && $scaled > intdiv(PHP_INT_MAX, $multiplier)) {
+            throw new InvalidArgumentException('mulDiv overflow.');
+        }
+
+        $product = $scaled * $multiplier;
+
+        $quotient = intdiv($product, $divisor);
+        $remainder = $product % $divisor;
+
+        return $remainder * 2 >= $divisor ? $quotient + 1 : $quotient;
+    }
+
+    /**
+     * Parse a database numeric value (PostgreSQL returns numeric/bigint as a
+     * string, SQLite as int) into an integer WITHOUT going through a float.
+     * Accepts only an integer literal; anything else is a programming error.
+     */
+    public static function intFromDb(mixed $value): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if ($value === null) {
+            return 0;
+        }
+
+        $text = trim((string) $value);
+
+        if (preg_match('/^-?\d+$/', $text) !== 1) {
+            throw new InvalidArgumentException("Expected an integer from the database, got [{$text}].");
+        }
+
+        return (int) $text;
+    }
 }

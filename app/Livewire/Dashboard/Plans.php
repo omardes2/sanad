@@ -9,6 +9,10 @@ use App\Enums\PlanFeature;
 use App\Enums\PlanFeatureType;
 use App\Enums\UsageDimension;
 use App\Models\Plan;
+use App\Services\Audit\AuditLogger;
+use App\Support\Audit\AuditActions;
+use App\Support\Billing\DecimalMath;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -21,6 +25,11 @@ use Livewire\Component;
  * The limits/features editor is ENUM-DRIVEN: it iterates UsageDimension::cases()
  * and PlanFeature::cases(), so adding a new metered dimension or a new capability
  * is a one-line enum change — this component and its view need no edits.
+ *
+ * Financial fields (price, currency, billing_period) are audited ATOMICALLY
+ * with the save (Phase D1): the plan row and the audit entry are written in
+ * one transaction, so the audit trail can never describe a price that did not
+ * change, and a price never changes without a trail. No PII is recorded.
  */
 #[Title('الباقات | سَنَد')]
 #[Layout('components.layouts.dashboard')]
@@ -118,13 +127,14 @@ class Plans extends Component
         $this->showForm = true;
     }
 
-    public function save(): void
+    public function save(AuditLogger $audit): void
     {
         $data = $this->validate([
             'name' => ['required', 'string', 'max:255'],
             'slug' => ['required', 'string', 'max:255', 'alpha_dash', Rule::unique('plans', 'slug')->ignore($this->editingId)],
             'description' => ['nullable', 'string', 'max:1000'],
-            'price' => ['required', 'numeric', 'min:0'],
+            // Plain decimal with at most two places: the audited value is exact.
+            'price' => ['required', 'regex:/^\d{1,8}(\.\d{1,2})?$/'],
             'currency' => ['required', 'string', 'size:3'],
             'billing_period' => ['required', Rule::enum(BillingPeriod::class)],
             'trial_days' => ['required', 'integer', 'min:0'],
@@ -135,30 +145,70 @@ class Plans extends Component
             'sort_order' => ['integer', 'min:0'],
         ]);
 
-        $plan = Plan::updateOrCreate(
-            ['id' => $this->editingId],
-            [
-                'name' => $data['name'],
-                'slug' => $data['slug'],
-                'description' => $data['description'] ?: null,
-                'price' => $data['price'],
-                'currency' => strtoupper($data['currency']),
-                'billing_period' => $data['billing_period'],
-                'trial_days' => $data['trial_days'],
-                'limits' => $this->buildLimits(),
-                'features' => $this->buildFeatures(),
-                'is_active' => $this->is_active,
-                'is_default' => $this->is_default,
-                'sort_order' => $data['sort_order'],
-            ],
-        );
+        $plan = $this->editingId === null ? new Plan : Plan::findOrFail($this->editingId);
+        $isNew = ! $plan->exists;
 
-        // At most one default plan.
-        if ($plan->is_default) {
-            Plan::query()->where('id', '!=', $plan->id)->where('is_default', true)->update(['is_default' => false]);
-        }
+        $plan->fill([
+            'name' => $data['name'],
+            'slug' => $data['slug'],
+            'description' => $data['description'] ?: null,
+            'price' => DecimalMath::format(DecimalMath::toScaled($data['price'], 2), 2),
+            'currency' => strtoupper($data['currency']),
+            'billing_period' => $data['billing_period'],
+            'trial_days' => $data['trial_days'],
+            'limits' => $this->buildLimits(),
+            'features' => $this->buildFeatures(),
+            'is_active' => $this->is_active,
+            'is_default' => $this->is_default,
+            'sort_order' => $data['sort_order'],
+        ]);
+
+        $financialChanges = $this->financialChanges($plan, $isNew);
+
+        DB::transaction(function () use ($plan, $isNew, $financialChanges, $audit): void {
+            $plan->save();
+
+            if ($isNew) {
+                $audit->record(AuditActions::PlanCreated, $plan, $financialChanges, ['slug' => $plan->slug]);
+            } elseif ($financialChanges !== []) {
+                $audit->record(AuditActions::PlanFinancialsUpdated, $plan, $financialChanges, ['slug' => $plan->slug]);
+            }
+
+            // At most one default plan.
+            if ($plan->is_default) {
+                Plan::query()->where('id', '!=', $plan->id)->where('is_default', true)->update(['is_default' => false]);
+            }
+        });
 
         $this->showForm = false;
+    }
+
+    /** Financial attributes whose value changes with this save (all of them for a new plan). */
+    public const FINANCIAL_FIELDS = ['price', 'currency', 'billing_period'];
+
+    /**
+     * @return array<string, array{from: mixed, to: mixed}>
+     */
+    private function financialChanges(Plan $plan, bool $isNew): array
+    {
+        $changes = [];
+
+        foreach (self::FINANCIAL_FIELDS as $field) {
+            if ($isNew || $plan->isDirty($field)) {
+                $to = $plan->getAttribute($field);
+                $changes[$field] = [
+                    'from' => $isNew ? null : $this->scalar($plan->getOriginal($field)),
+                    'to' => $this->scalar($to),
+                ];
+            }
+        }
+
+        return $changes;
+    }
+
+    private function scalar(mixed $value): mixed
+    {
+        return $value instanceof \BackedEnum ? $value->value : $value;
     }
 
     public function toggleActive(int $id): void
