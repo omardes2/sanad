@@ -84,9 +84,15 @@
 - **unique(`provider`, `external_event_id`)** لضمان عدم ابتلاع الحدث مرتين.
 
 ### `usage_events`
-تتبّع استخدام وتكلفة الذكاء الاصطناعي.
+تتبّع استخدام وتكلفة الذكاء الاصطناعي (الدفتر المالي، انظر PHASE_B2/PHASE_D).
 - `user_id?` → `users` (**nullOnDelete** — نحتفظ بالسجل)
 - `type` · `provider` · `model?` · `input_units` (default 0) · `output_units` (default 0) · `cost` **decimal(12,6)** · `metadata? json`.
+- فهارس المالية (D1): `occurred_at`، `(plan_id, occurred_at)`، `(provider, model, occurred_at)`.
+
+### `finance_mrr_snapshots` (D1)
+لقطة MRR **محسوبة** يومية (UTC) لكل (عملة، باقة)، يكتبها `sanad:finance:snapshot` لليوم الحالي فقط ولا تُعدَّل أبدًا.
+- `snapshot_date` · `captured_at` · `currency` · `plan_id?` (مرجع تاريخي **بلا FK**) · `plan_key` (`"<id>"` أو `none`) · `plan_slug?` · `plan_price?` · `billing_period?` · `active_count` · `trialing_count` · `past_due_count` · `mrr_normalized` decimal(12,6) · `calculation_version`.
+- فريد `(snapshot_date, currency, plan_key)`؛ الاشتراكات بلا باقة بعملة `XXX`.
 
 ### `audit_logs`
 سجل تدقيق **append-only**.

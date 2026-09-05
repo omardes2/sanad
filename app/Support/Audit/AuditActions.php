@@ -56,4 +56,13 @@ final class AuditActions
 
     /** System entry (rate-limited): db mode had no usable primary, AI_PROVIDER used. */
     public const AiRoutingEnvFallbackUsed = 'ai.routing.env_fallback_used';
+
+    /** A plan was created (financial fields recorded: price, currency, billing_period). */
+    public const PlanCreated = 'plan.created';
+
+    /** price / currency / billing_period of a plan changed (from → to, atomic with the save). */
+    public const PlanFinancialsUpdated = 'plan.financials_updated';
+
+    /** Console entry: today's MRR snapshot rows were captured (counts only). */
+    public const FinanceMrrSnapshotCaptured = 'finance.mrr_snapshot_captured';
 }

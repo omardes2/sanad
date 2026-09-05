@@ -34,8 +34,8 @@ use Carbon\CarbonImmutable;
  * amounts are 0 and `source` says why (`none` / `currency_mismatch`) — that
  * zero is an unknown cost, never a free operation.
  *
- * WhatsApp dimensions keep the B1 behaviour unchanged (communication cost from
- * the configurable rates).
+ * WhatsApp dimensions are costed as communication cost from the configurable
+ * rates; a zero (unset) rate makes the row UNPRICED (`none`), never "free".
  */
 class CostCalculator
 {
@@ -60,13 +60,17 @@ class CostCalculator
         if (in_array($record->dimension, [UsageDimension::WhatsAppInbound, UsageDimension::WhatsAppOutbound], true)) {
             $communication = $this->legacyAmount($record);
 
+            // Phase D1: a communication rate that is not configured (0) is an
+            // UNKNOWN cost, not a free message — the row is recorded UNPRICED
+            // (`none`), exactly like an AI row without a price. New rows only;
+            // rows costed before this rule are never recalculated.
             return new CostBreakdown(
                 providerCost: $zero,
                 communicationCost: $communication,
                 externalCost: $zero,
                 totalCost: $communication,
                 currency: $currency,
-                source: CostSource::ConfigRate,
+                source: $communication === $zero ? CostSource::None : CostSource::ConfigRate,
             );
         }
 

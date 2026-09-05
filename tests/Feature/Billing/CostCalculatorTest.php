@@ -156,6 +156,17 @@ it('prefers the DB price over the legacy rate when both exist', function () {
         ->and($cost->providerCost)->toBe('0.000880');
 });
 
+it('records a WhatsApp row with an unset (zero) communication rate as UNPRICED, never as a known zero cost', function () {
+    config(['billing.cost_rates.whatsapp_outbound' => ['unit' => 'event', 'rate' => 0]]);
+
+    $cost = app(CostCalculator::class)->calculate(costRecord(['dimension' => UsageDimension::WhatsAppOutbound, 'provider' => 'whatsapp', 'model' => null]), CarbonImmutable::now());
+
+    expect($cost->source)->toBe(CostSource::None)
+        ->and($cost->source->isKnown())->toBeFalse()
+        ->and($cost->communicationCost)->toBe('0.000000')
+        ->and($cost->totalCost)->toBe('0.000000');
+});
+
 it('keeps WhatsApp dimensions on the B1 communication-cost path', function () {
     config(['billing.cost_rates.whatsapp_outbound' => ['unit' => 'event', 'rate' => 0.005]]);
 

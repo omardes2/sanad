@@ -45,6 +45,11 @@ enum Permission: string
 
     case AuditView = 'audit.view';
 
+    /** Calculated financials: known cost, coverage, MRR snapshots (super_admin + finance). */
+    case FinanceView = 'finance.view';
+    /** CSV export of the calculated financial aggregates (super_admin + finance). */
+    case FinanceExport = 'finance.export';
+
     case PlansManage = 'plans.manage';
     case SubscribersView = 'subscribers.view';
     case SubscribersManage = 'subscribers.manage';
@@ -73,6 +78,8 @@ enum Permission: string
             self::UsageViewCosts => 'عرض التكاليف',
             self::UsageExport => 'تصدير الاستخدام (CSV)',
             self::AuditView => 'عرض سجل التدقيق',
+            self::FinanceView => 'عرض المالية (محسوبة)',
+            self::FinanceExport => 'تصدير المالية (CSV)',
             self::PlansManage => 'إدارة الباقات',
             self::SubscribersView => 'عرض المشتركين',
             self::SubscribersManage => 'إدارة المشتركين',
