@@ -9,6 +9,8 @@ use App\Exceptions\Billing\PriceOverlapException;
 use App\Models\AiModel;
 use App\Models\ModelPrice;
 use App\Services\Ai\Catalog\CatalogCache;
+use App\Services\Audit\AuditLogger;
+use App\Support\Audit\AuditActions;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
@@ -31,9 +33,14 @@ use Illuminate\Support\Facades\DB;
  *  - the new period is inserted.
  * Existing rows' rates are never updated. Costs already recorded on
  * usage_events are never touched.
+ *
+ * Since Phase C2 the publication and its audit entry are written in the SAME
+ * transaction: if the audit row cannot be written, no price is published.
  */
 class PriceBook
 {
+    public function __construct(private readonly AuditLogger $audit) {}
+
     public function priceFor(int $modelId, CarbonImmutable $at): ?ModelPrice
     {
         return ModelPrice::query()
@@ -99,7 +106,12 @@ class PriceBook
                 ->where('effective_from', '<', $from)
                 ->update(['effective_until' => $from, 'updated_at' => CarbonImmutable::now()]);
 
-            return ModelPrice::query()->create([
+            $closed = ModelPrice::query()
+                ->where('model_id', $model->id)
+                ->where('effective_until', $from)
+                ->value('id');
+
+            $price = ModelPrice::query()->create([
                 'model_id' => $model->id,
                 'currency' => strtoupper($data->currency),
                 'unit' => $data->unit,
@@ -113,6 +125,17 @@ class PriceBook
                 'note' => $data->note,
                 'created_by' => $data->createdBy,
             ]);
+
+            // Atomic with the publication: an audit failure rolls the price back.
+            $this->audit->record(AuditActions::AiPricePublished, $price, [
+                'price' => ['from' => null, 'to' => $price->snapshot()],
+            ], [
+                'model' => $model->provider?->key.':'.$model->external_id,
+                'closed_price_id' => $closed,
+                'source' => $data->source->value,
+            ]);
+
+            return $price;
         });
 
         CatalogCache::flush();

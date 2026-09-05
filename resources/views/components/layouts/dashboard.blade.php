@@ -14,6 +14,11 @@
         ['route' => 'dashboard.whatsapp', 'label' => 'حالة واتساب', 'icon' => '🟢'],
         // Strict-RBAC page: shown only to accounts holding the permission.
         ['route' => 'dashboard.persona', 'label' => 'شخصية سَنَد', 'icon' => '🎭', 'can' => 'persona.manage'],
+        ['route' => 'dashboard.usage', 'label' => 'الاستخدام', 'icon' => '📊', 'can' => 'usage.view'],
+        ['route' => 'dashboard.ai.providers', 'label' => 'مزوّدو الذكاء', 'icon' => '🤖', 'can' => 'ai.providers.view'],
+        ['route' => 'dashboard.ai.models', 'label' => 'النماذج', 'icon' => '🧠', 'can' => 'ai.models.manage'],
+        ['route' => 'dashboard.ai.pricing', 'label' => 'الأسعار', 'icon' => '💵', 'can' => 'ai.pricing.view'],
+        ['route' => 'dashboard.ai.routing', 'label' => 'التوجيه', 'icon' => '🧭', 'can' => 'ai.routing.manage'],
         ['route' => 'dashboard.settings', 'label' => 'الإعدادات', 'icon' => '⚙️', 'can' => 'settings.manage'],
         ['route' => 'dashboard.audit', 'label' => 'سجل التدقيق', 'icon' => '🧾', 'can' => 'audit.view'],
     ];

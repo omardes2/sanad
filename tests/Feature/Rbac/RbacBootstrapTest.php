@@ -23,6 +23,9 @@ it('the role matrix grants credentials management to super_admin only and costs 
     }
 
     expect(RoleMatrix::grants(Role::Finance, Permission::UsageViewCosts))->toBeTrue()
+        ->and(RoleMatrix::grants(Role::Finance, Permission::UsageExport))->toBeTrue()
+        ->and(RoleMatrix::grants(Role::Operations, Permission::UsageExport))->toBeFalse()
+        ->and(RoleMatrix::grants(Role::Support, Permission::UsageExport))->toBeFalse()
         ->and(RoleMatrix::grants(Role::Operations, Permission::UsageViewCosts))->toBeFalse()
         ->and(RoleMatrix::grants(Role::Support, Permission::UsageViewCosts))->toBeFalse()
         ->and(RoleMatrix::grants(Role::Support, Permission::PlansManage))->toBeFalse()
