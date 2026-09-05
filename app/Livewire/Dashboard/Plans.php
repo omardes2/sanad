@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Livewire\Dashboard;
 
 use App\Enums\BillingPeriod;
+use App\Enums\PlanFeature;
+use App\Enums\PlanFeatureType;
 use App\Enums\UsageDimension;
 use App\Models\Plan;
 use Illuminate\Validation\Rule;
@@ -13,10 +15,12 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 /**
- * Admin management of subscription plans. Prices and limits are data — nothing
- * here is hard-coded into application logic. The form exposes the AI-reply
- * limit (the metered dimension in this phase); other dimensions live in the
- * plan's JSON limits and can be surfaced later without a schema change.
+ * Admin management of subscription plans. Prices, limits and features are DATA,
+ * never hard-coded in application logic.
+ *
+ * The limits/features editor is ENUM-DRIVEN: it iterates UsageDimension::cases()
+ * and PlanFeature::cases(), so adding a new metered dimension or a new capability
+ * is a one-line enum change — this component and its view need no edits.
  */
 #[Title('الباقات | سَنَد')]
 #[Layout('components.layouts.dashboard')]
@@ -40,9 +44,21 @@ class Plans extends Component
 
     public int $trial_days = 0;
 
-    public ?int $ai_daily = null;
+    /**
+     * Per-dimension limits: [dimension => ['daily' => ?string, 'monthly' => ?string]].
+     * Empty string = unlimited (null cap). Bound as strings by Livewire inputs.
+     *
+     * @var array<string, array{daily: ?string, monthly: ?string}>
+     */
+    public array $limits = [];
 
-    public ?int $ai_monthly = null;
+    /**
+     * Per-feature entitlements: [feature => bool|string]. Booleans for switches,
+     * tier strings for tiered features.
+     *
+     * @var array<string, bool|string>
+     */
+    public array $features = [];
 
     public bool $is_active = true;
 
@@ -52,23 +68,26 @@ class Plans extends Component
 
     public function mount(): void
     {
-        $this->currency = (string) config('sanad.default_currency', 'ILS');
+        $this->currency = $this->defaultCurrency();
+        $this->limits = $this->blankLimits();
+        $this->features = $this->blankFeatures();
     }
 
     public function new(): void
     {
-        $this->reset(['editingId', 'name', 'slug', 'description', 'price', 'billing_period', 'trial_days', 'ai_daily', 'ai_monthly', 'is_active', 'is_default', 'sort_order']);
+        $this->reset(['editingId', 'name', 'slug', 'description', 'price', 'billing_period', 'trial_days', 'is_active', 'is_default', 'sort_order']);
         $this->price = '0';
         $this->billing_period = 'monthly';
         $this->is_active = true;
-        $this->currency = (string) config('sanad.default_currency', 'ILS');
+        $this->currency = $this->defaultCurrency();
+        $this->limits = $this->blankLimits();
+        $this->features = $this->blankFeatures();
         $this->showForm = true;
     }
 
     public function edit(int $id): void
     {
         $plan = Plan::findOrFail($id);
-        $limit = $plan->limitFor(UsageDimension::AiReply);
 
         $this->editingId = $plan->id;
         $this->name = $plan->name;
@@ -78,11 +97,24 @@ class Plans extends Component
         $this->currency = $plan->currency;
         $this->billing_period = $plan->billing_period->value;
         $this->trial_days = $plan->trial_days;
-        $this->ai_daily = $limit['daily'] ?? null;
-        $this->ai_monthly = $limit['monthly'] ?? null;
         $this->is_active = $plan->is_active;
         $this->is_default = $plan->is_default;
         $this->sort_order = $plan->sort_order;
+
+        $this->limits = $this->blankLimits();
+        foreach (UsageDimension::cases() as $dimension) {
+            $limit = $plan->limitFor($dimension);
+            $this->limits[$dimension->value] = [
+                'daily' => isset($limit['daily']) ? (string) $limit['daily'] : null,
+                'monthly' => isset($limit['monthly']) ? (string) $limit['monthly'] : null,
+            ];
+        }
+
+        $this->features = $this->blankFeatures();
+        foreach (PlanFeature::cases() as $feature) {
+            $this->features[$feature->value] = $plan->featureValue($feature);
+        }
+
         $this->showForm = true;
     }
 
@@ -96,20 +128,12 @@ class Plans extends Component
             'currency' => ['required', 'string', 'size:3'],
             'billing_period' => ['required', Rule::enum(BillingPeriod::class)],
             'trial_days' => ['required', 'integer', 'min:0'],
-            'ai_daily' => ['nullable', 'integer', 'min:0'],
-            'ai_monthly' => ['nullable', 'integer', 'min:0'],
+            'limits.*.daily' => ['nullable', 'integer', 'min:0'],
+            'limits.*.monthly' => ['nullable', 'integer', 'min:0'],
             'is_active' => ['boolean'],
             'is_default' => ['boolean'],
             'sort_order' => ['integer', 'min:0'],
         ]);
-
-        $limits = [
-            UsageDimension::AiReply->value => [
-                'daily' => $this->ai_daily,
-                'monthly' => $this->ai_monthly,
-                'weight' => 1,
-            ],
-        ];
 
         $plan = Plan::updateOrCreate(
             ['id' => $this->editingId],
@@ -121,7 +145,8 @@ class Plans extends Component
                 'currency' => strtoupper($data['currency']),
                 'billing_period' => $data['billing_period'],
                 'trial_days' => $data['trial_days'],
-                'limits' => $limits,
+                'limits' => $this->buildLimits(),
+                'features' => $this->buildFeatures(),
                 'is_active' => $this->is_active,
                 'is_default' => $this->is_default,
                 'sort_order' => $data['sort_order'],
@@ -142,11 +167,99 @@ class Plans extends Component
         $plan->forceFill(['is_active' => ! $plan->is_active])->save();
     }
 
+    /**
+     * Only dimensions with at least one cap set are stored (an absent dimension
+     * = not entitled). Weight stays 1 here; weighting is a future refinement.
+     *
+     * @return array<string, array{daily: ?int, monthly: ?int, weight: int}>
+     */
+    private function buildLimits(): array
+    {
+        $limits = [];
+
+        foreach (UsageDimension::cases() as $dimension) {
+            $entry = $this->limits[$dimension->value] ?? [];
+            $daily = $this->intOrNull($entry['daily'] ?? null);
+            $monthly = $this->intOrNull($entry['monthly'] ?? null);
+
+            if ($daily === null && $monthly === null) {
+                continue;
+            }
+
+            $limits[$dimension->value] = ['daily' => $daily, 'monthly' => $monthly, 'weight' => 1];
+        }
+
+        return $limits;
+    }
+
+    /**
+     * @return array<string, bool|string>
+     */
+    private function buildFeatures(): array
+    {
+        $features = [];
+
+        foreach (PlanFeature::cases() as $feature) {
+            $value = $this->features[$feature->value] ?? $feature->default();
+
+            if ($feature->type() === PlanFeatureType::Tier) {
+                $features[$feature->value] = in_array($value, $feature->tiers(), true) ? (string) $value : $feature->default();
+
+                continue;
+            }
+
+            $features[$feature->value] = (bool) $value;
+        }
+
+        return $features;
+    }
+
+    private function intOrNull(mixed $value): ?int
+    {
+        return ($value === null || $value === '') ? null : (int) $value;
+    }
+
+    /**
+     * @return array<string, array{daily: ?string, monthly: ?string}>
+     */
+    private function blankLimits(): array
+    {
+        $limits = [];
+
+        foreach (UsageDimension::cases() as $dimension) {
+            $limits[$dimension->value] = ['daily' => null, 'monthly' => null];
+        }
+
+        return $limits;
+    }
+
+    /**
+     * @return array<string, bool|string>
+     */
+    private function blankFeatures(): array
+    {
+        $features = [];
+
+        foreach (PlanFeature::cases() as $feature) {
+            $features[$feature->value] = $feature->default();
+        }
+
+        return $features;
+    }
+
+    private function defaultCurrency(): string
+    {
+        return (string) config('billing.currency', 'USD');
+    }
+
     public function render()
     {
         return view('livewire.dashboard.plans', [
             'plans' => Plan::query()->orderBy('sort_order')->orderBy('id')->get(),
             'periods' => BillingPeriod::cases(),
+            'dimensions' => UsageDimension::cases(),
+            'planFeatures' => PlanFeature::cases(),
+            'featureTypeTier' => PlanFeatureType::Tier,
         ]);
     }
 }

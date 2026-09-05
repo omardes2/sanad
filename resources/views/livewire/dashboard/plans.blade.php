@@ -48,14 +48,6 @@
                 <input wire:model="trial_days" type="number" dir="ltr" class="w-full rounded-lg border border-slate-300 px-3 py-2">
             </div>
             <div>
-                <label class="mb-1 block text-sm font-medium text-slate-700">حدّ ردود الذكاء / يوم (فارغ = غير محدود)</label>
-                <input wire:model="ai_daily" type="number" dir="ltr" class="w-full rounded-lg border border-slate-300 px-3 py-2">
-            </div>
-            <div>
-                <label class="mb-1 block text-sm font-medium text-slate-700">حدّ ردود الذكاء / شهر (فارغ = غير محدود)</label>
-                <input wire:model="ai_monthly" type="number" dir="ltr" class="w-full rounded-lg border border-slate-300 px-3 py-2">
-            </div>
-            <div>
                 <label class="mb-1 block text-sm font-medium text-slate-700">الترتيب</label>
                 <input wire:model="sort_order" type="number" dir="ltr" class="w-full rounded-lg border border-slate-300 px-3 py-2">
             </div>
@@ -65,6 +57,58 @@
             <label class="flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" wire:model="is_default" class="rounded border-slate-300 text-emerald-600"> الباقة الافتراضية (onboarding)
             </label>
+
+            {{-- Limits: enum-driven — a new UsageDimension appears here automatically. --}}
+            <div class="md:col-span-2">
+                <h3 class="mb-1 text-sm font-semibold text-slate-800">الحدود (Limits)</h3>
+                <p class="mb-3 text-xs text-slate-500">اترك الحقل فارغًا = غير محدود. غياب البُعد كليًا = غير متاح ضمن الباقة.</p>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    @foreach ($dimensions as $dimension)
+                        <div class="rounded-lg border border-slate-200 p-3">
+                            <div class="mb-2 text-sm font-medium text-slate-700">{{ $dimension->label() }}
+                                <span class="font-mono text-[10px] text-slate-400">{{ $dimension->value }}</span>
+                            </div>
+                            <div class="flex gap-2">
+                                <div class="flex-1">
+                                    <label class="mb-1 block text-xs text-slate-500">يومي</label>
+                                    <input wire:model="limits.{{ $dimension->value }}.daily" type="number" min="0" dir="ltr" placeholder="∞" class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+                                    @error('limits.'.$dimension->value.'.daily') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                                </div>
+                                <div class="flex-1">
+                                    <label class="mb-1 block text-xs text-slate-500">شهري</label>
+                                    <input wire:model="limits.{{ $dimension->value }}.monthly" type="number" min="0" dir="ltr" placeholder="∞" class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+                                    @error('limits.'.$dimension->value.'.monthly') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                                </div>
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            </div>
+
+            {{-- Features: enum-driven — a new PlanFeature appears here automatically. --}}
+            <div class="md:col-span-2">
+                <h3 class="mb-3 text-sm font-semibold text-slate-800">الميزات (Features)</h3>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
+                    @foreach ($planFeatures as $feature)
+                        @if ($feature->type() === $featureTypeTier)
+                            <div class="rounded-lg border border-slate-200 p-3">
+                                <label class="mb-1 block text-sm font-medium text-slate-700">{{ $feature->label() }}</label>
+                                <select wire:model="features.{{ $feature->value }}" dir="ltr" class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+                                    @foreach ($feature->tiers() as $tier)
+                                        <option value="{{ $tier }}">{{ $tier }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                        @else
+                            <label class="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm text-slate-700">
+                                <input type="checkbox" wire:model="features.{{ $feature->value }}" class="rounded border-slate-300 text-emerald-600">
+                                {{ $feature->label() }}
+                            </label>
+                        @endif
+                    @endforeach
+                </div>
+            </div>
+
             <div class="flex gap-2 md:col-span-2">
                 <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">حفظ</button>
                 <button type="button" wire:click="$set('showForm', false)" class="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600">إلغاء</button>

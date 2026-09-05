@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Enums\PlanFeature;
 use App\Enums\SubscriptionStatus;
 use App\Enums\UsageDimension;
 use App\Livewire\Dashboard\Plans;
@@ -41,14 +42,46 @@ it('lets an admin create a plan with configurable limits', function () {
         ->set('currency', 'ILS')
         ->set('billing_period', 'monthly')
         ->set('trial_days', 7)
-        ->set('ai_daily', 100)
-        ->set('ai_monthly', 2000)
+        ->set('limits.ai_reply.daily', 100)
+        ->set('limits.ai_reply.monthly', 2000)
         ->call('save')
         ->assertHasNoErrors();
 
     $plan = Plan::where('slug', 'plus-test')->first();
     expect($plan)->not->toBeNull()
         ->and($plan->limitFor(UsageDimension::AiReply))->toMatchArray(['daily' => 100, 'monthly' => 2000]);
+});
+
+it('lets an admin set independent limits and features across dimensions', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+
+    Livewire::actingAs($admin)
+        ->test(Plans::class)
+        ->call('new')
+        ->set('name', 'باقة كاملة')
+        ->set('slug', 'full-test')
+        ->set('price', '0')
+        ->set('currency', 'USD')
+        ->set('limits.ai_reply.daily', 100)
+        ->set('limits.reminder.daily', 20)
+        ->set('limits.voice_minute.monthly', 300)
+        ->set('features.tools', true)
+        ->set('features.voice', true)
+        ->set('features.priority', 'high')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $plan = Plan::where('slug', 'full-test')->first();
+
+    expect($plan->limitFor(UsageDimension::AiReply))->toMatchArray(['daily' => 100])
+        ->and($plan->limitFor(UsageDimension::Reminder))->toMatchArray(['daily' => 20])
+        ->and($plan->limitFor(UsageDimension::VoiceMinute))->toMatchArray(['monthly' => 300])
+        // A dimension with no cap entered is not entitled at all.
+        ->and($plan->limitFor(UsageDimension::Image))->toBeNull()
+        ->and($plan->hasFeature(PlanFeature::Tools))->toBeTrue()
+        ->and($plan->hasFeature(PlanFeature::Voice))->toBeTrue()
+        ->and($plan->hasFeature(PlanFeature::Images))->toBeFalse()
+        ->and($plan->featureValue(PlanFeature::Priority))->toBe('high');
 });
 
 it('enforces a single default plan', function () {

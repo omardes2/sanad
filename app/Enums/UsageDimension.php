@@ -20,9 +20,12 @@ enum UsageDimension: string
     case AiOutputTokens = 'ai_output_tokens';
     case WhatsAppInbound = 'whatsapp_inbound';
     case WhatsAppOutbound = 'whatsapp_outbound';
+    case VoiceMessage = 'voice_message';
     case VoiceMinute = 'voice_minute';
     case Image = 'image';
     case File = 'file';
+    case Reminder = 'reminder';
+    case Task = 'task';
     case CallMinute = 'call_minute';
     case ToolAction = 'tool_action';
 
@@ -34,9 +37,12 @@ enum UsageDimension: string
             self::AiOutputTokens => 'توكنز المخرجات',
             self::WhatsAppInbound => 'رسائل واردة (واتساب)',
             self::WhatsAppOutbound => 'رسائل صادرة (واتساب)',
+            self::VoiceMessage => 'رسائل صوتية',
             self::VoiceMinute => 'دقائق صوتية',
             self::Image => 'صور',
             self::File => 'ملفات',
+            self::Reminder => 'تذكيرات',
+            self::Task => 'مهام',
             self::CallMinute => 'دقائق مكالمات',
             self::ToolAction => 'إجراءات/أدوات',
         };

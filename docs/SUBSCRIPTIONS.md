@@ -22,10 +22,29 @@ WhatsApp transport → MessageProcessor → AgentOrchestrator
 ## الباقات (Plans) — بيانات لا كود
 جدول `plans`: الاسم، `slug`، الوصف، السعر، العملة، دورة الفوترة، أيام التجربة،
 `limits` (JSON)، `features` (JSON)، `is_active`، `is_default`، `sort_order`.
-- `limits[<dimension>] = { daily, monthly, weight }` — `null` = غير محدود، وغياب البُعد
-  = غير مُتاح. **لا أسعار ولا حدود مثبّتة في الكود** — كلها من قاعدة البيانات وتُدار من
-  صفحة الباقات في لوحة التحكم.
-- إضافة بُعد استخدام جديد = إضافته في `UsageDimension` وذكره في `limits`، دون أي هجرة.
+
+### الحدود والميزات مستقلّة (Limits ≠ Features)
+الاشتراك **لا يعتمد على عدد الردود فقط**. لكل باقة محورَان مستقلّان:
+- **`limits[<dimension>] = { daily, monthly, weight }`** — كمّي/معدود. `null` = غير محدود،
+  وغياب البُعد كليًا = غير مُتاح. الأبعاد مُعرَّفة في `App\Enums\UsageDimension`
+  (`ai_reply`, `voice_message`, `voice_minute`, `image`, `reminder`, `task`,
+  `call_minute`, `tool_action`, …).
+- **`features[<feature>] = bool | tier`** — قدرة/تفعيل. الميزات مُعرَّفة في
+  `App\Enums\PlanFeature` (`expense_tracking`, `memory`, `advanced_memory`, `tools`,
+  `voice`, `images`, `reminders`, `tasks`, `calls`, و`priority` كمستوى مُتدرّج).
+  كل ميزة تعرف نوعها (`type()`) وقيمتها الافتراضية (`default()`)، فالميزة الغائبة عن
+  الباقة تعود لقيمتها الافتراضية **دون أي backfill للبيانات**.
+
+**لا أسعار ولا حدود ولا ميزات مثبّتة في الكود** — كلها من قاعدة البيانات وتُدار من صفحة
+الباقات. الوصول للحدّ عبر `Plan::limitFor(UsageDimension)`؛ للميزة عبر
+`Plan::hasFeature(PlanFeature)` / `Plan::featureValue(PlanFeature)`؛ وعلى مستوى المشترك
+عبر `SubscriptionService::entitlement()` / `hasFeature()` (يحترمان الباقة الحالية والإنفاذ).
+
+### التوسّع بلا تعديل معماري
+- **إضافة بُعد حدّ جديد** = حالة في `UsageDimension` (+ ذكرها في `limits` من لوحة التحكم).
+- **إضافة ميزة جديدة** = حالة في `PlanFeature`.
+- لا هجرة، ولا تعديل على النماذج/الخدمات، **ولا تعديل على محرّر لوحة التحكم**: فهو
+  **مبني على `::cases()`** فيعرض أي بُعد/ميزة جديدة تلقائيًا.
 
 ## الاشتراك (Subscription)
 جدول `subscriptions` (واحد لكل مشترك — `unique(subscriber_id)`): الباقة، الحالة،
@@ -79,6 +98,7 @@ Groq/Meta مثبّتة)، قابلة للضبط عبر البيئة لاحقًا
 BILLING_ENFORCE=false        # فعّلها في الإنتاج بعد زرع الباقات
 BILLING_AUTO_TRIAL=true
 BILLING_DEFAULT_PLAN=free
+BILLING_CURRENCY=USD         # عملة أسعار الباقات الافتراضية (الأسعار تُدار من اللوحة)
 # BILLING_UPGRADE_URL=       # رابط ترقية (لاحقًا)
 BILLING_COST_CURRENCY=USD
 COST_AI_REPLY=0  COST_AI_INPUT_PER_1K=0  COST_AI_OUTPUT_PER_1K=0  COST_WA_INBOUND=0  COST_WA_OUTBOUND=0
