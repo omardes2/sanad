@@ -20,11 +20,14 @@ class UsageEvent extends Model
     protected $fillable = [
         'user_id',
         'type',
+        'idempotency_key',
         'provider',
         'model',
         'input_units',
         'output_units',
+        'quantity',
         'cost',
+        'currency',
         'metadata',
     ];
 
@@ -36,6 +39,7 @@ class UsageEvent extends Model
         return [
             'input_units' => 'integer',
             'output_units' => 'integer',
+            'quantity' => 'integer',
             'cost' => 'decimal:6',
             'metadata' => 'array',
         ];

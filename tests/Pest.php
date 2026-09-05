@@ -47,13 +47,62 @@ expect()->extend('toBeOne', function () {
 use App\Data\InboundMessageData;
 use App\Enums\ChannelType;
 use App\Enums\MessageType;
+use App\Enums\SubscriptionStatus;
 use App\Enums\WebhookEventStatus;
 use App\Jobs\ProcessInboundMessage;
 use App\Jobs\ProcessWhatsAppWebhook;
 use App\Models\ChannelAccount;
+use App\Models\Plan;
+use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
 use Illuminate\Testing\TestResponse;
+
+/**
+ * Create a plan with an AI-reply limit config.
+ *
+ * @param  array{daily: ?int, monthly: ?int, weight?: int}  $aiLimit
+ * @param  array<string, mixed>  $attrs
+ */
+function billingPlan(array $aiLimit = ['daily' => 5, 'monthly' => 50, 'weight' => 1], array $attrs = []): Plan
+{
+    return Plan::create(array_merge([
+        'name' => 'Test Plan',
+        'slug' => 'test-'.str()->random(8),
+        'price' => 0,
+        'currency' => 'ILS',
+        'billing_period' => 'monthly',
+        'trial_days' => 0,
+        'limits' => ['ai_reply' => $aiLimit],
+        'features' => [],
+        'is_active' => true,
+        'is_default' => false,
+        'sort_order' => 0,
+    ], $attrs));
+}
+
+/**
+ * Create a non-admin subscriber, optionally with an active subscription on $plan.
+ *
+ * @param  array<string, mixed>  $subAttrs
+ */
+function billingSubscriber(?Plan $plan = null, array $subAttrs = []): User
+{
+    $user = User::factory()->create(['is_admin' => false]);
+
+    if ($plan !== null) {
+        Subscription::create(array_merge([
+            'subscriber_id' => $user->id,
+            'plan_id' => $plan->id,
+            'status' => SubscriptionStatus::Active,
+            'started_at' => now(),
+            'current_period_start' => now(),
+            'current_period_end' => now()->addMonth(),
+        ], $subAttrs));
+    }
+
+    return $user->refresh();
+}
 
 /**
  * Create a demo user with a Web channel account for pipeline tests.
