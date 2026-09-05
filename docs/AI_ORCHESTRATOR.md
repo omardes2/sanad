@@ -106,18 +106,24 @@ GROQ_MODEL=llama-3.3-70b-versatile
 > وضع الاختبار/التطوير الافتراضي.
 
 ## كيف يختار الـRouter؟
-`SanadAiRouter` يطلب مرشّحي العملية من `CatalogSource` (إن كان `ai.catalog` فارغًا يُستنتج
-من `ai.providers`: إدخال واحد لكل مزوّد له نموذج)، ثم يرتّب: **المزوّد المفضّل أولًا** ← الأولوية
-← ويتخطّى أي مرشّح **معطّلًا** أو مزوّده **غير معروف** أو **غير مهيّأ** (بلا مفتاح) أو **لا يدعم
-العملية**. لا مرشّح ⇒ `AiConfigurationException::noRoute` ⇒ الرسالة المؤقتة (بلا اتصال).
+`SanadAiRouter` يطلب مرشّحي العملية من `CatalogSource` — وهو منذ Phase B2 `CatalogSourceResolver`:
+بحسب `AI_CATALOG_SOURCE` (`auto` افتراضيًا) يقرأ **كتالوج قاعدة البيانات** (`ai_providers`/`ai_models`)
+إن كان فيه نموذج مفعّل، وإلا **كتالوج الإعدادات** (إن كان `ai.catalog` فارغًا يُستنتج من `ai.providers`:
+إدخال واحد لكل مزوّد له نموذج). ثم يرتّب: **المزوّد المفضّل `AI_PROVIDER` أولًا** ← الأولوية ← ويتخطّى
+أي مرشّح **معطّلًا** أو مزوّده **غير معروف** أو **غير مهيّأ** (بلا مفتاح) أو **لا يدعم العملية** أو
+(guardrail اختياري) **تقديره المعروف يتجاوز `maxUnitCost`**. الـfallback المعلن للنموذج المختار يوضع
+أول البدائل. لا مرشّح ⇒ `AiConfigurationException::noRoute` ⇒ الرسالة المؤقتة (بلا اتصال).
 مثال: `AI_PROVIDER=openai` بلا `OPENAI_API_KEY` وبمفتاح Groq ⇒ يمرّ إلى Groq تلقائيًا.
+`ai_providers.is_primary` مخزّن ولا يُقرأ قبل Phase C. أوامر التشخيص والإدارة: `sanad:ai:catalog`،
+`sanad:ai:bootstrap` (dry-run افتراضيًا)، `sanad:ai:price` — انظر [PHASE_B2_PLAN.md](PHASE_B2_PLAN.md).
 
 ## إضافة مزوّد جديد (Gemini / Ollama / …)
 1. أنشئ صنفًا ينفّذ عقود القدرات المناسبة (`SupportsChat` …) — إن كان OpenAI-compatible
    فيكفي أن يرث `OpenAICompatibleChatProvider`.
 2. أضف `case` في `AiManager::provider()` وكتلة إعداد في `config/ai.php`.
-3. اضبط المفاتيح في البيئة؛ يظهر في الكتالوج تلقائيًا (أو أدرجه في `ai.catalog`).
-   لاحقًا: يُدار كله من Sanad Admin (DB-backed).
+3. اضبط المفاتيح في البيئة؛ يظهر في كتالوج الإعدادات تلقائيًا (أو أدرجه في `ai.catalog`)،
+   وفي كتالوج قاعدة البيانات عبر `sanad:ai:bootstrap --model=provider:model --apply`.
+   لاحقًا: يُدار كله من Sanad Admin (Phase C).
 
 > Gemini: ثبّت **نموذجًا حاليًا غير مهمَل** عبر `GEMINI_MODEL` (لا تستخدم نموذجًا قديمًا).
 > Ollama: محلي/خاص، بلا مفتاح — الأنسب للخصوصية الكاملة.

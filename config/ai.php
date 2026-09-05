@@ -156,4 +156,33 @@ return [
     | hard-code a single model in application code.
     */
     'catalog' => [],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Catalog source (Phase B2)
+    |--------------------------------------------------------------------------
+    | Which catalog the router reads:
+    |   auto     — the database catalog (ai_providers/ai_models) when it has at
+    |              least one enabled model, otherwise the config catalog above.
+    |              With empty tables this routes exactly as before.
+    |   database — always the database catalog.
+    |   config   — always the config catalog (instant rollback switch).
+    | The preferred provider stays AI_PROVIDER in every mode until Phase C.
+    */
+    'catalog_source' => env('AI_CATALOG_SOURCE', 'auto'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Cost guardrails (FOUNDATION ONLY — off by default)
+    |--------------------------------------------------------------------------
+    | max_cost_per_request: when set, the router skips a model whose KNOWN
+    | estimated cost per request (from its current database price and the
+    | typical request size below) exceeds it. Null = no constraint. Models
+    | without a known price are never skipped by the guardrail.
+    */
+    'guardrails' => [
+        'max_cost_per_request' => env('AI_MAX_COST_PER_REQUEST') !== null ? (float) env('AI_MAX_COST_PER_REQUEST') : null,
+        'estimate_input_tokens' => (int) env('AI_ESTIMATE_INPUT_TOKENS', 1000),
+        'estimate_output_tokens' => (int) env('AI_ESTIMATE_OUTPUT_TOKENS', 300),
+    ],
 ];

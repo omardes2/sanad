@@ -16,11 +16,16 @@ uses(RefreshDatabase::class);
  * columns back-filled by the migration itself (no separate command).
  */
 it('back-fills derived ledger columns for rows that pre-date the ledger and stays reversible', function () {
-    // Undo the two B1 migrations (usage_charges, then the ledger extension).
-    Artisan::call('migrate:rollback', ['--step' => 2, '--force' => true]);
+    // Undo the four B2 migrations (pricing refs, model_prices, ai_models,
+    // ai_providers) and then the two B1 migrations (usage_charges, ledger).
+    Artisan::call('migrate:rollback', ['--step' => 6, '--force' => true]);
 
     expect(Schema::hasColumn('usage_events', 'total_cost'))->toBeFalse()
-        ->and(Schema::hasTable('usage_charges'))->toBeFalse();
+        ->and(Schema::hasColumn('usage_events', 'cost_source'))->toBeFalse()
+        ->and(Schema::hasTable('usage_charges'))->toBeFalse()
+        ->and(Schema::hasTable('model_prices'))->toBeFalse()
+        ->and(Schema::hasTable('ai_models'))->toBeFalse()
+        ->and(Schema::hasTable('ai_providers'))->toBeFalse();
 
     $owner = User::factory()->create();
 
@@ -54,5 +59,13 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
         ->and($row->outcome)->toBeNull() // unknown — never assumed succeeded
         ->and((int) $row->subscriber_id)->toBe($owner->id) // attribution snapshot back-filled
         ->and($row->subscription_id)->toBeNull()
-        ->and(Schema::hasTable('usage_charges'))->toBeTrue();
+        // B2 pricing refs stay unknown for legacy rows — never back-filled or guessed.
+        ->and($row->ai_model_id)->toBeNull()
+        ->and($row->model_price_id)->toBeNull()
+        ->and($row->pricing_snapshot)->toBeNull()
+        ->and($row->cost_source)->toBeNull()
+        ->and(Schema::hasTable('usage_charges'))->toBeTrue()
+        ->and(Schema::hasTable('ai_providers'))->toBeTrue()
+        ->and(Schema::hasTable('ai_models'))->toBeTrue()
+        ->and(Schema::hasTable('model_prices'))->toBeTrue();
 });

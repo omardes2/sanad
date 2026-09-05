@@ -6,9 +6,9 @@ namespace App\Services\Billing;
 
 use App\Data\Billing\RecordResult;
 use App\Data\Billing\UsageRecord;
-use App\Enums\UsageDimension;
 use App\Models\Subscription;
 use App\Models\UsageEvent;
+use App\Services\Billing\Pricing\CostCalculator;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
@@ -27,30 +27,22 @@ use Illuminate\Support\Facades\DB;
  * is recorded as its own row.
  *
  * Costs are computed at write time and stored on the row (immutable history).
- * In Phase B1 the configurable UsageCostCalculator supplies the provider
- * component; database-backed historical pricing replaces it in B2 without
- * changing this class's contract.
+ * Since Phase B2 the CostCalculator prices AI usage with the historical model
+ * price in force at occurred_at (model_price_id + pricing_snapshot), keeps the
+ * B1 configurable rates for WhatsApp / as a legacy fallback, and marks rows it
+ * cannot price as UNPRICED (cost_source none / currency_mismatch) instead of
+ * pretending they were free. Nothing ever recomputes a stored cost.
  */
 class UsageRecorder
 {
-    public function __construct(private readonly UsageCostCalculator $costs) {}
+    public function __construct(private readonly CostCalculator $costs) {}
 
     public function record(UsageRecord $record): RecordResult
     {
         $now = CarbonImmutable::now();
         $occurredAt = $record->occurredAt ?? $now;
         $subscription = $this->subscriptionSnapshot($record);
-        $cost = $this->costs->cost($record->dimension, $record->quantity, $record->inputUnits, $record->outputUnits);
-
-        // Attribute the (configurable) service cost to the right component by
-        // dimension: WhatsApp dimensions are communication cost, everything
-        // else is provider cost. External APIs get their own component later.
-        $serviceCost = round((float) $cost['cost'], 6);
-        $isCommunication = in_array($record->dimension, [UsageDimension::WhatsAppInbound, UsageDimension::WhatsAppOutbound], true);
-        $providerCost = $isCommunication ? 0.0 : $serviceCost;
-        $communicationCost = $isCommunication ? $serviceCost : 0.0;
-        $externalCost = 0.0;
-        $totalCost = round($providerCost + $communicationCost + $externalCost, 6);
+        $cost = $this->costs->calculate($record, $occurredAt);
 
         $row = [
             'user_id' => $record->subscriber->id,
@@ -66,17 +58,21 @@ class UsageRecorder
             'correlation_id' => $record->correlationId,
             'provider' => $record->provider,
             'model' => $record->model,
+            'ai_model_id' => $cost->aiModelId,
+            'model_price_id' => $cost->modelPriceId,
             'input_units' => $record->inputUnits,
             'output_units' => $record->outputUnits,
             'cached_units' => $record->cachedUnits,
             'quantity' => $record->quantity,
             'duration_ms' => $record->durationMs,
-            'cost' => $totalCost, // compatibility mirror of total_cost
-            'provider_cost' => $providerCost,
-            'communication_cost' => $communicationCost,
-            'external_cost' => $externalCost,
-            'total_cost' => $totalCost,
-            'currency' => $cost['currency'],
+            'cost' => $cost->totalCost, // compatibility mirror of total_cost
+            'provider_cost' => $cost->providerCost,
+            'communication_cost' => $cost->communicationCost,
+            'external_cost' => $cost->externalCost,
+            'total_cost' => $cost->totalCost,
+            'pricing_snapshot' => $cost->snapshot !== null ? json_encode($cost->snapshot, JSON_UNESCAPED_UNICODE) : null,
+            'cost_source' => $cost->source->value,
+            'currency' => $cost->currency,
             'metadata' => $record->metadata !== [] ? json_encode($record->metadata, JSON_UNESCAPED_UNICODE) : null,
             'occurred_at' => $occurredAt->toDateTimeString(),
             'job_ref' => $record->jobRef,

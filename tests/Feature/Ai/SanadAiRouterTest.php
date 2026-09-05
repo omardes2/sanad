@@ -6,6 +6,7 @@ use App\Contracts\Ai\CatalogSource;
 use App\Data\Ai\Catalog\RoutingContext;
 use App\Enums\AiOperation;
 use App\Exceptions\Ai\AiConfigurationException;
+use App\Services\Ai\Catalog\CatalogSourceResolver;
 use App\Services\Ai\Catalog\ConfigCatalogSource;
 use App\Services\Ai\SanadAiRouter;
 
@@ -92,6 +93,10 @@ it('throws a configuration error when no provider can serve the operation', func
         ->toThrow(AiConfigurationException::class);
 });
 
-it('is bound to the config-backed catalog source by default', function () {
-    expect(app(CatalogSource::class))->toBeInstanceOf(ConfigCatalogSource::class);
+it('is bound to the catalog resolver, which serves the config-backed catalog while the database catalog is empty', function () {
+    $source = app(CatalogSource::class);
+
+    expect($source)->toBeInstanceOf(CatalogSourceResolver::class)
+        ->and($source->mode())->toBe('auto')
+        ->and($source->activeName())->toBe('config');
 });
