@@ -12,7 +12,10 @@
         ['route' => 'dashboard.subscribers', 'label' => 'المشتركون', 'icon' => '👥'],
         ['route' => 'dashboard.plans', 'label' => 'الباقات', 'icon' => '🏷️'],
         ['route' => 'dashboard.whatsapp', 'label' => 'حالة واتساب', 'icon' => '🟢'],
+        // Strict-RBAC page: shown only to accounts holding the permission.
+        ['route' => 'dashboard.audit', 'label' => 'سجل التدقيق', 'icon' => '🧾', 'can' => 'audit.view'],
     ];
+    $nav = array_values(array_filter($nav, fn (array $item) => ! isset($item['can']) || (auth()->user()?->can($item['can']) ?? false)));
 @endphp
 <html lang="{{ str_replace('_', '-', $locale) }}" dir="{{ $dir }}">
 <head>

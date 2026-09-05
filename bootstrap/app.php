@@ -1,11 +1,15 @@
 <?php
 
+use App\Http\Middleware\EnsureLegacyAdminOrPermission;
 use App\Http\Middleware\EnsureUserIsAdmin;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use Spatie\Permission\Middleware\PermissionMiddleware;
+use Spatie\Permission\Middleware\RoleMiddleware;
+use Spatie\Permission\Middleware\RoleOrPermissionMiddleware;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -24,6 +28,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // the admin flag.
         $middleware->alias([
             'admin' => EnsureUserIsAdmin::class,
+            // Legacy is_admin OR permission — only for pages that pre-date RBAC.
+            'permission.legacy' => EnsureLegacyAdminOrPermission::class,
+            // Strict RBAC gates (spatie) for pages introduced with/after Phase C0.
+            'role' => RoleMiddleware::class,
+            'permission' => PermissionMiddleware::class,
+            'role_or_permission' => RoleOrPermissionMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

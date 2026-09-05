@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Http\Controllers\Auth\LogoutController;
 use App\Http\Middleware\EnsureDevEnvironment;
 use App\Livewire\Auth\Login;
+use App\Livewire\Dashboard\AuditLogs;
 use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Messages;
@@ -45,10 +46,14 @@ Route::middleware(['auth', 'admin'])
         Route::get('/expenses', Expenses::class)->name('dashboard.expenses');
         Route::get('/whatsapp', WhatsAppStatus::class)->name('dashboard.whatsapp');
 
-        // Subscriptions, plans & usage.
-        Route::get('/plans', Plans::class)->name('dashboard.plans');
-        Route::get('/subscribers', Subscribers::class)->name('dashboard.subscribers');
-        Route::get('/subscribers/{subscriber}', SubscriberDetail::class)->name('dashboard.subscribers.show');
+        // Subscriptions, plans & usage. These pages pre-date RBAC: a legacy
+        // is_admin account keeps them, role accounts need the permission.
+        Route::get('/plans', Plans::class)->middleware('permission.legacy:plans.manage')->name('dashboard.plans');
+        Route::get('/subscribers', Subscribers::class)->middleware('permission.legacy:subscribers.view')->name('dashboard.subscribers');
+        Route::get('/subscribers/{subscriber}', SubscriberDetail::class)->middleware('permission.legacy:subscribers.view')->name('dashboard.subscribers.show');
+
+        // Audit trail (Phase C0): strict RBAC — no legacy bypass, fail closed.
+        Route::get('/audit', AuditLogs::class)->middleware('permission:audit.view')->name('dashboard.audit');
     });
 
 // Local chat simulator — 404 outside local/testing (see EnsureDevEnvironment).

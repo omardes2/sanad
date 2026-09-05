@@ -56,6 +56,8 @@ use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
+use App\Services\Rbac\RbacSynchronizer;
+use App\Support\Rbac\Role;
 use Illuminate\Testing\TestResponse;
 
 /**
@@ -326,4 +328,30 @@ function whatsappAccount(string $e164 = '+970599000001'): ChannelAccount
         'channel' => ChannelType::WhatsApp,
         'external_identifier' => $e164,
     ]);
+}
+
+// ---- RBAC (Phase C0) --------------------------------------------------------
+
+/**
+ * Sync roles/permissions from the code registry into the test database (what
+ * `sanad:rbac:bootstrap --apply` does), without promoting anyone.
+ */
+function rbacSync(): void
+{
+    $rbac = app(RbacSynchronizer::class);
+    $rbac->apply($rbac->plan());
+}
+
+/**
+ * A dashboard account holding exactly one role (is_admin stays false so the
+ * role, not the legacy flag, is what grants access).
+ */
+function userWithRole(Role $role, array $attrs = []): User
+{
+    rbacSync();
+
+    $user = User::factory()->create(array_merge(['is_admin' => false], $attrs));
+    $user->assignRole($role->value);
+
+    return $user->fresh();
 }
