@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Billing;
 
 use App\Data\Billing\Entitlement;
+use App\Enums\PlanFeature;
 use App\Enums\SubscriptionStatus;
 use App\Enums\UsageDimension;
 use App\Models\Plan;
@@ -100,6 +101,29 @@ class SubscriptionService
             monthlyLimit: $limit['monthly'],
             weight: $limit['weight'],
         );
+    }
+
+    /**
+     * Whether a non-metered capability is available to the subscriber under
+     * their current plan. Channel-agnostic and enforcement-independent: a
+     * subscriber with no entitled plan gets nothing.
+     *
+     * Enforcement note: like entitlement(), this only reports the plan's
+     * entitlement. When billing.enforce is off, callers may choose to ignore it
+     * (the app behaves as before); when on, gate the capability on this.
+     */
+    public function hasFeature(User $subscriber, PlanFeature $feature): bool
+    {
+        return $this->currentPlan($subscriber)?->hasFeature($feature) ?? false;
+    }
+
+    /**
+     * The exact feature value (tier or boolean) under the subscriber's current
+     * plan, or the feature's own default when they have no entitled plan.
+     */
+    public function featureValue(User $subscriber, PlanFeature $feature): bool|string
+    {
+        return $this->currentPlan($subscriber)?->featureValue($feature) ?? $feature->default();
     }
 
     public function defaultPlan(): ?Plan

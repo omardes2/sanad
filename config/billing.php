@@ -28,6 +28,16 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Plan pricing currency (display + storage default)
+    |--------------------------------------------------------------------------
+    | The currency new plans default to (ISO 4217, e.g. USD). Prices are DATA
+    | managed from the Plans page; this only sets the default a fresh plan/seed
+    | starts with. Distinct from cost_currency (service-cost accounting) below.
+    */
+    'currency' => env('BILLING_CURRENCY', 'USD'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Subscriber-facing messages (Arabic) — separable response layer
     |--------------------------------------------------------------------------
     | Kept out of the enforcement logic so a future WhatsApp upgrade/payment

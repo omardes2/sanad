@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\BillingPeriod;
+use App\Enums\PlanFeature;
+use App\Enums\PlanFeatureType;
 use App\Enums\UsageDimension;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -74,8 +76,48 @@ class Plan extends Model
         ];
     }
 
+    /**
+     * Raw feature value by string key (escape hatch). Prefer the typed
+     * hasFeature()/featureValue() below, which are enum-driven and honour each
+     * feature's declared type and default.
+     */
     public function feature(string $key, mixed $default = null): mixed
     {
         return ($this->features ?? [])[$key] ?? $default;
+    }
+
+    /**
+     * Whether a capability is entitled under this plan.
+     *
+     * Boolean features: truthiness of the stored value.
+     * Tier features: entitled when the stored (or default) tier is not the
+     * lowest tier — use featureValue() when the exact tier matters.
+     */
+    public function hasFeature(PlanFeature $feature): bool
+    {
+        $value = $this->featureValue($feature);
+
+        if ($feature->type() === PlanFeatureType::Tier) {
+            $tiers = $feature->tiers();
+
+            return $tiers !== [] && $value !== $tiers[0];
+        }
+
+        return (bool) $value;
+    }
+
+    /**
+     * The stored value for a feature, falling back to the feature's own default
+     * when the plan does not specify it — so a NEW feature needs no data backfill.
+     */
+    public function featureValue(PlanFeature $feature): bool|string
+    {
+        $value = ($this->features ?? [])[$feature->value] ?? null;
+
+        if ($value === null) {
+            return $feature->default();
+        }
+
+        return $feature->type() === PlanFeatureType::Tier ? (string) $value : (bool) $value;
     }
 }
