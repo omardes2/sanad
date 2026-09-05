@@ -19,6 +19,12 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <!-- Emergency switches must be UNSET in tests: an .env copied from
+             .env.example would otherwise act as an environment override and
+             beat the config() values the tests set (Phase C1 precedence). -->
+        <env name="AI_ENABLED" value=""/>
+        <env name="AI_CATALOG_SOURCE" value=""/>
+        <env name="BILLING_ENFORCE" value=""/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>

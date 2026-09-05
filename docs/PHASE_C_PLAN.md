@@ -114,6 +114,8 @@
 
 **النشر:** `migrate --force` ثم `sanad:rbac:bootstrap --apply` (لإنشاء الصلاحيتين الجديدتين `settings.manage_billing` و`settings.manage_emergency` لـsuper_admin). لا تغيير في `.env` ولا `AI_PROVIDER` ولا `BILLING_ENFORCE`.
 
+**ملاحظة مهمة عن مفاتيح الطوارئ في `.env`:** أي مفتاح طوارئ موجود في `.env` (مثل `AI_ENABLED=true` في الإنتاج) هو override يتقدّم على قيمة اللوحة بحكم التصميم، وتعرضه اللوحة "مُجبَر من البيئة". لذلك `.env.example` يترك `AI_CATALOG_SOURCE` معلّقًا، و`phpunit.xml` يفرّغ `AI_ENABLED`/`AI_CATALOG_SOURCE`/`BILLING_ENFORCE` كي تبقى الاختبارات hermetic مهما احتوى `.env` المنسوخ من المثال (سبب فشل CI الأول في PR C1).
+
 ## 6) C2–C4 (مخطَّطة)
 
 - **C2:** صفحات Providers/Models/Pricing (نشر فقط عبر `PriceBook`)/Routing (محاكاة)/Usage (المعروف يُجمع، غير المسعّر يُعدّ). SSRF validator لـ`base_url` (القرار B) مع اختبارات.
