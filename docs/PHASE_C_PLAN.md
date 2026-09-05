@@ -33,7 +33,7 @@
 **RBAC foundation**
 - `App\Support\Rbac\Permission` (enum، السجل) و`Role` (enum) و`RoleMatrix` (المصفوفة، مصدر الحقيقة).
 - `HasRoles` على `User`؛ `User::canAccessDashboard()` = `is_admin` **أو** صلاحية `dashboard.access`.
-- `Gate::before`: `super_admin` يمرّ كل ability (بما فيها Policies المستقبلية).
+- `Gate::before`: **role `super_admin` فقط** يمرّ كل ability (بما فيها Policies المستقبلية). `is_admin=true` وحده لا يتجاوز أي صلاحية صارمة؛ يبقى للتوافق مع صفحات اللوحة القديمة حتى تشغيل bootstrap.
 - Middleware: `admin` (الدخول)، `permission.legacy:{perm}` (صفحات ما قبل RBAC: `is_admin` **أو** الصلاحية)، و`permission:` / `role:` / `role_or_permission:` من Spatie (صارمة، بلا bypass).
 - المسارات: Plans ← `permission.legacy:plans.manage`، Subscribers ← `permission.legacy:subscribers.view`، Audit ← `permission:audit.view` (**fail-closed**: حساب `is_admin` بلا دور لا يفتحها حتى تُمنح له).
 
@@ -42,8 +42,8 @@
 - `--apply` يكتب (تأكيد في الإنتاج أو `--force`)؛ `--promote-admins` يمنح `super_admin` **فقط** لمن `is_admin=true` وبلا أي دور؛ لا يمسّ من له دور. Idempotent ومسجَّل في Audit.
 
 **Audit**
-- `AuditLogger` (الكاتب الوحيد): `record(action, subject?, changes, context)` و`recordModelChanges(action, model)` (قبل `save()`).
-- Schema إضافي: `actor` (`user`/`console`/`system`)، `ip_address`، `user_agent`، فهرس `(action, created_at)`. الجدول append-only (`created_at` فقط).
+- `AuditLogger` (الكاتب الوحيد): `record(action, subject?, changes, context)` و`saveWithAudit(action, model)` الذي يحفظ الموديل ويكتب الـAudit **في transaction واحدة** (savepoint إن كانت مفتوحة): فشل الحفظ أو rollback ⇒ لا صف Audit. من يكتب تغييره بنفسه يستدعي `record()` داخل transaction تغييره (كما يفعل `RbacSynchronizer`).
+- Schema إضافي: `actor` (`user`/`console`/`system`)، `actor_ref` (snapshot داخلي غير شخصي: `user:{id}`/`console`/`system` يبقى بعد حذف الحساب بينما `user_id` يصبح NULL)، `ip_address`، `user_agent`، فهارس `(action, created_at)` و`actor_ref`. الجدول append-only (`created_at` فقط).
 - `metadata` = `{changes: {field: {from, to}}, context: {...}}` مُقنَّع عند الكتابة.
 - صفحة `/dashboard/audit` للقراءة فقط (مرشّحات: action, actor, from, to)، وتمرير ثانٍ للـredactor عند العرض.
 

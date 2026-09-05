@@ -103,3 +103,22 @@ it('super_admin passes any Gate ability, other roles only their permissions', fu
         ->and($support->can('usage.view_costs'))->toBeFalse()
         ->and($support->canAccessDashboard())->toBeTrue();
 });
+
+it('the Gate::before bypass is granted ONLY by the super_admin role, never by is_admin', function () {
+    rbacSync();
+    $legacy = User::factory()->create(['is_admin' => true]);
+    $legacyWithRole = User::factory()->create(['is_admin' => true]);
+    $legacyWithRole->assignRole(Role::Support->value);
+    $super = userWithRole(Role::SuperAdmin);
+
+    expect($legacy->can('audit.view'))->toBeFalse()
+        ->and($legacy->can('ai.credentials.manage'))->toBeFalse()
+        ->and($legacy->can('anything.at.all'))->toBeFalse()
+        ->and($legacy->canAccessDashboard())->toBeTrue() // legacy dashboard entry only
+        ->and($legacyWithRole->fresh()->can('audit.view'))->toBeFalse() // is_admin adds nothing on top of the role
+        ->and($legacyWithRole->fresh()->can('subscribers.manage'))->toBeTrue()
+        ->and($super->can('anything.at.all'))->toBeTrue();
+
+    // And on the wire: is_admin + a non-privileged role still cannot open the strict page.
+    $this->actingAs($legacyWithRole)->get(route('dashboard.audit'))->assertForbidden();
+});

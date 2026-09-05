@@ -51,7 +51,8 @@
                                 @if ($log->user)
                                     {{ $log->user->name }}
                                 @else
-                                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs">{{ $log->actor ?? '—' }}</span>
+                                    {{-- Account deleted or non-user actor: the immutable snapshot --}}
+                                    <span class="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-xs" dir="ltr">{{ $log->actor_ref ?? $log->actor ?? '—' }}</span>
                                 @endif
                             </td>
                             <td class="px-4 py-3 font-mono text-xs text-slate-500" dir="ltr">
