@@ -81,6 +81,7 @@ Route::middleware(['auth', 'admin'])
         // through a plain form (write-only); lifecycle in CredentialManager.
         Route::post('/ai/providers/{provider}/credentials', [ProviderCredentialController::class, 'store'])->middleware('permission:ai.credentials.manage')->name('dashboard.ai.credentials.store');
         Route::post('/ai/credentials/{credential}/activate', [ProviderCredentialController::class, 'activate'])->middleware('permission:ai.credentials.manage')->name('dashboard.ai.credentials.activate');
+        Route::post('/ai/credentials/{credential}/activate-unverified', [ProviderCredentialController::class, 'activateUnverified'])->middleware('permission:ai.credentials.manage')->name('dashboard.ai.credentials.activate_unverified');
         Route::post('/ai/credentials/{credential}/revoke', [ProviderCredentialController::class, 'revoke'])->middleware('permission:ai.credentials.manage')->name('dashboard.ai.credentials.revoke');
         Route::get('/ai/health', AiHealth::class)->middleware('permission:ai.health.view')->name('dashboard.ai.health');
 

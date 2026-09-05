@@ -4,17 +4,23 @@ declare(strict_types=1);
 
 namespace App\Services\Credentials;
 
+use App\Contracts\Ai\SupportsHealthChecks;
 use App\Enums\CredentialStatus;
+use App\Enums\HealthCheckKind;
+use App\Enums\HealthCheckStatus;
 use App\Exceptions\Ai\LastViableRouteException;
 use App\Exceptions\Ai\RoutingChangeConfirmationRequired;
 use App\Exceptions\Credentials\CredentialLifecycleException;
 use App\Exceptions\Credentials\VaultUnavailableException;
 use App\Models\AiProvider;
 use App\Models\ProviderCredential;
+use App\Models\ProviderHealthCheck;
+use App\Services\Ai\AiManager;
 use App\Services\Ai\Catalog\RoutingSimulator;
 use App\Services\Audit\AuditLogger;
 use App\Support\Audit\AuditActions;
 use App\Support\Rbac\Permission;
+use App\Support\Rbac\Role;
 use App\Support\Security\SecretString;
 use Carbon\CarbonImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -29,10 +35,21 @@ use SensitiveParameter;
  *              NO effect on the runtime; a rotation is just a create with
  *              rotated_from_id pointing at the current active row;
  *   activate → inside ONE transaction with the parent ai_providers row locked
- *              FOR UPDATE: the row must still be pending and must open with
- *              the current vault (a row that cannot be decrypted is never
- *              activated); the previous active row is revoked and the new one
- *              activated together — any failure leaves the old row active;
+ *              FOR UPDATE: the row must still be pending, must open with the
+ *              current vault, and must carry a RECENT SUCCESSFUL auth
+ *              verification (a provider_health_checks row for this very
+ *              credential, kind auth, status ok, inside the verification
+ *              window); the CURRENT active row is re-read under the lock and
+ *              must equal the one the caller saw when it decided to activate
+ *              (`expectedCurrentActiveId`) — otherwise the activation is a
+ *              stale conflict and is refused, the losing row stays pending
+ *              (never revoked, never last-writer-wins); the previous active
+ *              row is revoked and the new one activated together — any
+ *              failure leaves the old row active;
+ *   activateUnverified → the Super Admin force path for a provider whose
+ *              adapter declares NO non-billable auth probe: same lock, same
+ *              conflict check, typed confirmation, audited as forced /
+ *              unverified. Refused for adapters that do have a probe.
  *   revoke   → pending or active → revoked (append-only history). Revoking
  *              the active credential in `vault` mode when the provider has no
  *              environment key would leave it without any credential, so the
@@ -49,6 +66,7 @@ class CredentialManager
         private readonly CredentialResolver $resolver,
         private readonly RoutingSimulator $simulator,
         private readonly AuditLogger $audit,
+        private readonly AiManager $manager,
     ) {}
 
     /**
@@ -100,19 +118,95 @@ class CredentialManager
         });
     }
 
+    public const FORCE_CONFIRMATION = 'UNVERIFIED';
+
     /**
+     * Normal activation: requires a recent successful auth verification of
+     * THIS credential and the caller's view of the current active row.
+     *
+     * @param  int|null  $expectedCurrentActiveId  the active credential id the caller saw (null = none)
+     *
      * @throws AuthorizationException|CredentialLifecycleException
      */
-    public function activate(ProviderCredential $credential): ProviderCredential
+    public function activate(ProviderCredential $credential, ?int $expectedCurrentActiveId): ProviderCredential
     {
         $this->authorize();
 
-        return DB::transaction(function () use ($credential): ProviderCredential {
+        return $this->transition($credential, $expectedCurrentActiveId, forced: false, confirmation: null);
+    }
+
+    /**
+     * Super Admin force path for a provider WITHOUT a non-billable auth probe
+     * (nothing can verify the credential for free). Typed confirmation,
+     * audited as forced/unverified. Refused when the adapter has a probe —
+     * OpenAI/Groq always go through the normal path.
+     *
+     * @throws AuthorizationException|CredentialLifecycleException
+     */
+    public function activateUnverified(ProviderCredential $credential, ?int $expectedCurrentActiveId, ?string $confirmation): ProviderCredential
+    {
+        $this->authorize();
+
+        if (! (Auth::user()?->hasRole(Role::SuperAdmin->value) ?? app()->runningInConsole())) {
+            throw new AuthorizationException('Forced activation is reserved to super_admin.');
+        }
+
+        if (trim((string) $confirmation) !== self::FORCE_CONFIRMATION) {
+            throw new CredentialLifecycleException('التفعيل بلا تحقق يتطلب كتابة «'.self::FORCE_CONFIRMATION.'».');
+        }
+
+        return $this->transition($credential, $expectedCurrentActiveId, forced: true, confirmation: $confirmation);
+    }
+
+    /**
+     * Whether a credential currently satisfies the verification rule.
+     */
+    public function isVerified(ProviderCredential $credential): bool
+    {
+        return $this->latestVerification($credential) !== null;
+    }
+
+    public function latestVerification(ProviderCredential $credential): ?ProviderHealthCheck
+    {
+        return ProviderHealthCheck::query()
+            ->where('credential_id', $credential->id)
+            ->where('kind', HealthCheckKind::Auth->value)
+            ->where('status', HealthCheckStatus::Ok->value)
+            ->where('checked_at', '>=', CarbonImmutable::now()->subMinutes(self::verificationWindowMinutes()))
+            ->orderByDesc('checked_at')
+            ->first();
+    }
+
+    public static function verificationWindowMinutes(): int
+    {
+        return max(1, (int) config('ai.health.verification_window_minutes', 1440));
+    }
+
+    /**
+     * @throws CredentialLifecycleException
+     */
+    private function transition(ProviderCredential $credential, ?int $expectedCurrentActiveId, bool $forced, ?string $confirmation): ProviderCredential
+    {
+        return DB::transaction(function () use ($credential, $expectedCurrentActiveId, $forced): ProviderCredential {
             $provider = AiProvider::query()->whereKey($credential->provider_id)->lockForUpdate()->firstOrFail();
             $locked = ProviderCredential::query()->whereKey($credential->id)->firstOrFail();
 
             if (! $locked->isPending()) {
                 throw new CredentialLifecycleException("المفتاح [{$locked->fingerprint}] ليس قيد الانتظار (حالته: {$locked->status->label()}).");
+            }
+
+            // Re-read the CURRENT active row under the lock: it must be the one
+            // the caller decided against. A concurrent activation that already
+            // won makes this one stale — refused, the row stays pending.
+            $previous = $this->activeOf($provider);
+
+            if (($previous?->id) !== $expectedCurrentActiveId) {
+                throw new CredentialLifecycleException(sprintf(
+                    'تعارض: المفتاح الفعّال تغيّر منذ فتح الصفحة (المتوقع %s، الحالي %s). أعد تحميل الصفحة وراجع ثم أعد المحاولة؛ المفتاح [%s] ما زال قيد الانتظار.',
+                    $expectedCurrentActiveId === null ? 'لا شيء' : '#'.$expectedCurrentActiveId,
+                    $previous === null ? 'لا شيء' : '#'.$previous->id,
+                    $locked->fingerprint,
+                ));
             }
 
             $outcome = $this->vault->open($locked, $provider->key);
@@ -121,25 +215,49 @@ class CredentialManager
                 throw new CredentialLifecycleException("لا يمكن تفعيل المفتاح [{$locked->fingerprint}]: تعذّر فتحه بالخزنة الحالية ({$outcome->failure}).");
             }
 
-            $previous = $this->activeOf($provider);
+            $verification = $this->latestVerification($locked);
+
+            if ($forced) {
+                if ($this->supportsAuthProbe($provider)) {
+                    throw new CredentialLifecycleException("المزوّد [{$provider->key}] يدعم فحص مصادقة غير مفوتر: استخدم المسار العادي (اختبار ثم تفعيل).");
+                }
+            } elseif ($verification === null) {
+                throw new CredentialLifecycleException("لا يمكن تفعيل المفتاح [{$locked->fingerprint}]: لا يوجد فحص مصادقة ناجح له خلال آخر ".self::verificationWindowMinutes().' دقيقة. اختبره أولًا.');
+            }
+
             $now = CarbonImmutable::now();
 
             if ($previous !== null) {
                 $previous->forceFill(['status' => CredentialStatus::Revoked, 'revoked_at' => $now, 'revoked_by_ref' => $this->actorRef()])->save();
             }
 
-            $locked->forceFill(['status' => CredentialStatus::Active, 'activated_at' => $now, 'last_verified_at' => $now])->save();
+            $locked->forceFill(['status' => CredentialStatus::Active, 'activated_at' => $now, 'last_verified_at' => $verification?->checked_at ?? $locked->last_verified_at])->save();
 
-            $this->audit->record(AuditActions::AiCredentialActivated, $locked, [
+            $this->audit->record($forced ? AuditActions::AiCredentialActivatedUnverified : AuditActions::AiCredentialActivated, $locked, [
                 'active_fingerprint' => ['from' => $previous?->fingerprint, 'to' => $locked->fingerprint],
             ], [
                 'provider' => $provider->key,
                 'revoked_previous_id' => $previous?->id,
+                'expected_current_active_id' => $expectedCurrentActiveId,
+                'verified' => $verification !== null,
+                'verification_check_id' => $verification?->id,
+                'forced' => $forced,
                 'credentials_mode' => $this->resolver->mode(),
             ]);
 
             return $locked;
         });
+    }
+
+    private function supportsAuthProbe(AiProvider $provider): bool
+    {
+        if (! $this->manager->has($provider->key)) {
+            return false;
+        }
+
+        $adapter = $this->manager->providerWith($provider->key, ['base_url' => 'https://unused.invalid', 'api_key' => null]);
+
+        return $adapter instanceof SupportsHealthChecks && $adapter->healthCapabilities()->nonBillableAuthProbe;
     }
 
     /**

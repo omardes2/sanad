@@ -368,7 +368,10 @@ function settings(): SettingsRepository
 
 use App\Models\AiModel;
 use App\Models\AiProvider;
+use App\Models\ProviderCredential;
+use App\Models\ProviderHealthCheck;
 use App\Services\Ai\Catalog\CatalogCache;
+use Carbon\CarbonImmutable;
 
 /**
  * A fresh CREDENTIALS_KEY value (base64 of 32 random bytes).
@@ -417,4 +420,17 @@ function c3Catalog(): array
     CatalogCache::flush();
 
     return compact('groq', 'openai', 'llama', 'mini');
+}
+
+/**
+ * Record a successful auth verification for a credential (what a passing
+ * Test Connection on that row writes), so the normal activation path is open.
+ */
+function c3Verify(ProviderCredential $credential, string $status = 'ok', ?CarbonImmutable $at = null): ProviderHealthCheck
+{
+    return ProviderHealthCheck::query()->create([
+        'provider_id' => $credential->provider_id, 'kind' => 'auth', 'trigger' => 'manual', 'status' => $status,
+        'credential_id' => $credential->id, 'credential_source' => 'vault', 'checked_by_ref' => 'user:test',
+        'checked_at' => $at ?? CarbonImmutable::now(),
+    ]);
 }

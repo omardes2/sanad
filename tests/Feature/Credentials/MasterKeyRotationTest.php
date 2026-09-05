@@ -22,7 +22,8 @@ it('re-encrypts rows sealed by a previous master key in place (same secret, new 
     $keyA = c3VaultOn();
     $manager = app(CredentialManager::class);
     $a1 = $manager->create($fx['groq'], new SecretString('gsk_ROT_A1_1111'));
-    $manager->activate($a1);
+    c3Verify($a1);
+    $manager->activate($a1, null);
     $a2 = $manager->create($fx['openai'], new SecretString('sk-ROT_A2_2222'));
     $kidA = $a1->key_id;
 

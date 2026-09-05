@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Enums\CredentialStatus;
 use App\Livewire\Dashboard\Ai\Health as HealthPage;
+use App\Livewire\Dashboard\Ai\Providers;
 use App\Livewire\Dashboard\Ai\Providers as ProvidersPage;
 use App\Models\AuditLog;
 use App\Models\ProviderCredential;
@@ -87,8 +88,25 @@ it('activate and revoke through the forms; revoke needs the typed provider key',
     $this->actingAs($super);
     $row = app(CredentialManager::class)->create($groq, new SecretString('gsk_FORM_4321'));
 
-    $this->post(route('dashboard.ai.credentials.activate', $row))->assertRedirect()->assertSessionHas('credential_status');
+    // Unverified → refused with a message; the page shows no activate button, only the hint.
+    $this->post(route('dashboard.ai.credentials.activate', $row), ['expected_active_id' => ''])->assertRedirect()->assertSessionHas('credential_error');
+    expect($row->fresh()->status)->toBe(CredentialStatus::Pending);
+    Livewire::actingAs($super)->test(Providers::class, ['open' => $groq->id])->assertSee('يحتاج فحص مصادقة')->assertDontSee('name="expected_active_id"', false);
+
+    c3Verify($row);
+    Livewire::actingAs($super)->test(Providers::class, ['open' => $groq->id])->assertSee('name="expected_active_id"', false)->assertDontSee('قسري');
+
+    // Stale expectation (someone else activated something meanwhile) → refused.
+    $this->post(route('dashboard.ai.credentials.activate', $row), ['expected_active_id' => 999])->assertRedirect()->assertSessionHas('credential_error');
+    expect($row->fresh()->status)->toBe(CredentialStatus::Pending);
+
+    $this->post(route('dashboard.ai.credentials.activate', $row), ['expected_active_id' => ''])->assertRedirect()->assertSessionHas('credential_status');
     expect($row->fresh()->status)->toBe(CredentialStatus::Active);
+
+    // The forced route is refused for groq (it has a non-billable probe).
+    $forced = app(CredentialManager::class)->create($groq, new SecretString('gsk_FORM_1111'));
+    $this->post(route('dashboard.ai.credentials.activate_unverified', $forced), ['expected_active_id' => $row->id, 'confirmation' => 'UNVERIFIED'])->assertRedirect()->assertSessionHas('credential_error');
+    expect($forced->fresh()->status)->toBe(CredentialStatus::Pending);
 
     $this->post(route('dashboard.ai.credentials.revoke', $row), ['confirmation' => 'nope'])->assertRedirect()->assertSessionHas('credential_error');
     expect($row->fresh()->status)->toBe(CredentialStatus::Active);
@@ -98,7 +116,8 @@ it('activate and revoke through the forms; revoke needs the typed provider key',
 
     // Operations cannot activate even when they know the URL.
     $pending = app(CredentialManager::class)->create($groq, new SecretString('gsk_FORM_8765'));
-    $this->actingAs(userWithRole(Role::Operations))->post(route('dashboard.ai.credentials.activate', $pending))->assertForbidden();
+    $this->actingAs(userWithRole(Role::Operations))->post(route('dashboard.ai.credentials.activate', $pending), ['expected_active_id' => ''])->assertForbidden();
+    $this->actingAs(userWithRole(Role::Operations))->post(route('dashboard.ai.credentials.activate_unverified', $pending), ['expected_active_id' => '', 'confirmation' => 'UNVERIFIED'])->assertForbidden();
     expect($pending->fresh()->status)->toBe(CredentialStatus::Pending);
 });
 

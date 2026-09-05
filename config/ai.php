@@ -61,6 +61,9 @@ return [
         'timeout' => 10,
         'retention_days' => 90,
         'manual_per_minute' => 6,
+        // A pending credential may be activated only with a successful auth
+        // probe of ITS OWN row inside this window (minutes).
+        'verification_window_minutes' => 1440,
     ],
 
     // PREFERRED provider key (see the "providers" map below). The router ranks

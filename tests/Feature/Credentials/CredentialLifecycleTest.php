@@ -9,8 +9,12 @@ use App\Exceptions\Ai\LastViableRouteException;
 use App\Exceptions\Ai\RoutingChangeConfirmationRequired;
 use App\Exceptions\Credentials\CredentialLifecycleException;
 use App\Exceptions\Credentials\VaultUnavailableException;
+use App\Models\AiProvider;
 use App\Models\AuditLog;
 use App\Models\ProviderCredential;
+use App\Models\ProviderHealthCheck;
+use App\Providers\Ai\OpenAICompatibleChatProvider;
+use App\Services\Ai\AiManager;
 use App\Services\Ai\Catalog\CatalogCache;
 use App\Services\Ai\Catalog\RoutingSimulator;
 use App\Services\Ai\Health\ProviderHealthService;
@@ -60,7 +64,7 @@ it('create → pending has no runtime effect; test connection on the pending row
         ->and($check->details['catalog_models_known'])->toBe(['llama-3.3-70b-versatile'])
         ->and($first->fresh()->last_verified_at)->not->toBeNull();
 
-    $this->manager->activate($first);
+    $this->manager->activate($first, null);
     expect($first->fresh()->status)->toBe(CredentialStatus::Active)
         ->and(app(CredentialResolver::class)->resolve('groq')->secret?->reveal())->toBe('gsk_FIRST_SECRET_1111');
 
@@ -69,7 +73,8 @@ it('create → pending has no runtime effect; test connection on the pending row
     expect($second->rotated_from_id)->toBe($first->id)
         ->and(app(CredentialResolver::class)->resolve('groq')->secret?->reveal())->toBe('gsk_FIRST_SECRET_1111');
 
-    $this->manager->activate($second);
+    c3Verify($second);
+    $this->manager->activate($second, $first->id);
 
     expect($second->fresh()->status)->toBe(CredentialStatus::Active)
         ->and($first->fresh()->status)->toBe(CredentialStatus::Revoked)
@@ -79,7 +84,93 @@ it('create → pending has no runtime effect; test connection on the pending row
 
     $activated = AuditLog::where('action', AuditActions::AiCredentialActivated)->latest('id')->firstOrFail();
     expect($activated->changes()['active_fingerprint'])->toBe(['from' => $first->fingerprint, 'to' => $second->fingerprint])
-        ->and($activated->context()['revoked_previous_id'])->toBe($first->id);
+        ->and($activated->context()['revoked_previous_id'])->toBe($first->id)
+        ->and($activated->context()['verified'])->toBeTrue()
+        ->and($activated->context()['forced'])->toBeFalse()
+        ->and($activated->context()['expected_current_active_id'])->toBe($first->id);
+});
+
+it('activation requires a recent SUCCESSFUL auth verification of the same credential; unverified, failed, stale or foreign verifications are refused', function () {
+    $groq = $this->fx['groq'];
+    $row = $this->manager->create($groq, new SecretString('gsk_VERIFY_ME_4444'));
+    $other = $this->manager->create($groq, new SecretString('gsk_OTHER_ROW_5555'));
+
+    // Nothing verified yet.
+    expect(fn () => $this->manager->activate($row, null))->toThrow(CredentialLifecycleException::class, 'فحص مصادقة ناجح');
+
+    // A FAILED probe does not count; a probe of ANOTHER row does not count; a stale probe does not count.
+    c3Verify($row, 'failed');
+    c3Verify($other, 'ok');
+    c3Verify($row, 'ok', now()->subMinutes(CredentialManager::verificationWindowMinutes() + 5)->toImmutable());
+    expect(fn () => $this->manager->activate($row, null))->toThrow(CredentialLifecycleException::class)
+        ->and($row->fresh()->status)->toBe(CredentialStatus::Pending);
+
+    // A connectivity probe is not an auth verification either.
+    ProviderHealthCheck::query()->create(['provider_id' => $groq->id, 'kind' => 'connectivity', 'trigger' => 'manual', 'status' => 'ok', 'credential_id' => $row->id, 'credential_source' => 'vault', 'checked_at' => now()]);
+    expect(fn () => $this->manager->activate($row, null))->toThrow(CredentialLifecycleException::class);
+
+    c3Verify($row);
+    $this->manager->activate($row, null);
+    expect($row->fresh()->status)->toBe(CredentialStatus::Active)->and($other->fresh()->status)->toBe(CredentialStatus::Pending);
+});
+
+it('refuses a stale activation: the active row changed since the caller looked — the loser stays pending, nothing is revoked', function () {
+    $groq = $this->fx['groq'];
+    $a = $this->manager->create($groq, new SecretString('gsk_A_6661'));
+    $b = $this->manager->create($groq, new SecretString('gsk_B_6662'));
+    $c = $this->manager->create($groq, new SecretString('gsk_C_6663'));
+    c3Verify($a);
+    c3Verify($b);
+    c3Verify($c);
+
+    $this->manager->activate($a, null);
+
+    // Two admins both saw "a" as the current active and each try to activate their own row.
+    $this->manager->activate($b, $a->id);
+
+    expect(fn () => $this->manager->activate($c, $a->id))->toThrow(CredentialLifecycleException::class, 'تعارض')
+        ->and($c->fresh()->status)->toBe(CredentialStatus::Pending)
+        ->and($b->fresh()->status)->toBe(CredentialStatus::Active)
+        ->and($a->fresh()->status)->toBe(CredentialStatus::Revoked)
+        ->and(AuditLog::where('action', AuditActions::AiCredentialActivated)->count())->toBe(2);
+
+    // Wrong expectation when nothing is active is a conflict too; the right one (b) works and c can still be activated later.
+    expect(fn () => $this->manager->activate($c, null))->toThrow(CredentialLifecycleException::class, 'تعارض');
+    $this->manager->activate($c, $b->id);
+    expect($c->fresh()->status)->toBe(CredentialStatus::Active)->and($b->fresh()->status)->toBe(CredentialStatus::Revoked);
+});
+
+it('forced activation: super_admin only, typed UNVERIFIED, only for adapters WITHOUT a non-billable auth probe, audited as forced', function () {
+    // groq declares an auth probe → the force path is refused even for super_admin.
+    $groq = $this->fx['groq'];
+    $g = $this->manager->create($groq, new SecretString('gsk_FORCE_7771'));
+    expect(fn () => $this->manager->activateUnverified($g, null, CredentialManager::FORCE_CONFIRMATION))->toThrow(CredentialLifecycleException::class, 'المسار العادي')
+        ->and($g->fresh()->status)->toBe(CredentialStatus::Pending);
+
+    // A compatible endpoint with no declared probe.
+    app(AiManager::class)->extend('compat', fn ($c, array $config) => new class('compat', $config) extends OpenAICompatibleChatProvider {});
+    config(['ai.providers.compat' => ['base_url' => 'https://compat.example.com/v1', 'api_key' => '', 'model' => 'm']]);
+    $compat = AiProvider::factory()->create(['key' => 'compat', 'driver' => 'compat']);
+    $row = $this->manager->create($compat, new SecretString('compat_FORCE_7772'));
+
+    expect(fn () => $this->manager->activate($row, null))->toThrow(CredentialLifecycleException::class, 'فحص مصادقة ناجح')
+        ->and(fn () => $this->manager->activateUnverified($row, null, 'wrong'))->toThrow(CredentialLifecycleException::class, 'UNVERIFIED')
+        ->and($row->fresh()->status)->toBe(CredentialStatus::Pending);
+
+    $this->manager->activateUnverified($row, null, 'UNVERIFIED');
+    $log = AuditLog::where('action', AuditActions::AiCredentialActivatedUnverified)->firstOrFail();
+
+    expect($row->fresh()->status)->toBe(CredentialStatus::Active)
+        ->and($log->context())->toMatchArray(['forced' => true, 'verified' => false, 'provider' => 'compat'])
+        ->and(AuditLog::where('action', AuditActions::AiCredentialActivated)->count())->toBe(0);
+
+    // Operations (not super_admin) cannot use the force path even with a granted manage permission.
+    $ops = userWithRole(Role::Operations);
+    Spatie\Permission\Models\Role::findByName(Role::Operations->value)->givePermissionTo('ai.credentials.manage');
+    $this->actingAs($ops->fresh());
+    $row2 = app(CredentialManager::class)->create($compat, new SecretString('compat_FORCE_7773'));
+    expect(fn () => app(CredentialManager::class)->activateUnverified($row2, $row->id, 'UNVERIFIED'))->toThrow(AuthorizationException::class)
+        ->and($row2->fresh()->status)->toBe(CredentialStatus::Pending);
 });
 
 it('refuses to create an empty / whitespace secret, and anything when the vault is unavailable', function () {
@@ -97,27 +188,30 @@ it('refuses to create an empty / whitespace secret, and anything when the vault 
 it('activation fails closed: a non-pending row, an undecryptable row, or an audit failure leaves the OLD credential active', function () {
     $groq = $this->fx['groq'];
     $old = $this->manager->create($groq, new SecretString('gsk_OLD_3333'));
-    $this->manager->activate($old);
+    c3Verify($old);
+    $this->manager->activate($old, null);
 
     // Already active → refused.
-    expect(fn () => $this->manager->activate($old))->toThrow(CredentialLifecycleException::class, 'قيد الانتظار');
+    expect(fn () => $this->manager->activate($old, null))->toThrow(CredentialLifecycleException::class, 'قيد الانتظار');
 
     // A pending row sealed with a key the vault no longer has → refused, old stays active.
     $pending = $this->manager->create($groq, new SecretString('gsk_NEW_4444'));
+    c3Verify($pending);
     $keyB = c3VaultOn(c3Key());
 
-    expect(fn () => app(CredentialManager::class)->activate($pending))->toThrow(CredentialLifecycleException::class, 'تعذّر فتحه')
+    expect(fn () => app(CredentialManager::class)->activate($pending, $old->id))->toThrow(CredentialLifecycleException::class, 'تعذّر فتحه')
         ->and($pending->fresh()->status)->toBe(CredentialStatus::Pending)
         ->and($old->fresh()->status)->toBe(CredentialStatus::Active);
 
     // Audit failure → whole activation rolled back (old active, new pending).
     c3VaultOn($keyB); // pending row is undecryptable under B: re-create one under B first
     $pendingB = app(CredentialManager::class)->create($groq, new SecretString('gsk_NEW_B_5555'));
+    c3Verify($pendingB);
     $audit = Mockery::mock(AuditLogger::class);
     $audit->shouldReceive('record')->andThrow(new RuntimeException('audit down'));
-    $manager = new CredentialManager(app(CredentialVault::class), app(CredentialResolver::class), app(RoutingSimulator::class), $audit);
+    $manager = new CredentialManager(app(CredentialVault::class), app(CredentialResolver::class), app(RoutingSimulator::class), $audit, app(AiManager::class));
 
-    expect(fn () => $manager->activate($pendingB))->toThrow(RuntimeException::class)
+    expect(fn () => $manager->activate($pendingB, $old->id))->toThrow(RuntimeException::class, 'audit down')
         ->and($pendingB->fresh()->status)->toBe(CredentialStatus::Pending)
         ->and($old->fresh()->status)->toBe(CredentialStatus::Active)
         ->and(ProviderCredential::where('status', 'active')->count())->toBe(1);
@@ -132,7 +226,8 @@ it('revoke: pending or active → revoked; revoking the active vault credential 
         ->and(fn () => $this->manager->revoke($pending->fresh()))->toThrow(CredentialLifecycleException::class, 'ملغى بالفعل');
 
     $active = $this->manager->create($groq, new SecretString('gsk_A_7777'));
-    $this->manager->activate($active);
+    c3Verify($active);
+    $this->manager->activate($active, null);
 
     // groq has NO env key now: revoking the only credential moves chat to openai → typed confirmation.
     config(['ai.providers.groq.api_key' => '']);
@@ -163,7 +258,8 @@ it('enforces ai.credentials.manage server-side for every lifecycle action', func
     $manager = app(CredentialManager::class);
 
     expect(fn () => $manager->create($groq, new SecretString('gsk_x_9999')))->toThrow(AuthorizationException::class)
-        ->and(fn () => $manager->activate($pending))->toThrow(AuthorizationException::class)
+        ->and(fn () => $manager->activate($pending, null))->toThrow(AuthorizationException::class)
+        ->and(fn () => $manager->activateUnverified($pending, null, 'UNVERIFIED'))->toThrow(AuthorizationException::class)
         ->and(fn () => $manager->revoke($pending))->toThrow(AuthorizationException::class)
         ->and($pending->fresh()->status)->toBe(CredentialStatus::Pending)
         ->and(ProviderCredential::count())->toBe(1);

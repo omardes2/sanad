@@ -43,10 +43,28 @@
                                     <button type="button" wire:click="runCheck({{ $p->id }}, 'auth', {{ $c->id }}, false)" class="rounded border border-slate-300 px-2 py-0.5 text-[11px] hover:bg-slate-50">اختبار المصادقة</button>
                                 @endif
                                 @if ($canManageCredentials && $c->status->value === 'pending')
-                                    <form method="POST" action="{{ route('dashboard.ai.credentials.activate', $c) }}" class="inline">
-                                        @csrf
-                                        <button type="submit" onclick="return confirm('تفعيل هذا المفتاح وإلغاء الفعّال الحالي؟')" class="rounded bg-emerald-600 px-2 py-0.5 text-[11px] text-white hover:bg-emerald-700">تفعيل</button>
-                                    </form>
+                                    @if ($row['verified'][$c->id] ?? false)
+                                        <form method="POST" action="{{ route('dashboard.ai.credentials.activate', $c) }}" class="inline">
+                                            @csrf
+                                            <input type="hidden" name="expected_active_id" value="{{ $row['active_id'] }}">
+                                            <button type="submit" onclick="return confirm('تفعيل هذا المفتاح وإلغاء الفعّال الحالي؟')" class="rounded bg-emerald-600 px-2 py-0.5 text-[11px] text-white hover:bg-emerald-700">تفعيل</button>
+                                        </form>
+                                    @elseif ($row['auth_probe'])
+                                        <span class="rounded bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">يحتاج فحص مصادقة ناجحًا خلال {{ $verificationWindow }} دقيقة</span>
+                                    @elseif (auth()->user()?->hasRole('super_admin'))
+                                        <details class="inline">
+                                            <summary class="cursor-pointer rounded border border-amber-400 px-2 py-0.5 text-[11px] text-amber-800">تفعيل بلا تحقق (قسري)</summary>
+                                            <form method="POST" action="{{ route('dashboard.ai.credentials.activate_unverified', $c) }}" class="mt-1 flex gap-1">
+                                                @csrf
+                                                <input type="hidden" name="expected_active_id" value="{{ $row['active_id'] }}">
+                                                <input type="text" name="confirmation" dir="ltr" autocomplete="off" placeholder="{{ $forceWord }}" class="w-32 rounded border-amber-300 text-[11px]">
+                                                <button type="submit" class="rounded bg-amber-600 px-2 py-0.5 text-[11px] text-white">تأكيد</button>
+                                            </form>
+                                            <p class="text-[10px] text-amber-800">لا يوجد فحص مصادقة غير مفوتر لهذا الـadapter؛ يُسجَّل في الـAudit كتفعيل قسري بلا تحقق.</p>
+                                        </details>
+                                    @else
+                                        <span class="rounded bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">لا فحص غير مفوتر؛ التفعيل القسري لـsuper_admin فقط</span>
+                                    @endif
                                 @endif
                                 @if ($canManageCredentials)
                                     <details class="inline">
@@ -75,7 +93,7 @@
                     <input type="text" name="label" placeholder="وسم (اختياري)" class="rounded-lg border-slate-300 text-xs">
                     <button type="submit" class="rounded-lg border border-emerald-600 px-3 py-1 text-xs text-emerald-700 hover:bg-emerald-50">إضافة كمفتاح قيد الانتظار</button>
                 </form>
-                <p class="mt-1 text-[11px] text-slate-400">المسار: إضافة قيد الانتظار ← اختبار المصادقة ← تفعيل (يُلغي الفعّال السابق في نفس المعاملة).</p>
+                <p class="mt-1 text-[11px] text-slate-400">المسار: إضافة قيد الانتظار ← اختبار المصادقة الناجح لنفس المفتاح ← تفعيل (يُلغي الفعّال السابق في نفس المعاملة؛ يُرفض إن تغيّر الفعّال منذ فتح الصفحة).</p>
             @else
                 <p class="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">الخزنة غير متاحة (CREDENTIALS_KEY غير مضبوط): لا يمكن إضافة مفاتيح. وقت التشغيل يعمل على مفاتيح البيئة.</p>
             @endif

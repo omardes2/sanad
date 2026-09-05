@@ -18,7 +18,7 @@ use Illuminate\Console\Command;
  */
 class AiCredentialActivateProbe extends Command
 {
-    protected $signature = 'sanad:ai-credential-probe {credential}';
+    protected $signature = 'sanad:ai-credential-probe {credential} {expected=none : the active credential id the caller saw, or "none"}';
 
     protected $description = 'Testing only: activate one credential and print the outcome';
 
@@ -35,7 +35,8 @@ class AiCredentialActivateProbe extends Command
         }
 
         try {
-            $manager->activate($credential);
+            $expected = (string) $this->argument('expected');
+            $manager->activate($credential, $expected === 'none' ? null : (int) $expected);
             $this->line('activated');
         } catch (CredentialLifecycleException) {
             $this->line('rejected');

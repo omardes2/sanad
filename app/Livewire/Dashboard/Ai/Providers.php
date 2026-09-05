@@ -19,6 +19,7 @@ use App\Services\Ai\AiManager;
 use App\Services\Ai\Catalog\CatalogAdmin;
 use App\Services\Ai\Catalog\CatalogSourceResolver;
 use App\Services\Ai\Health\ProviderHealthService;
+use App\Services\Credentials\CredentialManager;
 use App\Services\Credentials\CredentialResolver;
 use App\Services\Credentials\CredentialVault;
 use App\Support\Rbac\Permission;
@@ -155,7 +156,7 @@ class Providers extends Component
         ];
     }
 
-    public function render(AiManager $manager, CatalogSourceResolver $resolver, CredentialResolver $credentials, CredentialVault $vault)
+    public function render(AiManager $aiManager, CatalogSourceResolver $resolver, CredentialResolver $credentials, CredentialVault $vault, CredentialManager $manager)
     {
         $user = auth()->user();
         $providers = AiProvider::query()->withCount('models')->orderByDesc('priority')->orderBy('id')->get();
@@ -163,10 +164,10 @@ class Providers extends Component
         $latest = ProviderHealthCheck::query()->whereIn('provider_id', $providers->pluck('id'))->orderByDesc('checked_at')->orderByDesc('id')->get()->unique('provider_id')->keyBy('provider_id');
         $mode = $credentials->mode();
 
-        $rows = $providers->map(function (AiProvider $provider) use ($manager, $credentials, $credentialRows, $latest, $mode): array {
-            $known = $manager->has($provider->key);
+        $rows = $providers->map(function (AiProvider $provider) use ($aiManager, $manager, $credentials, $credentialRows, $latest, $mode): array {
+            $known = $aiManager->has($provider->key);
             $resolved = $known ? $credentials->resolve($provider->key) : null;
-            $adapter = $known ? $manager->provider($provider->key) : null;
+            $adapter = $known ? $aiManager->provider($provider->key) : null;
 
             return [
                 'provider' => $provider,
@@ -180,6 +181,8 @@ class Providers extends Component
                     CredentialStatus::Active => 0, CredentialStatus::Pending => 1, CredentialStatus::Revoked => 2,
                 })->values(),
                 'last_health' => $latest->get($provider->id),
+                'active_id' => ($credentialRows->get($provider->id) ?? collect())->firstWhere('status', CredentialStatus::Active)?->id,
+                'verified' => ($credentialRows->get($provider->id) ?? collect())->mapWithKeys(fn (ProviderCredential $c): array => [$c->id => $c->isPending() && $manager->isVerified($c)])->all(),
                 'auth_probe' => $adapter instanceof SupportsHealthChecks ? $adapter->healthCapabilities()->nonBillableAuthProbe : false,
                 'mode' => $mode,
             ];
@@ -198,6 +201,8 @@ class Providers extends Component
             'vaultAvailable' => $vault->available(),
             'vaultKeyId' => $vault->keyId(),
             'inferenceWord' => ProviderHealthService::INFERENCE_CONFIRMATION,
+            'forceWord' => CredentialManager::FORCE_CONFIRMATION,
+            'verificationWindow' => CredentialManager::verificationWindowMinutes(),
         ]);
     }
 }

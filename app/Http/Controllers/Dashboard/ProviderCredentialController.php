@@ -14,6 +14,7 @@ use App\Models\ProviderCredential;
 use App\Services\Credentials\CredentialManager;
 use App\Support\Rbac\Permission;
 use App\Support\Security\SecretString;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
@@ -44,18 +45,44 @@ class ProviderCredentialController extends Controller
         return $this->back($provider)->with('credential_status', "أُضيف المفتاح [{$credential->masked()}] قيد الانتظار. اختبره ثم فعّله.");
     }
 
+    /**
+     * `expected_active_id` is the active credential the admin SAW on the page
+     * (empty = none); a concurrent activation makes it stale and the manager
+     * refuses instead of silently overriding.
+     */
     public function activate(Request $request, ProviderCredential $credential, CredentialManager $manager): RedirectResponse
     {
         $this->authorizeManage($request);
         $provider = $credential->provider;
+        $validated = $request->validate(['expected_active_id' => ['nullable', 'integer']]);
 
         try {
-            $manager->activate($credential);
+            $manager->activate($credential, isset($validated['expected_active_id']) ? (int) $validated['expected_active_id'] : null);
         } catch (CredentialLifecycleException $e) {
             return $this->back($provider)->with('credential_error', $e->getMessage());
         }
 
         return $this->back($provider)->with('credential_status', "فُعّل المفتاح [{$credential->fresh()->masked()}]؛ المفتاح السابق (إن وُجد) أُلغي.");
+    }
+
+    /**
+     * Super Admin force path (provider without a non-billable auth probe).
+     */
+    public function activateUnverified(Request $request, ProviderCredential $credential, CredentialManager $manager): RedirectResponse
+    {
+        $this->authorizeManage($request);
+        $provider = $credential->provider;
+        $validated = $request->validate(['expected_active_id' => ['nullable', 'integer'], 'confirmation' => ['required', 'string', 'max:32']]);
+
+        try {
+            $manager->activateUnverified($credential, isset($validated['expected_active_id']) ? (int) $validated['expected_active_id'] : null, $validated['confirmation']);
+        } catch (CredentialLifecycleException $e) {
+            return $this->back($provider)->with('credential_error', $e->getMessage());
+        } catch (AuthorizationException) {
+            abort(403);
+        }
+
+        return $this->back($provider)->with('credential_status', "فُعّل المفتاح [{$credential->fresh()->masked()}] بلا تحقق (مسار قسري مُدقَّق).");
     }
 
     public function revoke(Request $request, ProviderCredential $credential, CredentialManager $manager): RedirectResponse
