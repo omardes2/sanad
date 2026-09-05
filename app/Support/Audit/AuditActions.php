@@ -47,4 +47,13 @@ final class AuditActions
     public const AiCredentialKeyRotated = 'ai.credentials.key_rotated';
 
     public const AiProviderHealthChecked = 'ai.provider.health_checked';
+
+    public const AiCatalogSourceChanged = 'ai.catalog.source_changed';
+
+    public const AiRoutingModeChanged = 'ai.routing.mode_changed';
+
+    public const AiRoutingPrimaryChanged = 'ai.routing.primary_changed';
+
+    /** System entry (rate-limited): db mode had no usable primary, AI_PROVIDER used. */
+    public const AiRoutingEnvFallbackUsed = 'ai.routing.env_fallback_used';
 }

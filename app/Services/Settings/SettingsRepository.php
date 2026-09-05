@@ -54,6 +54,15 @@ class SettingsRepository
         private readonly SettingsCache $cache,
     ) {}
 
+    /**
+     * Drop the stored-values cache so the next effective() re-reads the
+     * database (used under a row lock by the cutover service).
+     */
+    public function cacheFlush(): void
+    {
+        $this->cache->flush();
+    }
+
     public function registry(): SettingsRegistry
     {
         return $this->registry;
@@ -89,8 +98,23 @@ class SettingsRepository
      */
     public function set(string $key, mixed $value, ?string $reason = null): EffectiveSetting
     {
+        return $this->write($key, $value, $reason, false);
+    }
+
+    /**
+     * Write a MANAGED setting on behalf of its dedicated writer (Phase C4:
+     * RoutingCutover). Same validation, transaction and audit as set(); only
+     * the "managed" refusal is lifted. Never call this from a page.
+     */
+    public function setManaged(string $key, mixed $value, ?string $reason = null): EffectiveSetting
+    {
+        return $this->write($key, $value, $reason, true);
+    }
+
+    private function write(string $key, mixed $value, ?string $reason, bool $viaManagedWriter): EffectiveSetting
+    {
         $definition = $this->registry->require($key);
-        $this->guard($definition);
+        $this->guard($definition, $viaManagedWriter);
 
         $casted = $this->validate($definition, $value);
         $before = $this->effective($key);
@@ -260,9 +284,14 @@ class SettingsRepository
     /**
      * @throws AuthorizationException|ReadOnlySettingException
      */
-    private function guard(SettingDefinition $definition): void
+    private function guard(SettingDefinition $definition, bool $viaManagedWriter = false): void
     {
         if ($definition->readOnly) {
+            throw ReadOnlySettingException::for($definition->key);
+        }
+
+        if ($definition->managed && ! $viaManagedWriter) {
+            // Phase C4: only the cutover service may write this key.
             throw ReadOnlySettingException::for($definition->key);
         }
 

@@ -7,6 +7,7 @@ use App\Http\Controllers\Dashboard\ProviderCredentialController;
 use App\Http\Controllers\Dashboard\UsageExportController;
 use App\Http\Middleware\EnsureDevEnvironment;
 use App\Livewire\Auth\Login;
+use App\Livewire\Dashboard\Ai\Cutover as AiCutover;
 use App\Livewire\Dashboard\Ai\Health as AiHealth;
 use App\Livewire\Dashboard\Ai\Models as AiModels;
 use App\Livewire\Dashboard\Ai\Pricing as AiPricing;
@@ -84,6 +85,8 @@ Route::middleware(['auth', 'admin'])
         Route::post('/ai/credentials/{credential}/activate-unverified', [ProviderCredentialController::class, 'activateUnverified'])->middleware('permission:ai.credentials.manage')->name('dashboard.ai.credentials.activate_unverified');
         Route::post('/ai/credentials/{credential}/revoke', [ProviderCredentialController::class, 'revoke'])->middleware('permission:ai.credentials.manage')->name('dashboard.ai.credentials.revoke');
         Route::get('/ai/health', AiHealth::class)->middleware('permission:ai.health.view')->name('dashboard.ai.health');
+        // Cutover console (Phase C4): super_admin only; every action is preview → typed provider:model → apply.
+        Route::get('/ai/cutover', AiCutover::class)->middleware('permission:ai.routing.cutover')->name('dashboard.ai.cutover');
 
         Route::get('/usage', Usage::class)->middleware('permission:usage.view')->name('dashboard.usage');
         Route::get('/usage/export', UsageExportController::class)->middleware('permission:usage.export')->name('dashboard.usage.export');

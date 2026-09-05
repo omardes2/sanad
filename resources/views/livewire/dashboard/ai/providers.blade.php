@@ -51,7 +51,7 @@
                             <td class="px-4 py-3">
                                 <div class="font-medium text-slate-800">{{ $p->name }}</div>
                                 <code class="text-xs text-slate-500" dir="ltr">{{ $p->key }}</code>
-                                @if ($p->is_primary)<span class="ms-1 rounded-full bg-slate-200 px-2 py-0.5 text-[11px]">primary (غير مُطبَّق)</span>@endif
+                                @if ($p->is_primary)<span class="ms-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] text-indigo-800">primary</span>@endif
                                 @if ($p->key === $preferred)<span class="ms-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] text-emerald-800">مفضَّل (AI_PROVIDER)</span>@endif
                             </td>
                             <td class="px-4 py-3 font-mono text-xs" dir="ltr">{{ $p->driver }}@if (! $row['driver_known']) <span class="text-rose-600">(لا adapter)</span>@endif</td>

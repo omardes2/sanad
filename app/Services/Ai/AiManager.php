@@ -8,6 +8,7 @@ use App\Contracts\Ai\AiProvider;
 use App\Exceptions\Ai\AiConfigurationException;
 use App\Providers\Ai\GroqChatProvider;
 use App\Providers\Ai\OpenAIProvider;
+use App\Services\Ai\Routing\RoutingPreference;
 use App\Services\Credentials\ProviderRuntimeConfigFactory;
 use Closure;
 use Illuminate\Contracts\Container\Container;
@@ -80,7 +81,7 @@ class AiManager
 
     public function provider(?string $name = null): AiProvider
     {
-        $name ??= (string) config('ai.provider', 'groq');
+        $name ??= $this->container->make(RoutingPreference::class)->preferredProvider();
 
         return $this->build($name, $this->runtimeConfig($name));
     }

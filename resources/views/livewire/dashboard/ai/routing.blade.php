@@ -1,9 +1,12 @@
 <div>
     <header class="mb-6">
         <h1 class="text-2xl font-bold text-slate-800">التوجيه</h1>
-        <p class="mt-1 text-sm text-slate-500">ما يقرّره الموجّه فعليًا الآن، بأسباب تخطّي كل مرشّح، ومحاكاة «ماذا لو» بلا أي كتابة. لا تبديل هنا: <code dir="ltr" class="rounded bg-slate-100 px-1">AI_PROVIDER={{ $envPreferred }}</code> يبقى الحاكم (التبديل في C4).</p>
-        <p class="mt-1 text-xs text-slate-400">مصدر الكتالوج: {{ $sourceMode }} — الفعّال: {{ $sourceActive }}.</p>
+        <p class="mt-1 text-sm text-slate-500">ما يقرّره الموجّه فعليًا الآن، بأسباب تخطّي كل مرشّح، ومحاكاة «ماذا لو» بلا أي كتابة. لا تبديل هنا؛ التبديل من صفحة Cutover.</p>
+        <p class="mt-1 text-xs text-slate-400">مصدر الكتالوج: {{ $sourceMode }} — الفعّال: {{ $sourceActive }} · وضع التوجيه: <span dir="ltr">{{ $resolution->mode }}</span> → المفضّل <code dir="ltr">{{ $resolution->provider }}</code> ({{ $resolution->source }}) · AI_PROVIDER=<span dir="ltr">{{ $envPreferred }}</span>.</p>
     </header>
+    @if ($resolution->degraded())
+        <div class="mb-4 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800"><strong>DEGRADED / ENV FALLBACK</strong> — وضع التوجيه db بلا مزوّد أساسي مفعّل ({{ $resolution->degradedReason }})؛ يُستخدم AI_PROVIDER للطوارئ. الوضع المخزَّن لم يُغيَّر.</div>
+    @endif
 
     <div class="mb-4 grid gap-3 md:grid-cols-3">
         <label class="block text-sm"><span class="text-slate-600">العملية</span>

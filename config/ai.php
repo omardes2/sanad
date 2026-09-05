@@ -30,6 +30,7 @@ return [
         'enabled' => env('AI_ENABLED'),
         'catalog_source' => env('AI_CATALOG_SOURCE'),
         'credentials_mode' => env('AI_CREDENTIALS_MODE'),
+        'routing_mode' => env('AI_ROUTING_MODE'),
     ],
 
     /*
@@ -46,6 +47,24 @@ return [
     |              overrides the database value.
     */
     'credentials_mode' => 'env',
+
+    /*
+    |--------------------------------------------------------------------------
+    | Routing mode (Phase C4)
+    |--------------------------------------------------------------------------
+    |  - "env": the preferred provider is AI_PROVIDER (above) — today's
+    |           behaviour and the emergency rollback (AI_ROUTING_MODE=env);
+    |  - "db" : the preferred provider is the enabled ai_providers row with
+    |           is_primary = true. If that row is missing or disabled the
+    |           runtime falls back to AI_PROVIDER in a DEGRADED state (warning,
+    |           rate-limited system audit, admin banner) — the stored mode is
+    |           never changed automatically.
+    | Changed ONLY through the cutover page (ai.routing.cutover), never from
+    | the generic settings editor.
+    */
+    'routing' => [
+        'mode' => 'env',
+    ],
 
     /*
     |--------------------------------------------------------------------------

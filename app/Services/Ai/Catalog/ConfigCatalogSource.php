@@ -8,6 +8,7 @@ use App\Contracts\Ai\CatalogSource;
 use App\Data\Ai\Catalog\ModelSpec;
 use App\Data\Ai\Catalog\RoutingContext;
 use App\Enums\AiOperation;
+use App\Services\Ai\Routing\RoutingPreference;
 
 /**
  * Config-backed catalog (bootstrap defaults).
@@ -20,6 +21,8 @@ use App\Enums\AiOperation;
  */
 final class ConfigCatalogSource implements CatalogSource
 {
+    public function __construct(private readonly RoutingPreference $preference) {}
+
     private const PREFERRED_PRIORITY = 100;
 
     private const DEFAULT_PRIORITY = 10;
@@ -82,7 +85,7 @@ final class ConfigCatalogSource implements CatalogSource
      */
     private function fromProviders(): array
     {
-        $preferred = (string) config('ai.provider', 'groq');
+        $preferred = $this->preference->preferredProvider();
         $specs = [];
 
         foreach ((array) config('ai.providers', []) as $key => $config) {

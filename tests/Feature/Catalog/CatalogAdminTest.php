@@ -37,7 +37,7 @@ function catalogFixture(): array
         'ai.providers.openai.api_key' => 'test-openai-key',
         'ai.providers.openai.model' => 'gpt-4.1-mini',
     ]);
-    settings()->set('ai.catalog_source', 'database');
+    config(['ai.catalog_source' => 'database']);
 
     $groq = AiProvider::factory()->create(['key' => 'groq', 'driver' => 'groq', 'priority' => 100]);
     $openai = AiProvider::factory()->create(['key' => 'openai', 'driver' => 'openai', 'priority' => 10]);
@@ -201,7 +201,7 @@ it('requires a typed confirmation equal to the NEW route when the selected chat 
 });
 
 it('simulates enabling too: in auto mode the first enabled database model of an unconfigured provider is refused', function () {
-    settings()->set('ai.catalog_source', 'auto');
+    config(['ai.catalog_source' => 'auto']);
     AiModel::query()->update(['is_enabled' => false]);
     CatalogCache::flush();
 

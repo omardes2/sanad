@@ -24,6 +24,8 @@ enum Permission: string
     case AiPricingView = 'ai.pricing.view';
     case AiPricingManage = 'ai.pricing.manage';
     case AiRoutingManage = 'ai.routing.manage';
+    /** Catalog-source / routing-mode / primary cutovers (super_admin only). */
+    case AiRoutingCutover = 'ai.routing.cutover';
     case AiCredentialsManage = 'ai.credentials.manage';
     case AiCredentialsTest = 'ai.credentials.test';
     /** Provider health history (super_admin + operations). */
@@ -59,6 +61,7 @@ enum Permission: string
             self::AiPricingView => 'عرض الأسعار',
             self::AiPricingManage => 'نشر الأسعار',
             self::AiRoutingManage => 'إدارة التوجيه',
+            self::AiRoutingCutover => 'تنفيذ Cutover التوجيه والكتالوج',
             self::AiCredentialsManage => 'إدارة مفاتيح المزوّدين',
             self::AiCredentialsTest => 'اختبار الاتصال بالمزوّدين',
             self::AiHealthView => 'عرض صحة المزوّدين',

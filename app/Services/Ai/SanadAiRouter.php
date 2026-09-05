@@ -12,6 +12,7 @@ use App\Data\Ai\Catalog\RouteEvaluation;
 use App\Data\Ai\Catalog\RoutingContext;
 use App\Enums\AiOperation;
 use App\Exceptions\Ai\AiConfigurationException;
+use App\Services\Ai\Routing\RoutingPreference;
 use App\Services\Billing\Pricing\CostEstimator;
 
 /**
@@ -31,8 +32,8 @@ use App\Services\Billing\Pricing\CostEstimator;
  * disable simulation (Phase C2) call evaluate() on real or hypothetical
  * candidate lists, so they can never disagree with production routing.
  *
- * The operational preference deliberately stays AI_PROVIDER; the database
- * `is_primary` flag is stored for the Phase C4 cutover and not read here.
+ * The preferred provider comes from RoutingPreference (Phase C4): AI_PROVIDER
+ * in routing mode `env`, the is_primary provider in mode `db`.
  */
 class SanadAiRouter
 {
@@ -40,6 +41,7 @@ class SanadAiRouter
         private readonly AiManager $manager,
         private readonly CatalogSource $catalog,
         private readonly CostEstimator $estimator,
+        private readonly RoutingPreference $preference,
     ) {}
 
     /**
@@ -83,7 +85,7 @@ class SanadAiRouter
     public function evaluate(AiOperation $operation, ?RoutingContext $context = null, ?array $candidates = null): RouteEvaluation
     {
         $context ??= new RoutingContext;
-        $preferred = $context->preferredProvider ?? (string) config('ai.provider', 'groq');
+        $preferred = $context->preferredProvider ?? $this->preference->preferredProvider();
         $candidates ??= $this->catalog->candidates($operation, $context);
 
         // Stable sort: within the same provider/priority the catalog's own

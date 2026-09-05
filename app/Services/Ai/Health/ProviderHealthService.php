@@ -97,7 +97,7 @@ class ProviderHealthService
             return $this->store($provider, $kind, $trigger, new HealthProbeResult(HealthCheckStatus::Skipped, errorCode: 'no_adapter'), CredentialSource::None, null, false);
         }
 
-        [$config, $source, $credentialId] = $this->runtimeConfig($provider, $credential, $candidateBaseUrl);
+        [$config, $source, $credentialId, $fingerprint] = $this->runtimeConfig($provider, $credential, $candidateBaseUrl);
         $adapter = $this->manager->providerWith($provider->key, $config);
 
         if (! $adapter instanceof SupportsHealthChecks) {
@@ -122,6 +122,15 @@ class ProviderHealthService
         );
 
         $result = $adapter->healthCheck($kind, $context);
+
+        // Phase C4 readiness needs to prove WHICH credential passed: the vault
+        // row id, or — for an env key — its fingerprint snapshot (never the
+        // value). A later key change makes this probe stale on purpose.
+        if ($fingerprint !== null) {
+            $result = new HealthProbeResult($result->status, $result->latencyMs, $result->httpStatus, $result->errorClass, $result->errorCode,
+                $result->details + ['credential_fingerprint' => $fingerprint], $result->inputTokens, $result->outputTokens, $result->reportedModel);
+        }
+
         $check = $this->store($provider, $kind, $trigger, $result, $source, $credentialId, $candidateBaseUrl);
 
         if ($kind->billable() && ($result->inputTokens !== null || $result->outputTokens !== null)) {
@@ -149,7 +158,7 @@ class ProviderHealthService
     }
 
     /**
-     * @return array{0: array<string, mixed>, 1: CredentialSource, 2: ?int}
+     * @return array{0: array<string, mixed>, 1: CredentialSource, 2: ?int, 3: ?string} config, source, credential id, fingerprint
      *
      * @throws CredentialLifecycleException|OutboundBlockedException
      */
@@ -181,7 +190,7 @@ class ProviderHealthService
                 throw new CredentialLifecycleException("تعذّر فتح المفتاح [{$credential->fingerprint}] ({$outcome->failure}).");
             }
 
-            return [$this->configs->with($provider->key, $outcome->secret, $baseUrl, $options), CredentialSource::Vault, $credential->id];
+            return [$this->configs->with($provider->key, $outcome->secret, $baseUrl, $options), CredentialSource::Vault, $credential->id, $credential->fingerprint];
         }
 
         $resolved = $this->resolver->resolve($provider->key);
@@ -193,7 +202,7 @@ class ProviderHealthService
         /** @var SecretString|null $secret */
         $secret = $resolved->usable() ? $resolved->secret : null;
 
-        return [$this->configs->with($provider->key, $secret, $baseUrl, $options), $resolved->source, $resolved->credentialId];
+        return [$this->configs->with($provider->key, $secret, $baseUrl, $options), $resolved->source, $resolved->credentialId, $resolved->fingerprint];
     }
 
     private function store(AiProvider $provider, HealthCheckKind $kind, HealthCheckTrigger $trigger, HealthProbeResult $result, CredentialSource $source, ?int $credentialId, bool $candidate): ProviderHealthCheck

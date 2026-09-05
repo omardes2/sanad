@@ -1,7 +1,7 @@
 # Phase C — Sanad Admin Control Center
 
 > المرجع المعماري العام: [ARCHITECTURE.md](ARCHITECTURE.md). Phase B2: [PHASE_B2_PLAN.md](PHASE_B2_PLAN.md).
-> الحالة: **C0 مدمجة**، **C1 مدمجة**، **C2 مدمجة**، **C3 منفَّذة** (PR C3). C4 مخطَّطة ولا تبدأ إلا بموافقة صريحة.
+> الحالة: **C0–C3 مدمجة**، **C4 منفَّذة** (PR C4). لا cutover إنتاجي نُفِّذ؛ كل خطوة إنتاجية تحتاج موافقة مستقلة.
 
 ## 1) Audit للوضع قبل Phase C (main `7c3fd63`)
 
@@ -65,6 +65,7 @@
 | `ai.pricing.view` | ✓ | | ✓ | |
 | `ai.pricing.manage` | ✓ | | ✓ | |
 | `ai.routing.manage` | ✓ | ✓ | | |
+| `ai.routing.cutover` (C4) | ✓ | | | |
 | `ai.credentials.manage` | ✓ | | | |
 | `ai.credentials.test` | ✓ | ✓ | | |
 | `ai.health.view` (C3) | ✓ | ✓ | | |
@@ -181,12 +182,37 @@
 
 **النشر لـC3 (بعد الدمج، بموافقة مستقلة لكل خطوة):** `migrate --force` (جدولان إضافيان) → `sanad:rbac:bootstrap` dry-run ثم `--apply` لإنشاء `ai.health.view` → الوضع يبقى `env` بلا أي تغيير سلوكي. لاحقًا وبموافقة: توليد `CREDENTIALS_KEY` خارج الخادم ونسخه احتياطيًا → إضافته إلى `.env` → `config:cache` + `horizon:terminate` → إدخال المفتاح عبر النموذج (pending) → اختبار المصادقة عليه → تفعيله → تبديل `ai.credentials_mode=vault` من الإعدادات → المراقبة. الرجوع: `ai.credentials_mode=env` من الإعدادات أو `AI_CREDENTIALS_MODE=env` في البيئة. cron لـ`schedule:run` قرار تشغيلي مستقل غير مُدرج.
 
-## 8) C4 (مخطَّطة)
+## 8) C4 — Routing Cutover (منفَّذة كقدرة آمنة؛ لم يُنفَّذ أي cutover)
+
+**المبدأ:** كل خطوة تغيّر شيئًا واحدًا فقط: معاينة (جاهزية + محاكاة بالموجّه الحقيقي `SanadAiRouter::evaluate()`) ← كتابة `provider:model` الناتج من المحاكاة للتأكيد (اسم المزوّد وحده لا يكفي) ← تطبيق داخل transaction واحدة يعيد قراءة الحالة التي رآها الأدمن (stale conflict بلا last-writer-wins) ← Audit في نفس المعاملة. لا bootstrap ولا cutover يتم تلقائيًا من PR أو نشر.
+
+| المرحلة | ما تفعله | الحراسة |
+|---|---|---|
+| **Stage A — bootstrap بلا استخدام** | `sanad:ai:bootstrap --apply` يرفض العمل إذا كان المصدر الفعّال `auto` (لأن أول نموذج مفعّل كان سيبدّل المصدر تلقائيًا). يجب تثبيت `ai.catalog_source=config` صراحة (من صفحة Cutover أو `AI_CATALOG_SOURCE=config`) ثم dry-run ← مراجعة ← apply. الـruntime يبقى على كتالوج config. | اختبار: الرفض تحت auto؛ بعد apply تحت config يبقى `activeName()=config` والمسار كما هو. |
+| **Stage B — محاكاة كتالوج قاعدة البيانات** | `RoutingSimulator::proposed(catalogSource: 'database')` و`RoutingCutover::whatIfDatabaseCatalog()`: المزوّد والنموذج المختاران، أسباب الاستبعاد، الجاهزية، التسعير (`COST UNKNOWN` وليس $0) مقابل المسار الحالي. للقراءة فقط. | لا كتابة ولا Audit. |
+| **Stage C — cutover مصدر الكتالوج** | `switchCatalogSource(target, expectedCurrent, confirmation)`: super_admin + `ai.routing.cutover`؛ readiness؛ محاكاة؛ **الانتقال إلى database محظور إذا تغيّر provider أو model**؛ تأكيد = `provider:model` الناتج؛ Audit `ai.catalog.source_changed`. الرجوع database→config مسموح بالتأكيد نفسه. | `AI_CATALOG_SOURCE` في البيئة يمنع التغيير من اللوحة. `ai.catalog_source` أصبح **managed**: لا يُكتب من صفحة الإعدادات ولا من `SettingsRepository::set()`. |
+| **Routing mode `env → db`** | `ai.routing.mode` (طوارئ: `AI_ROUTING_MODE` > DB > config `env`، managed). `switchRoutingMode('db', expectedCurrent, confirmation)` يتطلب: مزوّدًا أساسيًا مفعّلًا، كتالوج قاعدة البيانات فعّالًا، **نفس provider+model قبل وبعد**، جاهزية، تأكيد `provider:model`. `db → env` هو الرجوع (بتأكيد المسار الناتج). Audit `ai.routing.mode_changed`. | مثال الإنتاج: Groq الحالي ← Groq primary ← المحاكاة = نفس المسار ← switch إلى db. |
+| **Primary** | `setPrimary(provider, expectedCurrentPrimaryId, confirmation)`: قفل صف الهدف وصف الأساسي الحالي، مقارنة الأساسي الحالي بما رآه الأدمن، جاهزية، محاكاة (في env mode لا أثر تشغيلي حتى التبديل)، تأكيد `provider:model` الناتج، Audit `ai.routing.primary_changed`. `is_primary` يبقى مقفلًا في `CatalogAdmin`. | الطريقة الوحيدة لتغيير المزوّد الفعلي لاحقًا (Groq → OpenAI): provider ونموذج من قاعدة البيانات؛ المحاكاة تحدد النموذج الفعلي؛ **لا اسم نموذج تجاري مثبّت في الكود**. |
+
+**RoutingPreference** (المصدر الوحيد للتفضيل، استبدل قراءات `config('ai.provider')` الثلاث في الموجّه وكتالوج config والمدير): `env` ⇒ `AI_PROVIDER`؛ `db` ⇒ المزوّد `is_primary` المفعّل؛ `db` بلا أساسي صالح ⇒ **fallback طوارئ** إلى `AI_PROVIDER` بحالة `DEGRADED / ENV FALLBACK`: تحذير لوج، Audit نظامي `ai.routing.env_fallback_used` كل 15 دقيقة، لافتة في صفحتي Routing وCutover، **والوضع المخزَّن لا يتغيّر تلقائيًا**.
+
+**الجاهزية (ReadinessReport):** المزوّد (صف مفعّل + adapter)، النماذج (≥1 مفعّل)، المفتاح (`CredentialResolver` usable وليس مغلقًا)، **الصحة لنفس المفتاح الفعلي**: للخزنة `credential_id` مطابق للصف الفعّال؛ للبيئة bصمة المفتاح (`details.credential_fingerprint`، SHA-256 prefix 16 hex بلا تخزين السر) مطابقة للبصمة الحالية — تغيّر المفتاح يُبطل الفحص القديم؛ خلال `ai.health.verification_window_minutes` (30). التسعير: سعر ساري وإلا **تحذير `COST UNKNOWN`** لا يمنع. `fail` يمنع، `warn` يُعرض.
+
+**Concurrency:** `switchCatalogSource`/`switchRoutingMode` تقفل صف `app_settings` (تُنشئه إن غاب؛ منشئ متزامن يخسر على unique key) وتعيد قراءة القيمة الفعّالة ومقارنتها بـ`expectedCurrent`؛ `setPrimary` تقفل صف الهدف والأساسي الحالي وتقارن `expectedCurrentPrimaryId`. اختبارات PostgreSQL حقيقية (`sanad:ai-cutover-probe`): 10 عمليات env→db من نفس الحالة ⇒ واحدة تُطبَّق و9 stale؛ 10 عمليات setPrimary من نفس الأساسي ⇒ واحدة تفوز و9 stale وفهرس primary الجزئي سليم.
+
+**ما لا تفعله C4 عمدًا:** لا automatic provider retry/failover (`ResolvedRoute::alternatives` معلومات فقط؛ failover مرحلة مستقلة بسبب idempotency وتكلفة مزدوجة وtool calls)؛ لا تغيير مزوّد الإنتاج؛ لا bootstrap ولا cutover تلقائي.
+
+**تسلسل النشر الإنتاجي (كل خطوة بموافقة مستقلة):** دمج C4 ← `sanad:rbac:bootstrap` dry-run ثم `--apply` (`ai.routing.cutover`) ← الوضع يبقى env/config بلا أي تغيير سلوكي ← من صفحة Cutover: تثبيت المصدر على `config` (Stage A) ← `sanad:ai:bootstrap` dry-run ← `--apply` ← Stage B مراجعة المحاكاة ← Stage C cutover المصدر إلى database بنفس المسار ← Groq primary ← env→db بنفس المسار ← مراقبة ← لاحقًا تغيير الأساسي إلى OpenAI بموافقة مستقلة. الرجوع في أي لحظة: `db→env` أو `config` من الصفحة (30 ثانية) أو `AI_ROUTING_MODE=env` / `AI_CATALOG_SOURCE=config` في البيئة + `config:cache` + `horizon:terminate`.
+
+## 9) ما بعد C4 (غير مخطَّط بعد)
+
+- Automatic provider failover (مرحلة مستقلة).
+- تطبيق DB `base_url` على الـruntime (cutover مستقل).
+
 
  `provider_credentials` (مشفّر بـ`CredentialVault` على `CREDENTIALS_KEY` + مفاتيح سابقة للتدوير، fail-closed بدون المفتاح)، `CredentialResolver` (الخزنة ثم env)، إدخال write-only عبر POST عادي، masking (fingerprint/last4)، Rotate/Revoke مُدقَّق؛ `ProviderHealthCheck` abstraction لكل Adapter (القرار C) + `provider_health_checks` + Test Connection يدوي مع SSRF re-validation.
-- **C4:** `ai.routing.mode` (`env` افتراضي / `db`) مع `AI_ROUTING_MODE` كـemergency override، محاكاة قبل التبديل، تبديل مُدقَّق لـSuper Admin، `is_primary=groq` أولًا ثم التبديل بلا فرق ثم تغيير الأساسي بقرار مقصود.
 
-## 9) ترتيب النشر لـC0
+## 10) ترتيب النشر لـC0
 
 1. دمج PR C0 بموافقة صريحة.
 2. `php artisan migrate --force` (جداول Spatie + أعمدة `audit_logs`).

@@ -7,12 +7,15 @@ use App\Models\AiModel;
 use App\Models\AiProvider;
 use App\Models\ModelPrice;
 use App\Models\UsageEvent;
+use App\Services\Ai\Catalog\CatalogCache;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
     aiConfigure([
+        // Phase C4 Stage A: bootstrap --apply is refused while the source is `auto`.
+        'ai.catalog_source' => 'config',
         'ai.provider' => 'groq',
         'ai.providers.openai.base_url' => 'https://api.openai.com/v1',
         'ai.providers.openai.api_key' => '',
@@ -159,6 +162,13 @@ it('catalog shows the active source, the router order, current prices and the un
 
     $this->artisan('sanad:ai:bootstrap', ['--apply' => true])->assertSuccessful();
     UsageEvent::factory()->create(['cost_source' => null, 'provider' => 'groq', 'model' => 'llama-3.3-70b-versatile']);
+
+    // Stage A (Phase C4): bootstrapping never switches the runtime by itself —
+    // the source stays `config` until an explicit cutover.
+    $this->artisan('sanad:ai:catalog')->expectsOutputToContain('active: config')->assertSuccessful();
+
+    config(['ai.catalog_source' => 'database']);
+    CatalogCache::flush();
 
     $this->artisan('sanad:ai:catalog')
         ->expectsOutputToContain('active: database')
