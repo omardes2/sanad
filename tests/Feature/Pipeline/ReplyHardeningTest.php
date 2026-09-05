@@ -13,6 +13,7 @@ use App\Models\Message;
 use App\Services\MessageProcessor;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 
 uses(RefreshDatabase::class);
@@ -71,7 +72,10 @@ it('the database rejects a second reply for the same inbound message', function 
         'processing_status' => MessageProcessingStatus::Processed,
     ]);
 
-    expect(fn () => Message::create([
+    // The violating INSERT runs in its own savepoint: on PostgreSQL a failed
+    // statement aborts the enclosing transaction (here the test's), so without
+    // the savepoint the count() below could never run.
+    expect(fn () => DB::transaction(fn () => Message::create([
         'conversation_id' => $inbound->conversation_id,
         'user_id' => $inbound->user_id,
         'direction' => MessageDirection::Outbound,
@@ -79,7 +83,7 @@ it('the database rejects a second reply for the same inbound message', function 
         'in_reply_to_message_id' => $inbound->id,
         'text_content' => 'second reply',
         'processing_status' => MessageProcessingStatus::Processed,
-    ]))->toThrow(UniqueConstraintViolationException::class);
+    ])))->toThrow(UniqueConstraintViolationException::class);
 
     expect(Message::where('in_reply_to_message_id', $inbound->id)->count())->toBe(1);
 });
