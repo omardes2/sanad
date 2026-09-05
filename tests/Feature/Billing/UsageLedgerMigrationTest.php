@@ -16,16 +16,19 @@ uses(RefreshDatabase::class);
  * columns back-filled by the migration itself (no separate command).
  */
 it('back-fills derived ledger columns for rows that pre-date the ledger and stays reversible', function () {
-    // Undo the four B2 migrations (pricing refs, model_prices, ai_models,
-    // ai_providers) and then the two B1 migrations (usage_charges, ledger).
-    Artisan::call('migrate:rollback', ['--step' => 6, '--force' => true]);
+    // Undo the two C0 migrations (audit context, permission tables), the four
+    // B2 migrations (pricing refs, model_prices, ai_models, ai_providers) and
+    // then the two B1 migrations (usage_charges, ledger).
+    Artisan::call('migrate:rollback', ['--step' => 8, '--force' => true]);
 
     expect(Schema::hasColumn('usage_events', 'total_cost'))->toBeFalse()
         ->and(Schema::hasColumn('usage_events', 'cost_source'))->toBeFalse()
         ->and(Schema::hasTable('usage_charges'))->toBeFalse()
         ->and(Schema::hasTable('model_prices'))->toBeFalse()
         ->and(Schema::hasTable('ai_models'))->toBeFalse()
-        ->and(Schema::hasTable('ai_providers'))->toBeFalse();
+        ->and(Schema::hasTable('ai_providers'))->toBeFalse()
+        ->and(Schema::hasTable('permissions'))->toBeFalse()
+        ->and(Schema::hasColumn('audit_logs', 'actor'))->toBeFalse();
 
     $owner = User::factory()->create();
 
@@ -67,5 +70,7 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
         ->and(Schema::hasTable('usage_charges'))->toBeTrue()
         ->and(Schema::hasTable('ai_providers'))->toBeTrue()
         ->and(Schema::hasTable('ai_models'))->toBeTrue()
-        ->and(Schema::hasTable('model_prices'))->toBeTrue();
+        ->and(Schema::hasTable('model_prices'))->toBeTrue()
+        ->and(Schema::hasTable('permissions'))->toBeTrue()
+        ->and(Schema::hasColumn('audit_logs', 'actor'))->toBeTrue();
 });

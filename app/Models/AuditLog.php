@@ -10,6 +10,11 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 
+/**
+ * Append-only audit trail, written only by App\Services\Audit\AuditLogger.
+ * `metadata` = { changes: { field: { from, to } }, context: {...} }, already
+ * redacted at write time. Rows are never updated or deleted by the app.
+ */
 class AuditLog extends Model
 {
     /** @use HasFactory<AuditLogFactory> */
@@ -25,10 +30,14 @@ class AuditLog extends Model
      */
     protected $fillable = [
         'user_id',
+        'actor',
+        'actor_ref',
         'action',
         'subject_type',
         'subject_id',
         'metadata',
+        'ip_address',
+        'user_agent',
     ];
 
     /**
@@ -40,6 +49,22 @@ class AuditLog extends Model
             'metadata' => 'array',
             'created_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<string, array{from: mixed, to: mixed}>
+     */
+    public function changes(): array
+    {
+        return (array) ($this->metadata['changes'] ?? []);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function context(): array
+    {
+        return (array) ($this->metadata['context'] ?? []);
     }
 
     /** @return BelongsTo<User, $this> */

@@ -5,19 +5,22 @@ declare(strict_types=1);
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Contracts\Security\HasSensitiveAttributes;
 use App\Enums\ReplyMode;
 use App\Enums\UserStatus;
+use App\Support\Rbac\Permission;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Spatie\Permission\Traits\HasRoles;
 
-class User extends Authenticatable
+class User extends Authenticatable implements HasSensitiveAttributes
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    use HasFactory, HasRoles, Notifiable;
 
     /**
      * @var list<string>
@@ -60,12 +63,31 @@ class User extends Authenticatable
     }
 
     /**
-     * Whether this user may access the operator dashboard. Dashboard routes are
-     * gated on this flag (see the "admin" middleware / access-dashboard gate).
+     * The legacy operator flag (pre-RBAC). Still honoured for the dashboard
+     * pages that pre-date Phase C0; new sensitive pages require a permission.
      */
     public function isAdmin(): bool
     {
         return $this->is_admin === true;
+    }
+
+    /**
+     * Whether this user may enter the operator dashboard at all: the legacy
+     * flag, or a role granting `dashboard.access` (see the "admin" middleware).
+     */
+    public function canAccessDashboard(): bool
+    {
+        return $this->isAdmin() || $this->can(Permission::DashboardAccess->value);
+    }
+
+    /**
+     * Attributes that must never appear in audit rows, logs or exports.
+     *
+     * @return list<string>
+     */
+    public function sensitiveAttributes(): array
+    {
+        return ['password', 'remember_token'];
     }
 
     // ------------------------------------------------------------------
