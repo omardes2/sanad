@@ -25,7 +25,7 @@ return new class extends Migration
             $table->text('description')->nullable();
 
             $table->decimal('price', 10, 2)->default(0);
-            $table->string('currency', 3)->default(config('sanad.default_currency', 'ILS'));
+            $table->string('currency', 3)->default(config('billing.currency', 'USD'));
             $table->string('billing_period')->default(BillingPeriod::Monthly->value);
             $table->unsignedInteger('trial_days')->default(0);
 

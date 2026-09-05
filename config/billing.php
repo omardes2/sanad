@@ -28,6 +28,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Plan pricing currency
+    |--------------------------------------------------------------------------
+    | Currency for subscription plan prices (ISO 4217). Defaults to USD and is
+    | independent of sanad.default_currency (which stays regional, e.g. ILS, for
+    | expenses/user money features). Each plan still stores its own currency, so
+    | this is only the default for new plans and the seeder.
+    */
+    'currency' => env('BILLING_CURRENCY', 'USD'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Subscriber-facing messages (Arabic) — separable response layer
     |--------------------------------------------------------------------------
     | Kept out of the enforcement logic so a future WhatsApp upgrade/payment

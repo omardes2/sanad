@@ -10,6 +10,7 @@ use App\Livewire\Dashboard\Subscribers;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\Billing\UsageEngine;
+use Database\Seeders\PlanSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -116,4 +117,20 @@ it('lets an admin list subscribers', function () {
     billingSubscriber(billingPlan(), []);
 
     Livewire::actingAs($admin)->test(Subscribers::class)->assertOk();
+});
+
+it('seeds plans priced in USD', function () {
+    $this->seed(PlanSeeder::class);
+
+    expect(Plan::query()->pluck('currency')->unique()->all())->toBe(['USD'])
+        ->and(config('billing.currency'))->toBe('USD');
+});
+
+it('defaults a new plan form to the billing currency (USD)', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+
+    Livewire::actingAs($admin)
+        ->test(Plans::class)
+        ->call('new')
+        ->assertSet('currency', 'USD');
 });

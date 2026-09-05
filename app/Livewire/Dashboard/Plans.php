@@ -52,7 +52,7 @@ class Plans extends Component
 
     public function mount(): void
     {
-        $this->currency = (string) config('sanad.default_currency', 'ILS');
+        $this->currency = (string) config('billing.currency', 'USD');
     }
 
     public function new(): void
@@ -61,7 +61,7 @@ class Plans extends Component
         $this->price = '0';
         $this->billing_period = 'monthly';
         $this->is_active = true;
-        $this->currency = (string) config('sanad.default_currency', 'ILS');
+        $this->currency = (string) config('billing.currency', 'USD');
         $this->showForm = true;
     }
 

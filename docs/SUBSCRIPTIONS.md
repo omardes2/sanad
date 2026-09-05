@@ -79,6 +79,7 @@ Groq/Meta مثبّتة)، قابلة للضبط عبر البيئة لاحقًا
 BILLING_ENFORCE=false        # فعّلها في الإنتاج بعد زرع الباقات
 BILLING_AUTO_TRIAL=true
 BILLING_DEFAULT_PLAN=free
+BILLING_CURRENCY=USD         # عملة أسعار الباقات (مستقلة عن عملة التطبيق الإقليمية)
 # BILLING_UPGRADE_URL=       # رابط ترقية (لاحقًا)
 BILLING_COST_CURRENCY=USD
 COST_AI_REPLY=0  COST_AI_INPUT_PER_1K=0  COST_AI_OUTPUT_PER_1K=0  COST_WA_INBOUND=0  COST_WA_OUTBOUND=0

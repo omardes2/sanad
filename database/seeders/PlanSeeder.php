@@ -52,7 +52,7 @@ class PlanSeeder extends Seeder
                 ['slug' => $plan['slug']],
                 array_merge($plan, [
                     'description' => 'باقة سَنَد — الأسعار الحالية تجريبية وغير نهائية.',
-                    'currency' => config('sanad.default_currency', 'ILS'),
+                    'currency' => config('billing.currency', 'USD'),
                     'billing_period' => BillingPeriod::Monthly->value,
                     'features' => [],
                     'is_active' => true,
