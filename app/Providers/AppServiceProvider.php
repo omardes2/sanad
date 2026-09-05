@@ -7,7 +7,9 @@ use App\Agents\MeteredAgentOrchestrator;
 use App\Agents\PlaceholderAgentOrchestrator;
 use App\Channels\ChannelRegistry;
 use App\Contracts\AgentOrchestrator;
+use App\Contracts\Ai\CatalogSource;
 use App\Services\Ai\AiManager;
+use App\Services\Ai\Catalog\ConfigCatalogSource;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
 use App\Support\WhatsApp\WhatsAppConfig;
@@ -22,6 +24,11 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(AiManager::class);
+
+        // Where the AI router reads its model catalog from. Config-backed
+        // bootstrap defaults now; a database-backed source managed from Sanad
+        // Admin replaces this binding later without touching the router.
+        $this->app->bind(CatalogSource::class, ConfigCatalogSource::class);
 
         // The message pipeline resolves the agent through this binding. When AI
         // is enabled the real orchestrator answers, wrapped by the metering

@@ -71,6 +71,43 @@ it('includes the Arabic persona and the user message in the prompt', function ()
     });
 });
 
+it('routes through the AI router — switching the preferred provider needs no code change', function () {
+    aiConfigure([
+        'ai.provider' => 'openai',
+        'ai.providers.openai.base_url' => 'https://api.openai.com/v1',
+        'ai.providers.openai.api_key' => 'test-openai-key',
+        'ai.providers.openai.model' => 'gpt-4.1-mini',
+    ]);
+    Http::fake(['api.openai.com/*' => Http::response([
+        'model' => 'gpt-4.1-mini',
+        'choices' => [['message' => ['role' => 'assistant', 'content' => 'رد من OpenAI'], 'finish_reason' => 'stop']],
+        'usage' => ['prompt_tokens' => 10, 'completion_tokens' => 4],
+    ], 200)]);
+    [$user, $conversation, $message] = aiConversation();
+
+    $reply = app(AiAgentOrchestrator::class)->handle($user, $conversation, $message);
+
+    expect($reply->text)->toBe('رد من OpenAI')
+        ->and($reply->metadata['ai']['provider'])->toBe('openai')
+        ->and($reply->metadata['ai']['model'])->toBe('gpt-4.1-mini')
+        ->and($reply->metadata['ai']['operation'])->toBe('chat');
+
+    Http::assertSent(fn ($request) => str_contains($request->url(), 'api.openai.com')
+        && $request['model'] === 'gpt-4.1-mini');
+});
+
+it('answers with the safe fallback when no provider is configured for the route', function () {
+    aiConfigure(['ai.providers.groq.api_key' => '', 'ai.providers.openai.api_key' => '']);
+    Http::fake();
+    [$user, $conversation, $message] = aiConversation();
+
+    $reply = app(AiAgentOrchestrator::class)->handle($user, $conversation, $message);
+
+    expect($reply->text)->toBe(config('ai.fallback_message'))
+        ->and($reply->metadata['ai']['failed'])->toBeTrue();
+    Http::assertNothingSent();
+});
+
 it('makes Sanad time-aware using the user timezone', function () {
     Http::fake(groqReply('رد'));
     [$user, $conversation, $message] = aiConversation('ذكّرني غدًا');

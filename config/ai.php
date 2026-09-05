@@ -16,8 +16,10 @@ return [
     */
     'enabled' => (bool) env('AI_ENABLED', false),
 
-    // Active provider key (see the "providers" map below). Adding a provider is
-    // a config + class change only — nothing else in the app references Groq.
+    // PREFERRED provider key (see the "providers" map below). The router ranks
+    // this provider first; it falls through to any other configured provider
+    // that supports the operation. Adding a provider is a config + class change
+    // only — nothing else in the app names a vendor.
     'provider' => env('AI_PROVIDER', 'groq'),
 
     /*
@@ -104,6 +106,17 @@ return [
     | Keys/models come from the environment only — never committed.
     */
     'providers' => [
+        // Primary provider of the platform. organization/project are optional
+        // scoping headers for accounts that have several.
+        'openai' => [
+            'base_url' => env('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
+            'api_key' => env('OPENAI_API_KEY'),
+            'model' => env('OPENAI_MODEL', 'gpt-4.1-mini'),
+            'organization' => env('OPENAI_ORGANIZATION'),
+            'project' => env('OPENAI_PROJECT'),
+        ],
+
+        // Optional / fallback provider (OpenAI-compatible endpoint).
         'groq' => [
             'base_url' => env('GROQ_BASE_URL', 'https://api.groq.com/openai/v1'),
             'api_key' => env('GROQ_API_KEY'),
@@ -125,4 +138,22 @@ return [
             'model' => env('OLLAMA_MODEL'),
         ],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Model catalog (BOOTSTRAP DEFAULTS ONLY)
+    |--------------------------------------------------------------------------
+    | What the router chooses from. Leave EMPTY to derive one chat-capable entry
+    | per configured provider above (preferred provider ranked first) — today's
+    | behaviour with no config change. Fill it in to route explicitly:
+    |
+    |   ['provider' => 'openai', 'model' => 'gpt-4.1-mini',
+    |    'capabilities' => ['chat'], 'enabled' => true, 'priority' => 100],
+    |
+    | This is not the long-term home of the catalog: providers, models, pricing
+    | and routing rules become database-backed and managed from Sanad Admin in a
+    | later phase (same CatalogSource contract, no router change). Never
+    | hard-code a single model in application code.
+    */
+    'catalog' => [],
 ];

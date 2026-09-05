@@ -12,6 +12,8 @@ final readonly class AiMessage
     public function __construct(
         public AiRole $role,
         public string $content,
+        /** Set only on Tool-role messages: which tool call this result answers. */
+        public ?string $toolCallId = null,
     ) {}
 
     public static function system(string $content): self
@@ -30,12 +32,26 @@ final readonly class AiMessage
     }
 
     /**
-     * OpenAI-compatible wire shape (Groq, Gemini OpenAI endpoint, Ollama /v1).
+     * A tool result being returned to the model (see ToolResult::toMessage()).
+     */
+    public static function tool(string $toolCallId, string $content): self
+    {
+        return new self(AiRole::Tool, $content, $toolCallId);
+    }
+
+    /**
+     * OpenAI-compatible wire shape (OpenAI, Groq, Gemini OpenAI endpoint, Ollama /v1).
      *
-     * @return array{role: string, content: string}
+     * @return array{role: string, content: string, tool_call_id?: string}
      */
     public function toArray(): array
     {
-        return ['role' => $this->role->value, 'content' => $this->content];
+        $message = ['role' => $this->role->value, 'content' => $this->content];
+
+        if ($this->role === AiRole::Tool && $this->toolCallId !== null) {
+            $message['tool_call_id'] = $this->toolCallId;
+        }
+
+        return $message;
     }
 }
