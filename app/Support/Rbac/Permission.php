@@ -26,6 +26,8 @@ enum Permission: string
     case AiRoutingManage = 'ai.routing.manage';
     case AiCredentialsManage = 'ai.credentials.manage';
     case AiCredentialsTest = 'ai.credentials.test';
+    /** Provider health history (super_admin + operations). */
+    case AiHealthView = 'ai.health.view';
 
     case SettingsManage = 'settings.manage';
     /** Billing/subscription behaviour and financial guardrails (super_admin only in C1). */
@@ -59,6 +61,7 @@ enum Permission: string
             self::AiRoutingManage => 'إدارة التوجيه',
             self::AiCredentialsManage => 'إدارة مفاتيح المزوّدين',
             self::AiCredentialsTest => 'اختبار الاتصال بالمزوّدين',
+            self::AiHealthView => 'عرض صحة المزوّدين',
             self::SettingsManage => 'إدارة الإعدادات',
             self::SettingsManageBilling => 'إدارة إعدادات الفوترة والاشتراكات',
             self::SettingsManageEmergency => 'إدارة مفاتيح الطوارئ',

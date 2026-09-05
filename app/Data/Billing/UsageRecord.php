@@ -26,7 +26,8 @@ final readonly class UsageRecord
      * @param  array<string, mixed>  $metadata
      */
     public function __construct(
-        public User $subscriber,
+        /** Null ONLY for system-attributed usage (Phase C3 health probes): company cost, no subscriber, no quota. */
+        public ?User $subscriber,
         public UsageDimension $dimension,
         public string $idempotencyKey,
         public ?string $correlationId = null,

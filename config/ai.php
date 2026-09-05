@@ -29,6 +29,42 @@ return [
     'overrides' => [
         'enabled' => env('AI_ENABLED'),
         'catalog_source' => env('AI_CATALOG_SOURCE'),
+        'credentials_mode' => env('AI_CREDENTIALS_MODE'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Credentials mode (Phase C3)
+    |--------------------------------------------------------------------------
+    |  - "env"   : adapters run on the environment keys exactly as before;
+    |              the vault is ignored (the default, and the emergency rollback).
+    |  - "vault" : an ACTIVE vault credential is used first; a provider without
+    |              one falls back to its environment key during the transition;
+    |              an active credential that cannot be opened (missing master
+    |              key, tampered row) fails that provider CLOSED — never a
+    |              silent fallback. AI_CREDENTIALS_MODE in the environment
+    |              overrides the database value.
+    */
+    'credentials_mode' => 'env',
+
+    /*
+    |--------------------------------------------------------------------------
+    | Provider health (Phase C3)
+    |--------------------------------------------------------------------------
+    | Scheduled checks are OFF by default and, when enabled, run only the
+    | non-billable `auth` probe of adapters that declare one. Inference probes
+    | are manual only. Timeouts are for health probes, not for chat.
+    */
+    'health' => [
+        'scheduled' => false,
+        'connect_timeout' => 5,
+        'timeout' => 10,
+        'retention_days' => 90,
+        'manual_per_minute' => 6,
+        // A pending credential may be activated only with a successful auth
+        // probe of ITS OWN row inside this window (minutes): the verification
+        // must be RECENT. History retention (above) is a separate concern.
+        'verification_window_minutes' => 30,
     ],
 
     // PREFERRED provider key (see the "providers" map below). The router ranks

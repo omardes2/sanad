@@ -45,8 +45,8 @@ class UsageRecorder
         $cost = $this->costs->calculate($record, $occurredAt);
 
         $row = [
-            'user_id' => $record->subscriber->id,
-            'subscriber_id' => $record->subscriber->id, // immutable attribution snapshot
+            'user_id' => $record->subscriber?->id,
+            'subscriber_id' => $record->subscriber?->id, // immutable attribution snapshot (null = system-attributed)
             'subscription_id' => $subscription?->id,
             'plan_id' => $subscription?->plan_id,
             'plan_slug' => $subscription?->plan?->slug,
@@ -98,6 +98,10 @@ class UsageRecorder
      */
     private function subscriptionSnapshot(UsageRecord $record): ?Subscription
     {
+        if ($record->subscriber === null) {
+            return null;
+        }
+
         return Subscription::query()
             ->with('plan')
             ->where('subscriber_id', $record->subscriber->id)

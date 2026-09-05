@@ -8,14 +8,17 @@ use App\Agents\PlaceholderAgentOrchestrator;
 use App\Channels\ChannelRegistry;
 use App\Contracts\AgentOrchestrator;
 use App\Contracts\Ai\CatalogSource;
+use App\Contracts\Credentials\HostResolver;
 use App\Models\User;
 use App\Services\Ai\AiManager;
 use App\Services\Ai\Catalog\CatalogSourceResolver;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
 use App\Services\Billing\UsageRecorder;
+use App\Services\Credentials\CredentialVault;
 use App\Services\Settings\SettingsRepository;
 use App\Support\Rbac\Role;
+use App\Support\Security\DnsHostResolver;
 use App\Support\Security\SecretRedactor;
 use App\Support\Security\SensitiveFieldRegistry;
 use App\Support\WhatsApp\WhatsAppConfig;
@@ -31,6 +34,12 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(AiManager::class);
+
+        // Credential vault (Phase C3): master key from config/credentials.php
+        // (CREDENTIALS_KEY, independent of APP_KEY). Resolved fresh so a
+        // config override in tests applies; cheap to construct.
+        $this->app->bind(CredentialVault::class, static fn (): CredentialVault => new CredentialVault((array) config('credentials', [])));
+        $this->app->bind(HostResolver::class, DnsHostResolver::class);
 
         // Secret redaction (Phase C0): one explicit registry + one redactor,
         // shared by the audit logger and the log channels.

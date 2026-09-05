@@ -32,4 +32,19 @@ final class AuditActions
     public const AiPricePublished = 'ai.price.published';
 
     public const AiCatalogBootstrapApplied = 'ai.catalog.bootstrap_applied';
+
+    public const AiCredentialCreated = 'ai.credentials.created';
+
+    public const AiCredentialActivated = 'ai.credentials.activated';
+
+    /** Super Admin force path: activated WITHOUT a successful auth verification. */
+    public const AiCredentialActivatedUnverified = 'ai.credentials.activated_unverified';
+
+    public const AiCredentialRevoked = 'ai.credentials.revoked';
+
+    public const AiCredentialResolveFailed = 'ai.credentials.resolve_failed';
+
+    public const AiCredentialKeyRotated = 'ai.credentials.key_rotated';
+
+    public const AiProviderHealthChecked = 'ai.provider.health_checked';
 }

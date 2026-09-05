@@ -37,6 +37,10 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        // Never re-flash a secret into the session on a validation redirect
+        // (Phase C3 write-only credential form).
+        $exceptions->dontFlash(['current_password', 'password', 'password_confirmation', 'secret', 'api_key', 'credential']);
+
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );

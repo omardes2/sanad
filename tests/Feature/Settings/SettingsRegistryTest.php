@@ -6,7 +6,7 @@ use App\Enums\SettingPrecedence;
 use App\Support\Rbac\Permission;
 use App\Support\Settings\SettingsRegistry;
 
-it('registers exactly the C1 keys with a default, a group, a permission and a precedence each', function () {
+it('registers exactly the C1 + C3 keys with a default, a group, a permission and a precedence each', function () {
     $registry = app(SettingsRegistry::class);
     $keys = array_keys($registry->all());
 
@@ -17,7 +17,8 @@ it('registers exactly the C1 keys with a default, a group, a permission and a pr
         'billing.limit_reached_message', 'billing.feature_disabled_message', 'billing.upgrade_url',
         'billing.auto_trial', 'billing.default_plan_slug',
         'ai.guardrails.max_cost_per_request', 'ai.guardrails.estimate_input_tokens', 'ai.guardrails.estimate_output_tokens',
-        'ai.enabled', 'ai.catalog_source', 'billing.enforce',
+        'ai.health.scheduled',
+        'ai.credentials_mode', 'ai.enabled', 'ai.catalog_source', 'billing.enforce',
     ]);
 
     foreach ($registry->all() as $definition) {

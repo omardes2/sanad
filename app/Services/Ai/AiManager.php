@@ -8,6 +8,7 @@ use App\Contracts\Ai\AiProvider;
 use App\Exceptions\Ai\AiConfigurationException;
 use App\Providers\Ai\GroqChatProvider;
 use App\Providers\Ai\OpenAIProvider;
+use App\Services\Credentials\ProviderRuntimeConfigFactory;
 use Closure;
 use Illuminate\Contracts\Container\Container;
 
@@ -27,6 +28,29 @@ class AiManager
     private array $custom = [];
 
     public function __construct(private readonly Container $container) {}
+
+    /**
+     * Adapter config for a provider (Phase C3): config/ai.php with `api_key`
+     * replaced by the credential the resolver chose. Extend()-registered
+     * factories receive the same array.
+     *
+     * @return array<string, mixed>
+     */
+    public function runtimeConfig(string $name): array
+    {
+        return $this->container->make(ProviderRuntimeConfigFactory::class)->for($name);
+    }
+
+    /**
+     * Build an adapter with an EXPLICIT config (Test Connection: a pending
+     * credential and/or a pinned candidate URL). Never used by routing.
+     *
+     * @param  array<string, mixed>  $config
+     */
+    public function providerWith(string $name, array $config): AiProvider
+    {
+        return $this->build($name, $config);
+    }
 
     /**
      * Register or override a provider factory at runtime.
@@ -58,9 +82,14 @@ class AiManager
     {
         $name ??= (string) config('ai.provider', 'groq');
 
-        /** @var array<string, mixed> $config */
-        $config = (array) config("ai.providers.{$name}", []);
+        return $this->build($name, $this->runtimeConfig($name));
+    }
 
+    /**
+     * @param  array<string, mixed>  $config
+     */
+    private function build(string $name, array $config): AiProvider
+    {
         if (isset($this->custom[$name])) {
             return ($this->custom[$name])($this->container, $config);
         }

@@ -16,13 +16,15 @@ uses(RefreshDatabase::class);
  * columns back-filled by the migration itself (no separate command).
  */
 it('back-fills derived ledger columns for rows that pre-date the ledger and stays reversible', function () {
-    // Undo the C1 migration (app_settings), the two C0 migrations (audit
-    // context, permission tables), the four B2 migrations (pricing refs,
-    // model_prices, ai_models, ai_providers) and the two B1 migrations
-    // (usage_charges, ledger).
-    Artisan::call('migrate:rollback', ['--step' => 9, '--force' => true]);
+    // Undo the two C3 migrations (provider_health_checks, provider_credentials),
+    // the C1 migration (app_settings), the two C0 migrations (audit context,
+    // permission tables), the four B2 migrations (pricing refs, model_prices,
+    // ai_models, ai_providers) and the two B1 migrations (usage_charges, ledger).
+    Artisan::call('migrate:rollback', ['--step' => 11, '--force' => true]);
 
-    expect(Schema::hasColumn('usage_events', 'total_cost'))->toBeFalse()
+    expect(Schema::hasTable('provider_health_checks'))->toBeFalse()
+        ->and(Schema::hasTable('provider_credentials'))->toBeFalse()
+        ->and(Schema::hasColumn('usage_events', 'total_cost'))->toBeFalse()
         ->and(Schema::hasColumn('usage_events', 'cost_source'))->toBeFalse()
         ->and(Schema::hasTable('usage_charges'))->toBeFalse()
         ->and(Schema::hasTable('model_prices'))->toBeFalse()
