@@ -5,7 +5,6 @@ declare(strict_types=1);
 use App\Data\Finance\CostBucket;
 use App\Enums\CostSource;
 use App\Enums\CoverageStatus;
-use App\Models\UsageEvent;
 use App\Models\User;
 use App\Services\Finance\FinanceQuery;
 use Carbon\CarbonImmutable;
@@ -18,38 +17,6 @@ uses(RefreshDatabase::class);
  * deterministic fixture whose expected figures are exact decimal strings so the
  * SAME test proves parity on SQLite (fast suite) and PostgreSQL (CI job).
  */
-
-/**
- * @param  array<string, mixed>  $attrs
- */
-function financeRow(array $attrs): UsageEvent
-{
-    $cost = (string) ($attrs['total_cost'] ?? '0.000000');
-
-    return UsageEvent::factory()->create(array_merge([
-        'user_id' => null,
-        'subscriber_id' => null,
-        'plan_id' => null,
-        'plan_slug' => null,
-        'type' => 'ai_reply',
-        'operation' => 'chat',
-        'channel' => 'web',
-        'provider' => 'groq',
-        'model' => 'llama-3.3-70b-versatile',
-        'input_units' => 10,
-        'output_units' => 5,
-        'cached_units' => 0,
-        'cost' => $cost,
-        'provider_cost' => $cost,
-        'communication_cost' => '0.000000',
-        'external_cost' => '0.000000',
-        'total_cost' => $cost,
-        'currency' => 'USD',
-        'cost_source' => CostSource::ModelPrice,
-        'occurred_at' => CarbonImmutable::parse('2026-09-10 12:00:00', 'UTC'),
-    ], $attrs));
-}
-
 function financeWindow(): array
 {
     return [CarbonImmutable::parse('2026-09-01', 'UTC'), CarbonImmutable::parse('2026-10-01', 'UTC')];

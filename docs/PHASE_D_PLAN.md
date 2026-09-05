@@ -86,9 +86,32 @@
 2. `php artisan sanad:rbac:bootstrap` (dry-run) → مراجعة → `--apply` لمزامنة `finance.view` / `finance.export`.
 3. لا تشغيل تلقائي لـ`sanad:finance:snapshot`؛ أول تشغيل يدوي هو بداية تاريخ MRR.
 
-## 4) D2 — Finance Dashboard & Export (مخطَّط، لا يبدأ قبل اعتماد D1)
+## 4) D2 — Finance Dashboard & Export (منفَّذ)
 
-`/dashboard/finance` (`permission:finance.view`) وتصدير CSV (`finance.export`) فوق `FinanceQuery` نفسه: بطاقات Known Cost بمكوّناتها، unpriced (عدّ + توكنز بلا مبلغ)، تحذيرات coverage، Current MRR/ARR/ARPU لكل عملة (as-of now) مع `past_due` منفصل، اتجاه MRR من snapshots (ما قبلها `NOT AVAILABLE`)، `MARGIN UNKNOWN` عند أي نقص، breakdowns باقة/مزوّد/نموذج/عملية/قناة، أعلى مشتركين تكلفة، اتجاه يومي/شهري UTC (موضَّح في الصفحة وCSV)، بلا PII، بلا مكتبة رسوم.
+### القرارات المعتمدة قبل التنفيذ
+1. **لا Historical Gross Profit / Margin في D2**: لقطات MRR تمثّل `MRR run-rate as of that day` لا `Revenue earned that day`؛ لا تُجمع كإيراد، لا تُضرب بعدد الأيام، لا تُقارن بتكلفة الاستخدام. الهامش التاريخي = `NOT AVAILABLE — Phase E` مع الأسباب، وبلا أي رقم ربح جزئي.
+2. **`MrrSnapshotHistory` = Historical MRR Run-rate / MRR Snapshot History** (ليس Revenue Trend): قبل أول snapshot `NOT AVAILABLE`، يوم غير ملتقط `NOT CAPTURED`، صفوف الـmarker مستبعدة، لا interpolation ولا backfill.
+3. **Current KPIs منفصلة عن نافذة الاستخدام**: الصفحة مقسومة إلى `Current Subscription Run-rate — as of now` ثم `Usage & Cost Analysis — selected UTC window` ثم `MRR Snapshot History`. نطاق التاريخ لا يحوّل Current MRR إلى إيراد تاريخي.
+4. **`past_due`** يُسمّى `Subscriptions with past_due status` / `اشتراكات بحالة Past Due` — لا Collected/Outstanding Cash.
+5. **قسم التكلفة**: Known Provider / Communication / External Cost + Unpriced + تحذيرات coverage + تكلفة النظام منفصلة؛ مكوّن بلا منتِج يُعرض `NO PRODUCER` / `COVERAGE INCOMPLETE` لا `0`.
+6. **Breakdowns**: باقة (النظام وبلا باقة منفصلان)، مزوّد/نموذج، عملية/قناة، أعلى مشتركين (بلا صفوف النظام، معرّف داخلي فقط).
+7. **CSV واحد بعمود `section`** مع metadata: `calculated_not_collected=true`, `timezone=UTC`, `window_from/to`, `cost_coverage`, `unpriced_rows`, `mrr_as_of`, `historical_revenue_available=false`, `gross_margin_available=false` — ولا أي Gross Profit رقمي.
+8. **ARPU** عند `active = 0` = `N/A`.
+9. **الأداء**: الفهارس الحالية كافية، لا migration؛ اختبار يثبت أن كل استعلامات `FinanceQuery` مقيّدة بنافذة `occurred_at` من الجهتين (لا unbounded scan).
+10. RBAC `finance.view` / `finance.export`؛ operations/support = 403؛ UTC labeling؛ streaming CSV؛ بلا PII؛ رسوم CSS بلا مكتبة؛ rollback boundary يبقى 13.
+
+### ما نُفِّذ
+- `App\Services\Finance\MrrSnapshotHistory` + `MrrHistorySeries`/`MrrHistoryDay` (CAPTURED / NOT_CAPTURED / NOT_AVAILABLE): قراءة فقط، نافذة ≤ 366 يومًا على `snapshot_date`، لا مجموع ولا ضرب ولا تكلفة (اختبار يفحص الواجهة والمصدر).
+- `App\Data\Finance\GrossMarginStatus`: بلا أي رقم؛ `isAvailable()` دائمًا false في D؛ الأسباب `revenue_history_unavailable` (دائمًا) + `unpriced_usage` + `incomplete_cost_coverage` + `currency_mismatch` حسب النافذة.
+- صفحة Livewire `App\Livewire\Dashboard\Finance` على `/dashboard/finance` (`permission:finance.view` + فحص في mount وrender) بالأقسام الثلاثة، فلاتر `#[Url]` (from/to, plan_id, provider, model, operation, channel, cost, attribution, granularity day|month, top ≤ 50)، أعمدة CSS بحساب صحيح (`costBars/historyBars`)، رابط تفاصيل المشترك فقط مع `subscribers.view`، رابط CSV فقط مع `finance.export`، رابط التنقّل "المالية" مشروط بـ`finance.view`.
+- `App\Services\Finance\FinanceExporter` + `FinanceExportController` على `/dashboard/finance/export` (`permission:finance.export` + إعادة فحص): `streamDownload` بأقسام `meta · current_run_rate · unassigned · cost_totals · cost_coverage · gross_margin · by_plan · by_provider_model · by_operation_channel · top_subscribers · cost_trend_utc_<g> · mrr_snapshot_history`، كل صف يبدأ بـ`section`؛ المكوّن بلا تغطية يُصدَّر كحالة (`NO PRODUCER`/`INCOMPLETE`) لا كمبلغ؛ نافذة إلزامية (422)؛ الفلاتر مُتحقَّق منها.
+- لا migrations؛ لا تغيير على `FinanceQuery`/`MrrCalculator`/الأمر.
+
+### الاختبارات (D2)
+- `FinancePageTest`: RBAC (guest redirect، legacy admin/operations/support 403، finance/super 200)، رابط التنقّل، الأقسام الثلاثة والمفردات، UTC، Current MRR مع past_due خارجه وبتسميته المعتمدة، الـmarker منفصل وغير ظاهر كعملة، `NO PRODUCER` و`COVERAGE INCOMPLETE`، تكلفة النظام منفصلة، `NOT CAPTURED`/`NOT AVAILABLE`، بطاقة الهامش بلا أي مبلغ، ARPU `N/A`، استقلال Current KPIs عن النافذة، فلتر الإسناد، رفض النافذة، الرابط/التصدير حسب الصلاحية، بلا PII.
+- `FinanceExportTest`: RBAC، التحقق من النافذة والفلاتر، الـmetadata المعتمدة كاملة، لا Gross Profit رقمي، parity مع خدمات الصفحة (نفس الأرقام)، المكوّنات بلا تغطية كحالات، ARPU `N/A`، بلا PII وبلا `XXX`.
+- `MrrSnapshotHistoryTest`: NOT AVAILABLE / NOT CAPTURED / markers / لا interpolation / لا مجموع / نافذة مقيّدة.
+- `FinanceQueryBoundsTest`: كل استعلام على `usage_events` من `FinanceQuery` والـexporter يحمل `occurred_at >= ?` و`occurred_at < ?`؛ النافذة لا تُحذف ولا تُعكس ولا تتجاوز الحد؛ استعلامات snapshots مقيّدة بـ`snapshot_date`.
 
 ## 5) مؤجَّل صراحة إلى Phase E — Reconciliation & Payments
 

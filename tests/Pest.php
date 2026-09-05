@@ -46,6 +46,7 @@ expect()->extend('toBeOne', function () {
 
 use App\Data\InboundMessageData;
 use App\Enums\ChannelType;
+use App\Enums\CostSource;
 use App\Enums\MessageType;
 use App\Enums\SubscriptionStatus;
 use App\Enums\WebhookEventStatus;
@@ -54,6 +55,7 @@ use App\Jobs\ProcessWhatsAppWebhook;
 use App\Models\ChannelAccount;
 use App\Models\Plan;
 use App\Models\Subscription;
+use App\Models\UsageEvent;
 use App\Models\User;
 use App\Models\WebhookEvent;
 use App\Services\Rbac\RbacSynchronizer;
@@ -473,4 +475,38 @@ function c4Catalog(): array
     app(SettingsCache::class)->flush();
 
     return $fx;
+}
+
+/**
+ * Phase D — one ledger row for the finance tests (defaults: priced model_price,
+ * system-attributed, inside 2026-09). Shared here so every Finance test file can run alone.
+ *
+ * @param  array<string, mixed>  $attrs
+ */
+function financeRow(array $attrs): UsageEvent
+{
+    $cost = (string) ($attrs['total_cost'] ?? '0.000000');
+
+    return UsageEvent::factory()->create(array_merge([
+        'user_id' => null,
+        'subscriber_id' => null,
+        'plan_id' => null,
+        'plan_slug' => null,
+        'type' => 'ai_reply',
+        'operation' => 'chat',
+        'channel' => 'web',
+        'provider' => 'groq',
+        'model' => 'llama-3.3-70b-versatile',
+        'input_units' => 10,
+        'output_units' => 5,
+        'cached_units' => 0,
+        'cost' => $cost,
+        'provider_cost' => $cost,
+        'communication_cost' => '0.000000',
+        'external_cost' => '0.000000',
+        'total_cost' => $cost,
+        'currency' => 'USD',
+        'cost_source' => CostSource::ModelPrice,
+        'occurred_at' => CarbonImmutable::parse('2026-09-10 12:00:00', 'UTC'),
+    ], $attrs));
 }
