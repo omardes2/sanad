@@ -45,5 +45,10 @@ final readonly class UsageRecord
         public ?string $jobRef = null,
         public ?string $jobStepRef = null,
         public ?string $toolInvocationRef = null,
+        /**
+         * The model id the router REQUESTED, when it differs from the id the
+         * provider reported in `model` (last resort of alias resolution).
+         */
+        public ?string $routedModel = null,
     ) {}
 }

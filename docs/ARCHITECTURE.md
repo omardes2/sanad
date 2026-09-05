@@ -73,9 +73,12 @@ ResolvedRoute{provider, model, alternatives} ─▶ SupportsChat::chat(AiRequest
 - **`SanadAiRouter`**: يختار (provider, model) لكل `AiOperation`. **تبديل النموذج الأساسي =
   بيانات لا كود.** السياسة تتوسّع لاحقًا (plan/cost/profitability/guardrails) عبر
   `RoutingContext` دون تغيير المستدعين.
-- **`CatalogSource`**: `ConfigCatalogSource` الآن (يستنتج الكتالوج من `ai.providers` إن كان
-  `ai.catalog` فارغًا — فيبقى سلوك النشر الحالي كما هو). مصدر DB يُدار من Admin يحلّ محلّه
-  لاحقًا **بنفس العقد**.
+- **`CatalogSource`**: المربوط هو `CatalogSourceResolver` (Phase B2) الذي يختار بحسب
+  `AI_CATALOG_SOURCE`: `auto` (افتراضي) = `DatabaseCatalogSource` إن كان في DB نموذج مفعّل وإلا
+  `ConfigCatalogSource` (يستنتج الكتالوج من `ai.providers` إن كان `ai.catalog` فارغًا — سلوك النشر
+  الحالي بالضبط مع جداول فارغة)؛ `database`؛ `config` (مفتاح رجوع فوري). **التفضيل يبقى
+  `AI_PROVIDER`** في كل الأوضاع؛ `ai_providers.is_primary` مخزّن ولا يُقرأ حتى cutover Phase C.
+  الـcache قصير ويُبطَل عند أي حفظ، وتعذّر مخزن الـcache لا يوقف التوجيه.
 - **DTOs داخلية:** `AiOperation`، `AiRequest` (+model/operation/tools)، `AiResponse`
   (+cached/duration/toolCalls/provider)، `AiMessage`/`AiRole` (+tool)، وتجريد الأدوات
   المحايد للمزوّد **`AiToolDefinition` / `AiToolCall` / `ToolResult`** — المزوّد يترجم فقط؛
@@ -129,7 +132,7 @@ ResolvedRoute{provider, model, alternatives} ─▶ SupportsChat::chat(AiRequest
 |---|---|---|
 | **A — AI Platform Foundation** ✅ | Provider abstraction، capability contracts، `OpenAIProvider`، `SanadAiRouter`، `CatalogSource` (config الآن)، DTOs + tool-call abstraction، Groq يبقى | لا |
 | **B1 — Metering Foundation** ✅ | **Recording ≠ Enforcement**: `UsageRecorder` مالك وحيد لـ`usage_events` (دائمًا، idempotent، snapshots بلا FK للمشترك/الاشتراك/الباقة، مراجع job/tool بلا FK، `correlation_id` + `idempotency_key`، `outcome`، مكوّنات التكلفة مخزّنة وقت الحدث)؛ `UsageEngine` = إنفاذ فقط بسجلّ `usage_charges` | نعم (إضافية، backward-compatible) |
-| **B2 — Provider / Model / Pricing Foundation** | `ai_providers`/`ai_models`/`model_prices` (تاريخي)، `CatalogSource` من DB، `CostCalculator` بأسعار DB، مرجع السعر على الحدث، أساس Cost guardrails | نعم (إضافية) |
+| **B2 — Provider / Model / Pricing Foundation** ✅ | `ai_providers`/`ai_models`/`model_prices` (تاريخي، append-only)، `DatabaseCatalogSource` + `CatalogSourceResolver` (auto/database/config)، `PriceBook` (السعر الساري عند `occurred_at`، قفل صف النموذج الأب عند النشر، رفض أي تداخل)، `CostCalculator` (حساب صحيح ثابت النقطة، snapshot ثابت)، `model_price_id` + `pricing_snapshot` + `cost_source` على الحدث، UNPRICED ≠ مجاني، alias resolution، أساس Cost guardrails، أوامر bootstrap/price/catalog آمنة. **`AI_PROVIDER` يبقى الحاكم حتى C.** التفاصيل: [PHASE_B2_PLAN.md](PHASE_B2_PLAN.md) | نعم (إضافية) |
 | **C — Admin Control Center** | Providers/Models/Pricing/Routing/Credentials(مشفّرة)/Health + Test Connection + Sync jobs + `app_settings` + Persona/Prompts من DB. **يسبقه/يبدأ معه RBAC أساسي** يحمي الأسطح الحسّاسة؛ Credentials لـSuper Admin أو صلاحية صريحة فقط | نعم |
 | **D — Financials & Analytics (Calculated)** | Finance Overview، MRR (`subscription_events`)، ربحية المشترك، drill-down، الرئيسية | نعم |
 | **E — Reconciliation & Payments (Reconciled)** | `provider_invoices`، `cost_adjustments`، `customer_payments`، مطابقة Calculated vs Actual | نعم |
@@ -147,6 +150,7 @@ ResolvedRoute{provider, model, alternatives} ─▶ SupportsChat::chat(AiRequest
 - Pricing تاريخي DB-backed؛ تكلفة immutable وقت الحدث؛ Cost accounting لكل Subscriber/Subscription/Operation؛ Cost Guardrails؛ Calculated vs Actual/Reconciled.
 - `usage_events` يُهيّأ من Phase B1 بمراجع job/step/tool/channel/operation **بدون FK إلى جداول غير موجودة** (تُضاف العلاقات بهجرة مستقلة لاحقًا)، وبـsnapshots بلا FK للمشترك (`subscriber_id`) والاشتراك/الباقة (التاريخ المالي لا يفقد صاحبه بحذف User، ولا يضيع بحذف Subscription أو تغيير Plan). الصفوف التاريخية: `outcome`/`operation` مجهولان (`NULL`)، و`cost` القديم يُعامَل كإجمالي فقط دون إعادة تصنيفه.
 - Phase B مقسومة إلى **B1** (Metering Foundation — Recorder مالك وحيد للـledger، Engine إنفاذ فقط بسجلّ `usage_charges` خاصّ) و**B2** (Providers/Models/Pricing). `correlation_id` ≠ `idempotency_key`؛ Billable ≠ نجاح العملية للمستخدم (`outcome`).
+- **B2 (معتمد ومنفَّذ):** الأسعار تاريخية append-only بفترات `[effective_from, effective_until)`؛ التكلفة تُحسب مرة واحدة بالسعر الساري عند `occurred_at` وتُخزَّن مع `model_price_id` و`pricing_snapshot` ولا تُعاد أبدًا (التصحيح في Phase E عبر adjustments). الحدث بلا سعر أو بعملة مختلفة **UNPRICED / تكلفة غير معروفة** (`cost_source` = `none`/`currency_mismatch`، والصفوف السابقة NULL) — ليس مجانيًا ويجب عدّه. نشر السعر يقفل صف `ai_models` الأب، ويرفض أي تداخل (بأثر رجعي أو لا). `AI_PROVIDER` يبقى التفضيل الحاكم؛ `is_primary` مخزّن لـC. لا سرّ في DB (`credentials_ref` اسم متغيّر فقط). Bootstrap dry-run صريح لا يكتب أسعارًا؛ الأسعار بقيم مُراجَعة فقط عبر `sanad:ai:price`.
 - Notification abstraction تبدأ مع أول احتياج حقيقي (Reminder Delivery في G)؛ Phase K توسّعها.
 - RBAC: `spatie/laravel-permission`؛ أساس يحمي الأسطح الحسّاسة قبل/مع C؛ التنفيذ الكامل في F.
 - Admin Control Center؛ API-first services؛ Channel abstraction؛ Jobs/Calls/Artifacts/Unified Identity معماريات مستقبلية مُلزِمة.

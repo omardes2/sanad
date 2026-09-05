@@ -9,7 +9,7 @@ use App\Channels\ChannelRegistry;
 use App\Contracts\AgentOrchestrator;
 use App\Contracts\Ai\CatalogSource;
 use App\Services\Ai\AiManager;
-use App\Services\Ai\Catalog\ConfigCatalogSource;
+use App\Services\Ai\Catalog\CatalogSourceResolver;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
 use App\Services\Billing\UsageRecorder;
@@ -26,10 +26,10 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(AiManager::class);
 
-        // Where the AI router reads its model catalog from. Config-backed
-        // bootstrap defaults now; a database-backed source managed from Sanad
-        // Admin replaces this binding later without touching the router.
-        $this->app->bind(CatalogSource::class, ConfigCatalogSource::class);
+        // Where the AI router reads its model catalog from: the resolver picks
+        // the database catalog (Phase B2) when it has enabled models, else the
+        // config-backed bootstrap defaults — see config('ai.catalog_source').
+        $this->app->bind(CatalogSource::class, CatalogSourceResolver::class);
 
         // The message pipeline resolves the agent through this binding. When AI
         // is enabled the real orchestrator answers, wrapped by the metering

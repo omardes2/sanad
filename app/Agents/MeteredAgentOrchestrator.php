@@ -74,6 +74,7 @@ class MeteredAgentOrchestrator implements AgentOrchestrator
             operation: $ai['operation'] ?? null,
             provider: (string) ($ai['provider'] ?? 'internal'),
             model: $ai['model'] ?? null,
+            routedModel: $ai['routed_model'] ?? null,
             channel: $conversation->channelAccount?->channel?->value,
             inputUnits: (int) ($ai['prompt_tokens'] ?? 0),
             outputUnits: (int) ($ai['completion_tokens'] ?? 0),

@@ -52,12 +52,14 @@ class AiAgentOrchestrator implements AgentOrchestrator
 
         $providerName = (string) config('ai.provider', 'groq');
         $model = null;
+        $routedModel = null;
 
         try {
             $route = $this->router->route(AiOperation::Chat, new RoutingContext(user: $user));
             $provider = $route->provider;
             $providerName = $provider->name();
             $model = $route->model;
+            $routedModel = $route->model;
 
             if (! $provider instanceof SupportsChat) {
                 throw AiConfigurationException::unsupportedOperation($providerName, AiOperation::Chat);
@@ -87,6 +89,9 @@ class AiAgentOrchestrator implements AgentOrchestrator
             metadata: ['ai' => [
                 'provider' => $providerName,
                 'model' => $model,
+                // What the router asked for — the ledger resolves aliases from
+                // the reported model first, then this.
+                'routed_model' => $routedModel,
                 'operation' => AiOperation::Chat->value,
                 'prompt_tokens' => $response->promptTokens,
                 'completion_tokens' => $response->completionTokens,

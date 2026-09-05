@@ -15,12 +15,17 @@ class DatabaseSeeder extends Seeder
      * Demo data is NEVER seeded automatically in production. It runs only in
      * local/testing environments. To load it explicitly anywhere, run:
      *   php artisan db:seed --class=DemoDataSeeder
+     *
+     * The AI catalog seeder (providers/models, no prices) is likewise
+     * local/testing only; production registers the catalog with the explicit
+     * `sanad:ai:bootstrap` command.
      */
     public function run(): void
     {
         if (app()->environment(['local', 'testing'])) {
             $this->call([
                 DemoDataSeeder::class,
+                AiCatalogSeeder::class,
             ]);
         }
     }
