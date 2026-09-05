@@ -8,17 +8,24 @@ use App\Data\Billing\Entitlement;
 use App\Data\Billing\UsageDecision;
 use App\Enums\UsageDimension;
 use App\Enums\UsageOutcome;
+use App\Models\UsageCharge;
 use App\Models\UsageCounter;
-use App\Models\UsageEvent;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
 /**
- * The single, centralized metering engine. All entitlement checks and usage
- * charging go through here — counters are never incremented ad-hoc in WhatsApp
- * or AI code. Channel-agnostic: it only knows subscribers and dimensions.
+ * The centralized ENFORCEMENT engine: entitlement checks, limits, usage
+ * counters. It decides allow / deny and consumes quota — nothing else.
+ *
+ * It does NOT write the cost ledger (usage_events). That is UsageRecorder's
+ * job and it runs whether or not enforcement is on. Both are idempotent on
+ * their own, so a retry re-runs each safely and neither depends on the other:
+ * a counter failure can never erase a cost we already incurred.
+ *
+ * Everything here is gated by billing.enforce: when it is off, check() and
+ * charge() report NotEnforced and touch nothing.
  *
  * Concurrency & the counter-creation race
  * ---------------------------------------
@@ -29,29 +36,20 @@ use Illuminate\Support\Facades\DB;
  *   DO UPDATE SET used = used + weight
  *   WHERE used + weight <= cap
  *
- * This is safe even when the counter row does not exist yet — the failing case
- * for `SELECT ... FOR UPDATE`, which cannot lock a non-existent row. With two
- * "first" messages arriving together:
- *   - both attempt the INSERT; the unique constraint lets exactly one succeed,
- *     the other's statement waits on the conflicting row (PostgreSQL) and then
- *     takes the DO UPDATE branch;
- *   - the DO UPDATE only increments while `used + weight <= cap`, so the counter
- *     can never pass the cap — the loser gets 0 affected rows → LimitReached.
- * A single statement does check-and-increment atomically, so there is no
- * read-then-increment window to exploit, and no reliance on locking a row that
- * isn't there.
+ * Safe even when the counter row does not exist yet (the failing case for
+ * SELECT ... FOR UPDATE): the unique constraint serialises creation and the
+ * conditional increment can never pass the cap — the loser gets 0 affected
+ * rows → LimitReached. Check-and-increment is one statement, so there is no
+ * read-then-increment window.
  *
- * Idempotency: each charge carries a key (the inbound message id). A duplicate
- * webhook or a job retry inserts the ledger row at most once (unique
- * idempotency_key); a concurrent duplicate's INSERT loses the race and the whole
- * charge rolls back (so it is never counted twice). A caught unique violation is
- * followed only by ROLLBACK, so an aborted PostgreSQL transaction is never
- * reused.
+ * Idempotency: each charge inserts a usage_charges row (unique idempotency_key)
+ * in the SAME transaction as the counter increments. A sequential replay is
+ * detected up front (AlreadyCharged, allowed, not re-counted); a concurrent
+ * duplicate loses the unique insert and the whole charge rolls back, so it is
+ * never counted twice. A caught unique violation is followed only by ROLLBACK.
  */
 class UsageEngine
 {
-    public function __construct(private readonly UsageCostCalculator $costs) {}
-
     /**
      * Non-locking pre-check used BEFORE calling a metered provider, so we don't
      * call the AI provider when the subscriber is already over the limit. This
@@ -85,20 +83,12 @@ class UsageEngine
     }
 
     /**
-     * Atomically and idempotently charge one usage of a dimension. The
-     * authoritative hard-limit gate (safe under concurrency and the
-     * counter-creation race — see the class docblock).
-     *
-     * @param  array<string, mixed>  $meta
+     * Atomically and idempotently consume one unit of quota for a dimension —
+     * the authoritative hard-limit gate (see the class docblock). Quota only:
+     * the cost of the operation is recorded separately by UsageRecorder.
      */
-    public function charge(
-        User $subscriber,
-        UsageDimension $dimension,
-        string $idempotencyKey,
-        array $meta = [],
-        int $inputTokens = 0,
-        int $outputTokens = 0,
-    ): UsageDecision {
+    public function charge(User $subscriber, UsageDimension $dimension, string $idempotencyKey): UsageDecision
+    {
         if (! config('billing.enforce', false)) {
             return new UsageDecision(UsageOutcome::NotEnforced, $dimension);
         }
@@ -112,11 +102,9 @@ class UsageEngine
         [$dayKey, $monthKey] = $this->periodKeys($subscriber);
 
         try {
-            return DB::transaction(function () use (
-                $subscriber, $dimension, $idempotencyKey, $meta, $inputTokens, $outputTokens, $ent, $dayKey, $monthKey
-            ): UsageDecision {
-                // Sequential replay (already committed) — allowed, not re-charged.
-                if (UsageEvent::query()->where('idempotency_key', $idempotencyKey)->exists()) {
+            return DB::transaction(function () use ($subscriber, $dimension, $idempotencyKey, $ent, $dayKey, $monthKey): UsageDecision {
+                // Sequential replay (already committed) — allowed, not re-counted.
+                if (UsageCharge::query()->where('idempotency_key', $idempotencyKey)->exists()) {
                     return new UsageDecision(UsageOutcome::AlreadyCharged, $dimension);
                 }
 
@@ -130,25 +118,16 @@ class UsageEngine
                     }
                 }
 
-                $cost = $this->costs->cost($dimension, $weight, $inputTokens, $outputTokens);
-
                 try {
-                    UsageEvent::create([
-                        'user_id' => $subscriber->id,
-                        'type' => $dimension->value,
+                    UsageCharge::create([
+                        'subscriber_id' => $subscriber->id,
+                        'dimension' => $dimension->value,
                         'idempotency_key' => $idempotencyKey,
-                        'provider' => (string) ($meta['provider'] ?? 'internal'),
-                        'model' => $meta['model'] ?? null,
-                        'input_units' => $inputTokens,
-                        'output_units' => $outputTokens,
-                        'quantity' => $weight,
-                        'cost' => $cost['cost'],
-                        'currency' => $cost['currency'],
-                        'metadata' => $meta['metadata'] ?? null,
+                        'weight' => $weight,
                     ]);
                 } catch (UniqueConstraintViolationException) {
-                    // Concurrent duplicate won the ledger insert — roll back the
-                    // counter increments so this duplicate is never counted.
+                    // Concurrent duplicate won the insert — roll back the counter
+                    // increments so this duplicate is never counted.
                     throw new UsageChargeAborted(UsageOutcome::AlreadyCharged);
                 }
 

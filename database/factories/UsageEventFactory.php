@@ -23,7 +23,10 @@ class UsageEventFactory extends Factory
             'model' => fake()->randomElement(['gpt-4o-mini', 'whisper-1']),
             'input_units' => fake()->numberBetween(0, 5000),
             'output_units' => fake()->numberBetween(0, 2000),
-            'cost' => fake()->randomFloat(6, 0, 0.5),
+            'cost' => $cost = fake()->randomFloat(6, 0, 0.5),
+            'provider_cost' => $cost,
+            'total_cost' => $cost,
+            'occurred_at' => now(),
             'metadata' => null,
         ];
     }

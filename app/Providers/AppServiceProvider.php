@@ -12,6 +12,7 @@ use App\Services\Ai\AiManager;
 use App\Services\Ai\Catalog\ConfigCatalogSource;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
+use App\Services\Billing\UsageRecorder;
 use App\Support\WhatsApp\WhatsAppConfig;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
@@ -44,6 +45,7 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(AiAgentOrchestrator::class),
                 $app->make(UsageEngine::class),
                 $app->make(UsageLimitResponder::class),
+                $app->make(UsageRecorder::class),
             );
         });
 
