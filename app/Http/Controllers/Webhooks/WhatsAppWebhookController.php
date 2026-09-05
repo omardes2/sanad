@@ -10,7 +10,6 @@ use App\Jobs\ProcessWhatsAppWebhook;
 use App\Models\WebhookEvent;
 use App\Support\WhatsApp\WhatsAppConfig;
 use App\Support\WhatsApp\WhatsAppSignature;
-use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -89,24 +88,23 @@ class WhatsAppWebhookController extends Controller
         // second-line barrier against duplicate Meta messages.
         $envelopeId = hash('sha256', $raw);
 
-        try {
-            $event = WebhookEvent::create([
-                'provider' => 'whatsapp',
-                'external_event_id' => $envelopeId,
+        // Store the envelope exactly once, PostgreSQL-safe. createOrFirst() runs
+        // the INSERT inside a SAVEPOINT when a transaction is open, so a duplicate
+        // redelivery (unique provider+external_event_id) rolls back only the
+        // savepoint and returns the existing event — never a second row, never
+        // an aborted transaction. wasRecentlyCreated distinguishes first delivery
+        // (dispatch once) from a redelivery (acknowledge, dispatch nothing).
+        $event = WebhookEvent::query()->createOrFirst(
+            ['provider' => 'whatsapp', 'external_event_id' => $envelopeId],
+            [
                 'payload' => $decoded,
                 'status' => WebhookEventStatus::Received,
                 'received_at' => now(),
-            ]);
-            $isNew = true;
-        } catch (UniqueConstraintViolationException) {
-            $event = WebhookEvent::query()
-                ->where('provider', 'whatsapp')
-                ->where('external_event_id', $envelopeId)
-                ->first();
-            $isNew = false;
-        }
+            ],
+        );
+        $isNew = $event->wasRecentlyCreated;
 
-        if ($isNew && $event !== null) {
+        if ($isNew) {
             ProcessWhatsAppWebhook::dispatch($event->id)
                 ->onQueue('webhooks')
                 ->afterCommit();
