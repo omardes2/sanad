@@ -14,7 +14,6 @@ use App\Models\Message;
 use App\Support\SafeError;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -131,24 +130,25 @@ class ProcessInboundMessage implements ShouldBeUnique, ShouldQueue
 
         $response = $agent->handle($inbound->user, $inbound->conversation, $inbound);
 
-        try {
-            return Message::create([
+        // Create the reply exactly once, PostgreSQL-safe. createOrFirst() runs the
+        // INSERT inside a SAVEPOINT whenever a transaction is already open, so a
+        // unique violation (a concurrent worker created the reply first) rolls
+        // back only the savepoint and the existing row is returned — never a
+        // second row, and never an aborted outer transaction. With no open
+        // transaction it is a plain insert, exactly as before.
+        return Message::query()->createOrFirst(
+            ['in_reply_to_message_id' => $inbound->id],
+            [
                 'conversation_id' => $inbound->conversation_id,
                 'user_id' => $inbound->user_id,
                 'direction' => MessageDirection::Outbound,
                 'type' => $response->type,
                 'external_message_id' => null,
-                'in_reply_to_message_id' => $inbound->id,
                 'text_content' => $response->text,
                 'metadata' => $response->metadata,
                 'processing_status' => MessageProcessingStatus::Queued, // pending delivery
-            ]);
-        } catch (UniqueConstraintViolationException) {
-            // A concurrent worker created the reply first — reuse it, never a 2nd row.
-            return Message::query()
-                ->where('in_reply_to_message_id', $inbound->id)
-                ->firstOrFail();
-        }
+            ],
+        );
     }
 
     public function failed(?Throwable $exception): void
@@ -158,10 +158,27 @@ class ProcessInboundMessage implements ShouldBeUnique, ShouldQueue
         // embed SQL bindings such as message text or phone numbers).
         $safe = SafeError::summarize($exception);
 
-        Message::where('id', $this->messageId)->update([
-            'processing_status' => MessageProcessingStatus::Failed->value,
-            'metadata->last_error' => $safe,
-        ]);
+        $message = Message::query()->find($this->messageId);
+
+        if ($message === null) {
+            Log::warning('sanad.inbound.failed', ['message_id' => $this->messageId, 'error' => $safe, 'missing' => true]);
+
+            return;
+        }
+
+        // Read-merge-write the WHOLE JSON document instead of a JSON-path update
+        // ('metadata->last_error'). On PostgreSQL that path update compiles to
+        // jsonb_set(), which rejects a key path when the stored value is a JSON
+        // array (an inbound with no metadata is stored as "[]") and cannot
+        // create the object either. Merging in PHP never assumes the current
+        // shape, keeps every existing key, and always writes a valid object.
+        $metadata = is_array($message->metadata) ? $message->metadata : [];
+        $metadata['last_error'] = $safe;
+
+        $message->forceFill([
+            'processing_status' => MessageProcessingStatus::Failed,
+            'metadata' => $metadata,
+        ])->save();
 
         Log::warning('sanad.inbound.failed', [
             'message_id' => $this->messageId,
