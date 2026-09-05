@@ -16,4 +16,8 @@ final class AuditActions
     public const RbacRoleAssigned = 'rbac.role_assigned';
 
     public const RbacRoleRevoked = 'rbac.role_revoked';
+
+    public const SettingsUpdated = 'settings.updated';
+
+    public const SettingsReset = 'settings.reset';
 }

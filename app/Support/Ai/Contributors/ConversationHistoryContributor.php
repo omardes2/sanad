@@ -9,6 +9,7 @@ use App\Data\Ai\AiMessage;
 use App\Enums\MessageDirection;
 use App\Enums\MessageType;
 use App\Models\Message;
+use App\Services\Settings\SettingsRepository;
 use App\Support\Ai\ContextRequest;
 use App\Support\Ai\PromptContext;
 
@@ -22,9 +23,11 @@ use App\Support\Ai\PromptContext;
  */
 final class ConversationHistoryContributor implements ContextContributor
 {
+    public function __construct(private readonly SettingsRepository $settings) {}
+
     public function contribute(PromptContext $context, ContextRequest $request): void
     {
-        $limit = max(1, (int) config('ai.history_limit', 10));
+        $limit = max(1, (int) $this->settings->get('ai.history_limit'));
 
         $messages = $request->conversation
             ->messages()

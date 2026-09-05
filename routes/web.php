@@ -10,8 +10,10 @@ use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Messages;
 use App\Livewire\Dashboard\Overview;
+use App\Livewire\Dashboard\Persona;
 use App\Livewire\Dashboard\Plans;
 use App\Livewire\Dashboard\Reminders;
+use App\Livewire\Dashboard\Settings;
 use App\Livewire\Dashboard\SubscriberDetail;
 use App\Livewire\Dashboard\Subscribers;
 use App\Livewire\Dashboard\Tasks;
@@ -54,6 +56,11 @@ Route::middleware(['auth', 'admin'])
 
         // Audit trail (Phase C0): strict RBAC — no legacy bypass, fail closed.
         Route::get('/audit', AuditLogs::class)->middleware('permission:audit.view')->name('dashboard.audit');
+
+        // App settings + persona/prompts (Phase C1): strict RBAC; each setting
+        // additionally enforces its own permission in SettingsRepository.
+        Route::get('/settings', Settings::class)->middleware('permission:settings.manage')->name('dashboard.settings');
+        Route::get('/persona', Persona::class)->middleware('permission:persona.manage')->name('dashboard.persona');
     });
 
 // Local chat simulator — 404 outside local/testing (see EnsureDevEnvironment).

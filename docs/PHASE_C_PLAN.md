@@ -1,7 +1,7 @@
 # Phase C — Sanad Admin Control Center
 
 > المرجع المعماري العام: [ARCHITECTURE.md](ARCHITECTURE.md). Phase B2: [PHASE_B2_PLAN.md](PHASE_B2_PLAN.md).
-> الحالة: **C0 منفَّذة** (هذا الـPR). C1–C4 مخطَّطة ولا تبدأ إلا بموافقة صريحة لكل واحدة.
+> الحالة: **C0 مدمجة**، **C1 منفَّذة** (PR C1). C2–C4 مخطَّطة ولا تبدأ إلا بموافقة صريحة لكل واحدة.
 
 ## 1) Audit للوضع قبل Phase C (main `7c3fd63`)
 
@@ -68,6 +68,8 @@
 | `ai.credentials.manage` | ✓ | | | |
 | `ai.credentials.test` | ✓ | ✓ | | |
 | `settings.manage` | ✓ | ✓ | | |
+| `settings.manage_billing` (C1) | ✓ | | | |
+| `settings.manage_emergency` (C1) | ✓ | | | |
 | `persona.manage` | ✓ | ✓ | | |
 | `usage.view` | ✓ | ✓ | ✓ | ✓ |
 | `usage.view_costs` | ✓ | | ✓ | |
@@ -79,14 +81,48 @@
 
 `super_admin` يمرّ إضافةً أي ability غير مسجّل عبر `Gate::before`.
 
-## 5) C1–C4 (مخطَّطة)
+## 5) C1 — App Settings + Persona/Prompts (منفَّذة)
 
-- **C1:** `app_settings` + Settings Registry (نوع، افتراضي، validation، مجموعة، صلاحية، **precedence لكل مفتاح** حسب القرار A) + `SettingsRepository` بcache مُرقَّم متسامح مع تعذّر الـcache؛ Persona/Prompts ومعاملات التوليد ورسائل الفوترة من DB.
+**القرارات المثبَّتة قبل التنفيذ:** Cache TTL = 30 ثانية؛ `billing.enforce` للعرض فقط (قيمة فعّالة + مصدر) ولا يُعدَّل من DB/UI؛ `prompts.temporal_context` نُقل من الكود إلى الـRegistry بنفس النص والسلوك؛ **لا `env()` وقت التشغيل** (config فقط، مع تمثيل صريح لوجود override البيئة)؛ صلاحية لكل مفتاح تُفرض server-side؛ إعدادات الفوترة/الاشتراكات والحواجز المالية لـ`super_admin` فقط؛ القوالب بـallowlist صريح بلا Blade/PHP؛ `set()`/`reset()` مع Audit في transaction واحدة؛ القيمة المخزَّنة غير الصالحة ⇒ الافتراضي + تحذير بلا قيم + علامة في اللوحة.
+
+**المخطّط:** جدول `app_settings` (`key` unique، `value` json، `updated_by` FK nullOnDelete، `updated_by_ref`). لا بذور. النوع/الـvalidation/الصلاحية/الـprecedence من الكود فقط (`App\Support\Settings\SettingsRegistry`).
+
+**Config cache وعدم استخدام `env()`:** ملفات config تقرأ `env()` وقت تحميل الإعدادات كالمعتاد. لمفاتيح الطوارئ أُضيف تمثيل صريح للقيمة الخام من البيئة: `config('ai.overrides.enabled')`, `config('ai.overrides.catalog_source')`, `config('billing.overrides.enforce')` — NULL = لا override في البيئة، أي قيمة أخرى = override صريح يتقدّم على DB. القيم المحسوبة (`ai.enabled`...) بقيت كما هي فلا يتغيّر أي سلوك. كل القراءات وقت التشغيل عبر `config()` أو DB، واختبار يفحص أن لا `env(` في `app/`.
+
+**Precedence لكل مفتاح:**
+
+| المفتاح | النوع | المجموعة | Precedence | الصلاحية |
+|---|---|---|---|---|
+| `ai.persona` | text | persona | DB > config | `persona.manage` |
+| `prompts.temporal_context` | template ({timezone}, {now}؛ {now} مطلوب) | persona | DB > config | `persona.manage` |
+| `ai.temperature` [0,2]، `ai.max_output_tokens` [1,4096]، `ai.history_limit` [1,50]، `ai.timeout` [5,45] | float/int | generation | DB > config | `settings.manage` |
+| `ai.failure_behavior` {retry, reply}، `ai.fallback_message` | enum/text | failure | DB > config | `settings.manage` |
+| `billing.limit_reached_message` (template {upgrade})، `billing.feature_disabled_message`، `billing.upgrade_url` (https, nullable) | template/text/string | billing_messages | DB > config | `settings.manage` |
+| `billing.auto_trial`، `billing.default_plan_slug` | bool/string | subscriptions | DB > config | `settings.manage_billing` (super_admin) |
+| `ai.guardrails.max_cost_per_request` (nullable)، `estimate_input_tokens`، `estimate_output_tokens` | float/int | guardrails | DB > config | `settings.manage_billing` (super_admin) |
+| `ai.enabled` | bool | emergency | ENV `AI_ENABLED` > DB > config | `settings.manage_emergency` (super_admin) |
+| `ai.catalog_source` | enum {auto, database, config} | emergency | ENV `AI_CATALOG_SOURCE` > DB > config | `settings.manage_emergency` |
+| `billing.enforce` | bool | emergency | ENV `BILLING_ENFORCE` > config (**read-only**) | — (عرض فقط) |
+
+**السلوك قبل/بعد:** Persona = النص نفسه من `config('ai.persona')` افتراضيًا؛ سياق الوقت = القالب نفسه بالعناصر `{timezone}` و`{now}` بدل `%s`، بنفس التنسيق `l، j F Y - H:i`؛ معاملات التوليد ورسائل الفوترة والاشتراكات بنفس الافتراضيات. لا تغيير ما لم يُخزَّن شيء في DB. `UsageEngine` ما زال يقرأ `config('billing.enforce')`.
+
+**Cache/الالتقاط بلا restart:** خريطة القيم المخزَّنة في cache مشترك (30 ثانية) بمفتاح مُرقَّم يُرفع عند كل كتابة فيراه كل العمّال فورًا؛ تعذّر الـcache ⇒ قراءة DB؛ غياب الجدول أو تعذّر DB ⇒ الافتراضيات. القراءة عند كل استخدام (PromptBuilder, PersonaContributor, ConversationHistoryContributor, AiAgentOrchestrator, UsageLimitResponder, SubscriptionService, CostEstimator, CatalogSourceResolver, binding الـOrchestrator).
+
+**Audit:** `settings.updated` (subject = صف الإعداد، `changes[key] = {from: القيمة الفعّالة السابقة, to}`, `source_before/after`, `reason`) و`settings.reset` (`from` = المخزَّن، `to` = الافتراضي، `source_after` = default أو env). الصف والـAudit في transaction واحدة؛ فشل الـAudit ⇒ rollback.
+
+**الصفحات:** `/dashboard/settings` (`permission:settings.manage`) و`/dashboard/persona` (`permission:persona.manage`)، صارمتان؛ المحرر يظهر فقط لمن يملك صلاحية المفتاح ويكون قابلًا للتعديل، والـRepository يفرض ذلك مهما فعلت الواجهة.
+
+**النشر:** `migrate --force` ثم `sanad:rbac:bootstrap --apply` (لإنشاء الصلاحيتين الجديدتين `settings.manage_billing` و`settings.manage_emergency` لـsuper_admin). لا تغيير في `.env` ولا `AI_PROVIDER` ولا `BILLING_ENFORCE`.
+
+**ملاحظة مهمة عن مفاتيح الطوارئ في `.env`:** أي مفتاح طوارئ موجود في `.env` (مثل `AI_ENABLED=true` في الإنتاج) هو override يتقدّم على قيمة اللوحة بحكم التصميم، وتعرضه اللوحة "مُجبَر من البيئة". لذلك `.env.example` يترك `AI_CATALOG_SOURCE` معلّقًا، و`phpunit.xml` يفرّغ `AI_ENABLED`/`AI_CATALOG_SOURCE`/`BILLING_ENFORCE` كي تبقى الاختبارات hermetic مهما احتوى `.env` المنسوخ من المثال (سبب فشل CI الأول في PR C1).
+
+## 6) C2–C4 (مخطَّطة)
+
 - **C2:** صفحات Providers/Models/Pricing (نشر فقط عبر `PriceBook`)/Routing (محاكاة)/Usage (المعروف يُجمع، غير المسعّر يُعدّ). SSRF validator لـ`base_url` (القرار B) مع اختبارات.
 - **C3:** `provider_credentials` (مشفّر بـ`CredentialVault` على `CREDENTIALS_KEY` + مفاتيح سابقة للتدوير، fail-closed بدون المفتاح)، `CredentialResolver` (الخزنة ثم env)، إدخال write-only عبر POST عادي، masking (fingerprint/last4)، Rotate/Revoke مُدقَّق؛ `ProviderHealthCheck` abstraction لكل Adapter (القرار C) + `provider_health_checks` + Test Connection يدوي مع SSRF re-validation.
 - **C4:** `ai.routing.mode` (`env` افتراضي / `db`) مع `AI_ROUTING_MODE` كـemergency override، محاكاة قبل التبديل، تبديل مُدقَّق لـSuper Admin، `is_primary=groq` أولًا ثم التبديل بلا فرق ثم تغيير الأساسي بقرار مقصود.
 
-## 6) ترتيب النشر لـC0
+## 7) ترتيب النشر لـC0
 
 1. دمج PR C0 بموافقة صريحة.
 2. `php artisan migrate --force` (جداول Spatie + أعمدة `audit_logs`).

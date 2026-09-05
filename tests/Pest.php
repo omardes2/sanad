@@ -57,6 +57,7 @@ use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
 use App\Services\Rbac\RbacSynchronizer;
+use App\Services\Settings\SettingsRepository;
 use App\Support\Rbac\Role;
 use Illuminate\Testing\TestResponse;
 
@@ -354,4 +355,11 @@ function userWithRole(Role $role, array $attrs = []): User
     $user->assignRole($role->value);
 
     return $user->fresh();
+}
+
+// ---- Settings (Phase C1) ------------------------------------------------------
+
+function settings(): SettingsRepository
+{
+    return app(SettingsRepository::class);
 }

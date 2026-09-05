@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace App\Services\Billing\Pricing;
 
 use App\Data\Ai\Catalog\ModelSpec;
+use App\Services\Settings\SettingsRepository;
 use Carbon\CarbonImmutable;
 
 /**
  * Cost guardrail FOUNDATION: estimates what one request to a catalog model
  * would cost now, from its current price and a configurable typical request
- * size (config ai.guardrails.estimate_*_tokens). Returns null when the cost is
+ * size (settings ai.guardrails.estimate_*_tokens). Returns null when the cost is
  * unknown (model not in the DB catalog, or no current price) — the router
  * never skips a candidate on an unknown estimate; it only enforces known ones.
  */
@@ -19,6 +20,7 @@ class CostEstimator
     public function __construct(
         private readonly PriceBook $prices,
         private readonly CostCalculator $calculator,
+        private readonly SettingsRepository $settings,
     ) {}
 
     /**
@@ -36,8 +38,8 @@ class CostEstimator
             return null;
         }
 
-        $inputTokens ??= (int) config('ai.guardrails.estimate_input_tokens', 1000);
-        $outputTokens ??= (int) config('ai.guardrails.estimate_output_tokens', 300);
+        $inputTokens ??= (int) $this->settings->get('ai.guardrails.estimate_input_tokens');
+        $outputTokens ??= (int) $this->settings->get('ai.guardrails.estimate_output_tokens');
 
         return (float) $this->calculator->estimateTokens($price, $inputTokens, $outputTokens);
     }

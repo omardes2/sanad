@@ -7,6 +7,7 @@ namespace App\Services\Ai;
 use App\Contracts\Ai\ContextContributor;
 use App\Data\Ai\AiMessage;
 use App\Data\Ai\AiRequest;
+use App\Services\Settings\SettingsRepository;
 use App\Support\Ai\ContextRequest;
 use App\Support\Ai\PromptContext;
 use Illuminate\Contracts\Container\Container;
@@ -14,12 +15,16 @@ use Illuminate\Contracts\Container\Container;
 /**
  * Turns a ContextRequest into a provider-agnostic AiRequest by running the
  * configured context contributors in order, then assembling the system prompt
- * and chat turns. Generation parameters come from config('ai') — never from a
- * specific provider — so the builder stays provider-agnostic.
+ * and chat turns. Generation parameters come from the Settings Registry
+ * (database override, else config('ai') default) — never from a specific
+ * provider — so the builder stays provider-agnostic.
  */
 class PromptBuilder
 {
-    public function __construct(private readonly Container $container) {}
+    public function __construct(
+        private readonly Container $container,
+        private readonly SettingsRepository $settings,
+    ) {}
 
     public function build(ContextRequest $request): AiRequest
     {
@@ -41,9 +46,9 @@ class PromptBuilder
 
         return new AiRequest(
             messages: $messages,
-            temperature: (float) config('ai.temperature', 0.5),
-            maxOutputTokens: (int) config('ai.max_output_tokens', 600),
-            timeout: (int) config('ai.timeout', 20),
+            temperature: (float) $this->settings->get('ai.temperature'),
+            maxOutputTokens: (int) $this->settings->get('ai.max_output_tokens'),
+            timeout: (int) $this->settings->get('ai.timeout'),
         );
     }
 
