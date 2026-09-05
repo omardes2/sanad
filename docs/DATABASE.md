@@ -91,7 +91,7 @@
 
 ### `finance_mrr_snapshots` (D1)
 لقطة MRR **محسوبة** يومية (UTC) لكل (عملة، باقة)، يكتبها `sanad:finance:snapshot` لليوم الحالي فقط ولا تُعدَّل أبدًا.
-- `snapshot_date` · `captured_at` · `currency` · `plan_id?` (مرجع تاريخي **بلا FK**) · `plan_key` (`"<id>"` أو `none`) · `plan_slug?` · `plan_price?` · `billing_period?` · `active_count` · `trialing_count` · `past_due_count` · `mrr_normalized` decimal(12,6) · `calculation_version`.
+- `snapshot_date` · `captured_at` · `currency` · `plan_id?` (مرجع تاريخي **بلا FK**) · `plan_key` (`plan:<id>` هوية ثابتة لا تعتمد على slug، أو `none` كـmarker) · `plan_slug?` · `plan_price?` · `billing_period?` · `active_count` · `trialing_count` · `past_due_count` · `mrr_normalized` decimal(12,6) · `calculation_version`.
 - فريد `(snapshot_date, currency, plan_key)`؛ الاشتراكات بلا باقة بعملة `XXX`.
 
 ### `audit_logs`

@@ -43,7 +43,7 @@
 - `App\Services\Finance\CostProducers`: حقيقة كود — `PROVIDER=true`, `COMMUNICATION=false`, `EXTERNAL=false`؛ لا تُقلب إلا مع الكود الذي يكتب تلك الصفوف.
 - `DecimalMath`: `sum()`, `mulDiv()` (half-up مع كشف overflow قبل الضرب), `intFromDb()` (يرفض أي شيء غير عدد صحيح؛ لا float).
 - `RevenueNormalizer::monthly(price, period)`: monthly = price، yearly = ÷12، weekly = ×52÷12، daily = ×365÷12، none = 0 — دقّة عمل 8 ثم تقريب واحد إلى 6.
-- `MrrCalculator::current()` (calculation_version **1**): `active_count` = حالة `active` و`current_period_end` NULL أو مستقبلية (المنتهي لا يكسب MRR)؛ `trialing_count` و`past_due_count` عدّ فقط؛ MRR = السعر الشهري المكافئ × active لكل (عملة، باقة)؛ الاشتراكات بلا باقة تحت `plan_key=none` بعملة `XXX` (ISO 4217 "no currency") بلا إيراد. `MrrSnapshotSet::byCurrency()` يعطي MRR/ARR/ARPU لكل عملة على حدة.
+- `MrrCalculator::current()` (calculation_version **1**): `active_count` = حالة `active` و`current_period_end` NULL أو مستقبلية (المنتهي لا يكسب MRR)؛ `trialing_count` و`past_due_count` عدّ فقط؛ MRR = السعر الشهري المكافئ × active لكل (عملة، باقة). **هوية الباقة** في الصف `plan_key = plan:<id>` (`FinanceMrrSnapshot::planKeyFor`) — لا تعتمد أبدًا على slug/price/period؛ هذه أعمدة وصفية تاريخية فقط، فتغيير slug لاحقًا لا يجعل الباقة تبدو جديدة. الاشتراكات بلا باقة تحت `plan_key=none` بعملة `XXX` (ISO 4217 "no currency") كـ**marker** فقط: لا تدخل MRR/ARR/ARPU ولا تشكّل مجموعة عملة (`byCurrency()` يستبعدها) وتُعدّ منفصلة عبر `unassigned()`.
 - `CostCalculator`: مسار WhatsApp بمعدّل 0 ⇒ `CostSource::None` (صفوف جديدة فقط).
 
 ### الأمر `sanad:finance:snapshot`
@@ -51,7 +51,7 @@
 - `--dry-run` يعرض دون كتابة.
 - إن وُجدت صفوف اليوم: `already captured (n row(s)) — nothing written` وخروج 0، بلا إعادة كتابة حتى لو تغيّر السعر أو المشتركون بعد الالتقاط.
 - الكتابة atomic: كل الصفوف + سجل تدقيق `finance.mrr_snapshot_captured` (actor console، أعداد فقط) في معاملة واحدة؛ التعارض على المفتاح الفريد `(snapshot_date, currency, plan_key)` ⇒ rollback كامل ورسالة `captured concurrently … nothing written` وخروج 0.
-- يوم بلا اشتراكات يُلتقط بصف صفر واحد (`XXX/none`) حتى لا يُخترع لاحقًا في نفس اليوم.
+- يوم بلا اشتراكات يُلتقط بصف صفر واحد (`XXX/none`) كـmarker حتى لا يُخترع لاحقًا في نفس اليوم؛ الصف marker لا يدخل أي رقم مالي (`isMarker()`).
 - **يدوي**: لا scheduler في D1.
 
 ### تدقيق الباقات (atomic)
@@ -76,7 +76,7 @@
 ### الاختبارات
 - `tests/Feature/Finance/FinanceQueryTest`: fixture حتمي (priced model_price/config_rate، none، currency_mismatch، legacy NULL، صف نظام، بلا باقة، خارج النافذة): المجاميع نصوص decimal دقيقة من المسعَّر فقط، عدّ unpriced بالسبب، coverage، byPlan/byProviderModel/byOperationChannel، ترتيب أعلى المشتركين واستبعاد النظام، buckets يومية/شهرية UTC (23:59:59 ينتمي ليومه)، الفلاتر، حدود النافذة.
 - `DecimalParityTest`: 10 × 0.100000 = `1.000000`، المنزلة السادسة، المبالغ الكبيرة، مقاطع SQL حسب المحرّك ورفض غيره، `intFromDb`، `mulDiv`، تطبيع الفترات الخمس، الضرب بالعدد. **يعمل كما هو على SQLite وPostgreSQL** (parity بنفس القيم المتوقعة).
-- `MrrSnapshotTest`: MRR/ARR/ARPU لكل عملة، الاشتراكات المنتهية/الملغاة/التجريبية/المتأخرة، الالتقاط + التدقيق، no-op على إعادة التشغيل مع تغيّر السعر والمشتركين، رفض `--date`، dry-run، يوم فارغ، بقاء الصف بعد حذف الباقة.
+- `MrrSnapshotTest`: MRR/ARR/ARPU لكل عملة، الاشتراكات المنتهية/الملغاة/التجريبية/المتأخرة، الالتقاط + التدقيق، no-op على إعادة التشغيل مع تغيّر السعر والمشتركين، رفض `--date`، dry-run، يوم فارغ، بقاء الصف بعد حذف الباقة، ثبات `plan_key` عبر تغيير slug/price/period، marker `XXX/none` خارج MRR/ARR/ARPU ومجموعات العملة.
 - `PlanFinancialsAuditTest`: إنشاء/تعديل/لا تغيير مالي/atomic rollback/رفض صيغ السعر.
 - `tests/Feature/Billing/PostgresSnapshotConcurrencyTest`: 6 عمليات OS متزامنة على PostgreSQL ⇒ التقاط واحد، 5 no-op، مجموعة واحدة كاملة، سجل تدقيق واحد.
 - تحديثات: `CostCalculatorTest` (WhatsApp rate 0 ⇒ none)، `RbacBootstrapTest`/`AccessMatrixTest` (finance.*)، `UsageLedgerMigrationTest` (13 + الفهارس + الجدول).

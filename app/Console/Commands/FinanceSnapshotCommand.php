@@ -144,5 +144,8 @@ class FinanceSnapshotCommand extends Command
         foreach ($set->byCurrency() as $currency => $totals) {
             $this->line("{$currency}: MRR {$totals['mrr']} · ARR {$totals['arr']} · ARPU ".($totals['arpu'] ?? 'n/a')." · active {$totals['active']} · trialing {$totals['trialing']} · past_due {$totals['past_due']} (past_due is NOT in MRR)");
         }
+
+        $unassigned = $set->unassigned();
+        $this->line("No plan (marker, not a currency, never revenue): active {$unassigned['active']} · trialing {$unassigned['trialing']} · past_due {$unassigned['past_due']}");
     }
 }

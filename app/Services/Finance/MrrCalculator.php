@@ -26,8 +26,12 @@ use Carbon\CarbonImmutable;
  *  - past_due_count = status `past_due` (billed, not paid — never MRR);
  *  - MRR            = monthly-equivalent list price × active_count, grouped by
  *                     the plan's currency; currencies are never summed together;
- *  - active subscriptions without a plan are counted under plan_key "none"
- *    with currency XXX and contribute nothing.
+ *  - subscriptions without a plan are counted under plan_key "none" with
+ *    currency XXX (ISO 4217 "no currency") and contribute nothing: that row
+ *    is a marker, excluded from every per-currency figure.
+ *
+ * plan_key is "plan:<id>" (FinanceMrrSnapshot::planKeyFor) — identity never
+ * depends on the slug or any other mutable attribute.
  */
 final class MrrCalculator
 {
@@ -55,29 +59,30 @@ final class MrrCalculator
             ->get();
 
         foreach ($rows as $row) {
-            $key = $row->plan_id === null ? FinanceMrrSnapshot::PLAN_KEY_NONE : (string) DecimalMath::intFromDb($row->plan_id);
-            $counts[$key][(string) $row->status] = DecimalMath::intFromDb($row->n);
+            // 0 = "no plan"; real ids are ≥ 1.
+            $id = $row->plan_id === null ? 0 : DecimalMath::intFromDb($row->plan_id);
+            $counts[$id][(string) $row->status] = DecimalMath::intFromDb($row->n);
         }
 
-        $planIds = array_values(array_filter(array_keys($counts), static fn (string $k) => $k !== FinanceMrrSnapshot::PLAN_KEY_NONE));
+        $planIds = array_values(array_filter(array_keys($counts), static fn (int $id) => $id > 0));
         $plans = Plan::query()->whereIn('id', $planIds)->get()->keyBy('id');
 
         $result = [];
 
-        foreach ($counts as $key => $byStatus) {
+        foreach ($counts as $id => $byStatus) {
             $active = $byStatus[SubscriptionStatus::Active->value] ?? 0;
             $trialing = $byStatus[SubscriptionStatus::Trialing->value] ?? 0;
             $pastDue = $byStatus[SubscriptionStatus::PastDue->value] ?? 0;
 
             /** @var Plan|null $plan */
-            $plan = $key === FinanceMrrSnapshot::PLAN_KEY_NONE ? null : $plans->get((int) $key);
+            $plan = $id === 0 ? null : $plans->get($id);
 
             if ($plan === null) {
                 // No plan (or the plan row is gone): counted, never revenue.
                 $result[] = new MrrPlanRow(
                     currency: FinanceMrrSnapshot::NO_CURRENCY,
-                    planId: $key === FinanceMrrSnapshot::PLAN_KEY_NONE ? null : (int) $key,
-                    planKey: (string) $key,
+                    planId: $id === 0 ? null : $id,
+                    planKey: FinanceMrrSnapshot::planKeyFor($id === 0 ? null : $id),
                     planSlug: null,
                     planPrice: null,
                     billingPeriod: null,
@@ -97,7 +102,7 @@ final class MrrCalculator
             $result[] = new MrrPlanRow(
                 currency: strtoupper($plan->currency),
                 planId: $plan->id,
-                planKey: (string) $plan->id,
+                planKey: FinanceMrrSnapshot::planKeyFor($plan->id),
                 planSlug: $plan->slug,
                 planPrice: $price,
                 billingPeriod: $period->value,

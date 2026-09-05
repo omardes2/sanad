@@ -70,7 +70,7 @@ it('concurrent snapshot runs leave exactly one complete set of rows and one audi
         }
 
         $rows = FinanceMrrSnapshot::query()->where('snapshot_date', $today)->get();
-        $planRows = $rows->where('plan_key', (string) $plan->id);
+        $planRows = $rows->where('plan_key', "plan:{$plan->id}");
 
         expect($captured)->toBe(1)
             ->and($noop)->toBe(5)
