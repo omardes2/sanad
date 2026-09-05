@@ -13,6 +13,8 @@
         ['route' => 'dashboard.plans', 'label' => 'الباقات', 'icon' => '🏷️'],
         ['route' => 'dashboard.whatsapp', 'label' => 'حالة واتساب', 'icon' => '🟢'],
         // Strict-RBAC page: shown only to accounts holding the permission.
+        ['route' => 'dashboard.persona', 'label' => 'شخصية سَنَد', 'icon' => '🎭', 'can' => 'persona.manage'],
+        ['route' => 'dashboard.settings', 'label' => 'الإعدادات', 'icon' => '⚙️', 'can' => 'settings.manage'],
         ['route' => 'dashboard.audit', 'label' => 'سجل التدقيق', 'icon' => '🧾', 'can' => 'audit.view'],
     ];
     $nav = array_values(array_filter($nav, fn (array $item) => ! isset($item['can']) || (auth()->user()?->can($item['can']) ?? false)));

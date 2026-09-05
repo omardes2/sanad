@@ -14,6 +14,7 @@ use App\Services\Ai\Catalog\CatalogSourceResolver;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
 use App\Services\Billing\UsageRecorder;
+use App\Services\Settings\SettingsRepository;
 use App\Support\Rbac\Role;
 use App\Support\Security\SecretRedactor;
 use App\Support\Security\SensitiveFieldRegistry;
@@ -46,8 +47,10 @@ class AppServiceProvider extends ServiceProvider
         // decorator (subscription/usage enforcement — transparent when
         // billing.enforce is off). Otherwise the deterministic placeholder keeps
         // the pipeline working (local/testing, or before a key is configured).
+        // `ai.enabled` is an emergency setting: AI_ENABLED in the environment
+        // wins, else the database value, else the config default.
         $this->app->bind(AgentOrchestrator::class, static function (Application $app): AgentOrchestrator {
-            if (! config('ai.enabled')) {
+            if (! $app->make(SettingsRepository::class)->get('ai.enabled')) {
                 return $app->make(PlaceholderAgentOrchestrator::class);
             }
 

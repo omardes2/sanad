@@ -11,6 +11,7 @@ use App\Enums\UsageDimension;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Services\Settings\SettingsRepository;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\UniqueConstraintViolationException;
 
@@ -20,6 +21,8 @@ use Illuminate\Database\UniqueConstraintViolationException;
  */
 class SubscriptionService
 {
+    public function __construct(private readonly SettingsRepository $settings) {}
+
     /**
      * Assign the configured default plan to a brand-new subscriber, once.
      *
@@ -29,7 +32,7 @@ class SubscriptionService
      */
     public function assignDefaultIfEnabled(User $subscriber): ?Subscription
     {
-        if (! config('billing.auto_trial', true)) {
+        if (! $this->settings->get('billing.auto_trial')) {
             return null;
         }
 
@@ -128,7 +131,7 @@ class SubscriptionService
 
     public function defaultPlan(): ?Plan
     {
-        $slug = (string) config('billing.default_plan_slug', 'free');
+        $slug = (string) $this->settings->get('billing.default_plan_slug');
 
         return Plan::query()->where('is_active', true)->where('slug', $slug)->first()
             ?? Plan::query()->where('is_active', true)->where('is_default', true)->first();

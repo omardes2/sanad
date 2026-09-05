@@ -17,6 +17,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Ai\PromptBuilder;
 use App\Services\Ai\SanadAiRouter;
+use App\Services\Settings\SettingsRepository;
 use App\Support\Ai\ContextRequest;
 use App\Support\SafeError;
 use Illuminate\Support\Facades\Log;
@@ -44,6 +45,7 @@ class AiAgentOrchestrator implements AgentOrchestrator
     public function __construct(
         private readonly SanadAiRouter $router,
         private readonly PromptBuilder $promptBuilder,
+        private readonly SettingsRepository $settings,
     ) {}
 
     public function handle(User $user, Conversation $conversation, Message $message): AgentResponseData
@@ -55,7 +57,13 @@ class AiAgentOrchestrator implements AgentOrchestrator
         $routedModel = null;
 
         try {
-            $route = $this->router->route(AiOperation::Chat, new RoutingContext(user: $user));
+            // Cost guardrail foundation: a known estimate above this is skipped.
+            $maxUnitCost = $this->settings->get('ai.guardrails.max_cost_per_request');
+
+            $route = $this->router->route(AiOperation::Chat, new RoutingContext(
+                user: $user,
+                maxUnitCost: $maxUnitCost === null ? null : (float) $maxUnitCost,
+            ));
             $provider = $route->provider;
             $providerName = $provider->name();
             $model = $route->model;
@@ -117,13 +125,13 @@ class AiAgentOrchestrator implements AgentOrchestrator
 
         // Transient failure + retry policy → let the queue retry (ProcessInboundMessage
         // has tries/backoff). No reply row is created until a retry succeeds.
-        if ($exception->retryable() && config('ai.failure_behavior', 'retry') === 'retry') {
+        if ($exception->retryable() && $this->settings->get('ai.failure_behavior') === 'retry') {
             throw $exception;
         }
 
         // Permanent failure (or reply policy): one clear temporary-failure message.
         return new AgentResponseData(
-            text: (string) config('ai.fallback_message'),
+            text: (string) $this->settings->get('ai.fallback_message'),
             type: MessageType::Text,
             metadata: ['ai' => ['failed' => true, 'provider' => $providerName]],
         );

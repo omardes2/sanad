@@ -28,6 +28,10 @@ enum Permission: string
     case AiCredentialsTest = 'ai.credentials.test';
 
     case SettingsManage = 'settings.manage';
+    /** Billing/subscription behaviour and financial guardrails (super_admin only in C1). */
+    case SettingsManageBilling = 'settings.manage_billing';
+    /** Database value of the emergency switches (super_admin only; env still wins). */
+    case SettingsManageEmergency = 'settings.manage_emergency';
     case PersonaManage = 'persona.manage';
 
     case UsageView = 'usage.view';
@@ -54,6 +58,8 @@ enum Permission: string
             self::AiCredentialsManage => 'إدارة مفاتيح المزوّدين',
             self::AiCredentialsTest => 'اختبار الاتصال بالمزوّدين',
             self::SettingsManage => 'إدارة الإعدادات',
+            self::SettingsManageBilling => 'إدارة إعدادات الفوترة والاشتراكات',
+            self::SettingsManageEmergency => 'إدارة مفاتيح الطوارئ',
             self::PersonaManage => 'إدارة شخصية سَنَد والـPrompts',
             self::UsageView => 'عرض الاستخدام',
             self::UsageViewCosts => 'عرض التكاليف',

@@ -7,9 +7,11 @@ namespace App\Services\Ai\Catalog;
 use App\Contracts\Ai\CatalogSource;
 use App\Data\Ai\Catalog\RoutingContext;
 use App\Enums\AiOperation;
+use App\Services\Settings\SettingsRepository;
 
 /**
- * Chooses which catalog the router reads, by config('ai.catalog_source'):
+ * Chooses which catalog the router reads, by the `ai.catalog_source` setting
+ * (env override AI_CATALOG_SOURCE > database value > config default):
  *
  *  - "auto" (default): the database catalog when it has at least one enabled
  *    model, otherwise the config catalog — so a deployment with empty B2
@@ -22,6 +24,7 @@ final class CatalogSourceResolver implements CatalogSource
     public function __construct(
         private readonly DatabaseCatalogSource $database,
         private readonly ConfigCatalogSource $config,
+        private readonly SettingsRepository $settings,
     ) {}
 
     public function candidates(AiOperation $operation, RoutingContext $context): array
@@ -39,7 +42,7 @@ final class CatalogSourceResolver implements CatalogSource
 
     public function mode(): string
     {
-        $mode = strtolower(trim((string) config('ai.catalog_source', 'auto')));
+        $mode = strtolower(trim((string) $this->settings->get('ai.catalog_source')));
 
         return in_array($mode, ['auto', 'database', 'config'], true) ? $mode : 'auto';
     }

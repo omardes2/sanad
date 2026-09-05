@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Services\Billing;
 
 use App\Data\Billing\UsageDecision;
+use App\Services\Settings\SettingsRepository;
+use App\Support\Settings\PromptTemplate;
 
 /**
  * Produces the subscriber-facing (Arabic) message when a metered capability is
@@ -14,16 +16,18 @@ use App\Data\Billing\UsageDecision;
  */
 class UsageLimitResponder
 {
+    public function __construct(private readonly SettingsRepository $settings) {}
+
     public function message(UsageDecision $decision): string
     {
         if ($decision->limitReached()) {
-            $upgrade = (string) (config('billing.upgrade_url') ?? '');
-            $template = (string) config('billing.limit_reached_message');
+            $upgrade = (string) ($this->settings->get('billing.upgrade_url') ?? '');
+            $template = (string) $this->settings->get('billing.limit_reached_message');
 
-            return trim(str_replace('{upgrade}', $upgrade, $template));
+            return trim(PromptTemplate::render($template, ['upgrade' => $upgrade]));
         }
 
         // Disabled / no-subscription.
-        return (string) config('billing.feature_disabled_message');
+        return (string) $this->settings->get('billing.feature_disabled_message');
     }
 }

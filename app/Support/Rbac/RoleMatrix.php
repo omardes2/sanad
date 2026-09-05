@@ -10,7 +10,8 @@ namespace App\Support\Rbac;
  * every difference before writing.
  *
  *  super_admin  every permission (and every Gate ability via Gate::before)
- *  operations   providers/models/routing, test connection, settings, persona,
+ *  operations   providers/models/routing, test connection, settings (not the
+ *               billing/subscription keys nor the emergency switches), persona,
  *               usage (no costs), plans, subscribers (view) — NO credentials
  *  finance      pricing, usage incl. costs, audit, providers (view),
  *               subscribers (view) — NO credentials

@@ -15,6 +15,13 @@ return [
     */
     'enforce' => (bool) env('BILLING_ENFORCE', false),
 
+    // Raw env value of the switch above (config-time, config:cache safe):
+    // NULL = not set in the environment. Displayed by Sanad Admin as the
+    // effective source; the switch itself stays environment-governed.
+    'overrides' => [
+        'enforce' => env('BILLING_ENFORCE'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Automatic trial / default plan on onboarding
