@@ -13,8 +13,8 @@ namespace App\Support\Rbac;
  *  operations   providers/models/routing, test connection, settings (not the
  *               billing/subscription keys nor the emergency switches), persona,
  *               usage (no costs), plans, subscribers (view) — NO credentials
- *  finance      pricing, usage incl. costs, audit, providers (view),
- *               subscribers (view) — NO credentials
+ *  finance      pricing, usage incl. costs and CSV export, audit, providers
+ *               (view), subscribers (view) — NO credentials
  *  support      subscribers (view/manage), usage (no costs) — NO credentials
  */
 final class RoleMatrix
@@ -48,6 +48,7 @@ final class RoleMatrix
                 Permission::AiPricingManage,
                 Permission::UsageView,
                 Permission::UsageViewCosts,
+                Permission::UsageExport,
                 Permission::AuditView,
                 Permission::SubscribersView,
             ],

@@ -3,8 +3,13 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Auth\LogoutController;
+use App\Http\Controllers\Dashboard\UsageExportController;
 use App\Http\Middleware\EnsureDevEnvironment;
 use App\Livewire\Auth\Login;
+use App\Livewire\Dashboard\Ai\Models as AiModels;
+use App\Livewire\Dashboard\Ai\Pricing as AiPricing;
+use App\Livewire\Dashboard\Ai\Providers as AiProviders;
+use App\Livewire\Dashboard\Ai\Routing as AiRouting;
 use App\Livewire\Dashboard\AuditLogs;
 use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
@@ -17,6 +22,7 @@ use App\Livewire\Dashboard\Settings;
 use App\Livewire\Dashboard\SubscriberDetail;
 use App\Livewire\Dashboard\Subscribers;
 use App\Livewire\Dashboard\Tasks;
+use App\Livewire\Dashboard\Usage;
 use App\Livewire\Dashboard\WhatsAppStatus;
 use App\Livewire\Dev\Chat;
 use App\Livewire\HomePage;
@@ -61,6 +67,16 @@ Route::middleware(['auth', 'admin'])
         // additionally enforces its own permission in SettingsRepository.
         Route::get('/settings', Settings::class)->middleware('permission:settings.manage')->name('dashboard.settings');
         Route::get('/persona', Persona::class)->middleware('permission:persona.manage')->name('dashboard.persona');
+
+        // AI catalog + usage (Phase C2): strict RBAC on every route; each
+        // write additionally re-checks its permission in CatalogAdmin /
+        // PriceBook callers. No credentials, no test connection, no cutover.
+        Route::get('/ai/providers', AiProviders::class)->middleware('permission:ai.providers.view')->name('dashboard.ai.providers');
+        Route::get('/ai/models', AiModels::class)->middleware('permission:ai.models.manage')->name('dashboard.ai.models');
+        Route::get('/ai/pricing', AiPricing::class)->middleware('permission:ai.pricing.view')->name('dashboard.ai.pricing');
+        Route::get('/ai/routing', AiRouting::class)->middleware('permission:ai.routing.manage')->name('dashboard.ai.routing');
+        Route::get('/usage', Usage::class)->middleware('permission:usage.view')->name('dashboard.usage');
+        Route::get('/usage/export', UsageExportController::class)->middleware('permission:usage.export')->name('dashboard.usage.export');
     });
 
 // Local chat simulator — 404 outside local/testing (see EnsureDevEnvironment).

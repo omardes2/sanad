@@ -1,7 +1,7 @@
 # Phase C — Sanad Admin Control Center
 
 > المرجع المعماري العام: [ARCHITECTURE.md](ARCHITECTURE.md). Phase B2: [PHASE_B2_PLAN.md](PHASE_B2_PLAN.md).
-> الحالة: **C0 مدمجة**، **C1 منفَّذة** (PR C1). C2–C4 مخطَّطة ولا تبدأ إلا بموافقة صريحة لكل واحدة.
+> الحالة: **C0 مدمجة**، **C1 مدمجة**، **C2 منفَّذة** (PR C2). C3–C4 مخطَّطتان ولا تبدآن إلا بموافقة صريحة لكل واحدة.
 
 ## 1) Audit للوضع قبل Phase C (main `7c3fd63`)
 
@@ -73,6 +73,7 @@
 | `persona.manage` | ✓ | ✓ | | |
 | `usage.view` | ✓ | ✓ | ✓ | ✓ |
 | `usage.view_costs` | ✓ | | ✓ | |
+| `usage.export` (C2) | ✓ | | ✓ | |
 | `audit.view` | ✓ | | ✓ | |
 | `plans.manage` | ✓ | ✓ | | |
 | `subscribers.view` | ✓ | ✓ | ✓ | ✓ |
@@ -116,13 +117,41 @@
 
 **ملاحظة مهمة عن مفاتيح الطوارئ في `.env`:** أي مفتاح طوارئ موجود في `.env` (مثل `AI_ENABLED=true` في الإنتاج) هو override يتقدّم على قيمة اللوحة بحكم التصميم، وتعرضه اللوحة "مُجبَر من البيئة". لذلك `.env.example` يترك `AI_CATALOG_SOURCE` معلّقًا، و`phpunit.xml` يفرّغ `AI_ENABLED`/`AI_CATALOG_SOURCE`/`BILLING_ENFORCE` كي تبقى الاختبارات hermetic مهما احتوى `.env` المنسوخ من المثال (سبب فشل CI الأول في PR C1).
 
-## 6) C2–C4 (مخطَّطة)
+## 6) C2 — Providers / Models / Pricing / Routing / Usage (منفَّذة)
 
-- **C2:** صفحات Providers/Models/Pricing (نشر فقط عبر `PriceBook`)/Routing (محاكاة)/Usage (المعروف يُجمع، غير المسعّر يُعدّ). SSRF validator لـ`base_url` (القرار B) مع اختبارات.
+**القرارات المثبَّتة قبل التنفيذ (1–9):**
+
+| # | القرار | التنفيذ |
+|---|---|---|
+| 1 | صفر migrations؛ لا فهرس usage استباقي | لا ملفات migrations في PR C2. |
+| 2 | Last viable route | `CatalogAdmin` يشغّل `RoutingSimulator::proposed()` قبل أي تغيير في `is_enabled`/`priority` لمزوّد أو نموذج؛ 0 مرشّح صالح لـ`chat` ⇒ `LastViableRouteException` ولا كتابة. ينطبق على التعطيل **وعلى التفعيل** (في وضع `auto`، تفعيل أول نموذج DB لمزوّد بلا مفتاح يبدّل المصدر إلى كتالوج بلا مسار ⇒ مرفوض). |
+| 3 | صلاحية مستقلة `usage.export` | `Permission::UsageExport` تُمنح لـ`super_admin` و`finance` فقط (المصفوفة §4). |
+| 4 | Alias uniqueness concurrency | كل كتابة في transaction تقفل صف `ai_providers` الأب بـ`SELECT … FOR UPDATE` ثم تفحص تفرّد `external_id` والـaliases داخل المزوّد (في الاتجاهين: alias جديد ≠ external_id قائم والعكس) ثم تكتب. اختبار PostgreSQL حقيقي بعمليات نظام متزامنة (`sanad:ai-alias-probe`): نفس alias لـexternal_ids مختلفة ⇒ نموذج واحد فقط؛ نفس external_id ⇒ رفض نظيف من الخدمة لا انهيار constraint. |
+| 5 | Cache invalidation | الكتابة + Audit في transaction واحدة؛ `CatalogCache::flushAfterCommit()` يؤجّل الـflush عبر `DB::afterCommit` إلى commit المعاملة **الخارجية** فعليًا (لا savepoint داخلي) ويُلغى عند rollback الخارجي — ينطبق على `CatalogAdmin` و`PriceBook` و`sanad:ai:bootstrap` وعلى hooks الموديلات (`saved`/`deleted`)؛ rollback ⇒ لا تغيير ولا Audit ولا invalidation يراه أي worker؛ فشل الـflush بعد commit لا يفشل الكتابة (تحذير `sanad.ai.catalog_cache_unavailable` + TTL 60 ثانية). |
+| 6 | Enable/disable عالي الأثر | محاكاة قبل الحفظ بنفس `SanadAiRouter::evaluate()` الذي يستخدمه الإنتاج؛ تغيّر المسار المختار ⇒ `RoutingChangeConfirmationRequired` ويجب إعادة الإرسال مع تأكيد مكتوب = handle المسار **الجديد**؛ الـAudit يحمل before/after + نتيجة المحاكاة (`simulation: {before, after, confirmed, candidates_after}`). لا تغيير على أي Provider/Model في الإنتاج أثناء النشر. |
+| 7 | Pricing atomicity | النشر عبر `PriceBook` فقط (UI وCLI)؛ الـAudit `ai.price.published` داخل transaction النشر: فشل الـAudit ⇒ السعر لا يُنشر والفترة المفتوحة لا تُغلق. |
+| 8 | Usage export | `GET /dashboard/usage/export` خلف `permission:usage.export` + إعادة فحص في الـController؛ نطاق `from/to` إلزامي (الواجهة تملؤه بـ30 يومًا؛ الحد 92 يومًا)؛ streaming بـ`lazyById(1000)`؛ بلا محتوى رسائل ولا metadata ولا أسماء/إيميلات/هواتف؛ المشترك = المعرّف الداخلي فقط؛ أعمدة التكلفة تُضاف فقط مع `usage.view_costs`. |
+| 9 | باقي الخطة | كما يلي. |
+
+**الحدود المحترمة:** لا Credentials ولا API keys (الواجهة تعرض "المفتاح في البيئة: موجود/غير موجود" فقط)، لا Test Connection، لا Provider Health، لا Routing cutover (`AI_PROVIDER` يبقى الحاكم)، `is_primary` للقراءة فقط، `base_url` يُخزَّن بعد فحص `UrlPolicy` ولا يُطبَّق (الـAudit يسجّل `base_url_applied: false`)، `key`/`driver`/`credentials_ref` غير قابلة للتعديل من الواجهة.
+
+**المكوّنات:**
+- `SanadAiRouter::evaluate()` — نفس سياسة `route()` مع سبب لكل مرشّح (`disabled`, `unsupported_operation`, `unknown_provider`, `provider_unsupported_operation`, `unconfigured`, `cost_guardrail`) في `RouteEvaluation`؛ `route()` مبني عليه فلا يمكن أن تختلف الواجهة عن الإنتاج.
+- `RoutingSimulator` — `current()` (ماذا لو: مزوّد مفضّل/حد تكلفة) و`proposed()` (overrides في الذاكرة لـ`is_enabled`/`priority`) يتبع `ai.catalog_source` بدقة (`config` يتجاهل الصفوف؛ `auto` يعود إلى config حين لا يبقى صف مفعّل).
+- `CatalogAdmin` — الكاتب الوحيد لـ`ai_providers`/`ai_models` من الواجهة: صلاحية server-side (`ai.providers.manage`/`ai.models.manage`)، validation، قفل صف المزوّد، تفرّد، `FallbackGraph` (لا self-reference، لا حلقات، عمق ≤ 5)، محاكاة، Audit (`ai.provider.updated`, `ai.model.created/updated/deleted`)، flush بعد commit. حذف النموذج فقط إن كان معطّلًا وبلا أسعار وليس بديلًا لغيره وبلا أحداث استخدام.
+- `UrlPolicy` (القرار B): https فقط، host حقيقي، لا userinfo، منع loopback/private/link-local/CGNAT/documentation/multicast/metadata، منع `.local/.internal/.localdomain/.localhost`، IPv4-mapped، وresolver اختياري لإعادة التحقق بعد DNS (يُستخدم في C3 عند كل outbound).
+- Usage: `UsageQuery` (نافذة إلزامية محدودة، فلاتر مشتركة بين الصفحة والتصدير، مجاميع: المسعّر يُجمع وغير المسعّر يُعدّ حسب السبب `none`/`currency_mismatch`/`legacy`)، `UsageExporter`، صفحة `/dashboard/usage` (`usage.view`؛ الأعمدة المالية والمجموع فقط مع `usage.view_costs` — يُقرَّر server-side).
+- الصفحات: `/dashboard/ai/providers` (`ai.providers.view` للعرض، `ai.providers.manage` للتعديل)، `/dashboard/ai/models` (`ai.models.manage`)، `/dashboard/ai/pricing` (`ai.pricing.view`؛ النشر بمعاينة + تأكيد مع `ai.pricing.manage`)، `/dashboard/ai/routing` (`ai.routing.manage`؛ للقراءة فقط، التقديرات فقط لمن يرى التكاليف).
+- `sanad:ai:bootstrap --apply` أصبح مُدقَّقًا (`ai.catalog.bootstrap_applied`) داخل transaction الكتابة.
+
+**النشر لـC2:** لا migrations. `php artisan sanad:rbac:bootstrap` (dry-run) ثم `--apply` لإنشاء `usage.export` ومنحها لـ`super_admin`/`finance`. لا تغيير في `.env` ولا `AI_PROVIDER` ولا `BILLING_ENFORCE`، ولا تغيير على أي Provider/Model أثناء النشر.
+
+## 7) C3–C4 (مخطَّطة)
+
 - **C3:** `provider_credentials` (مشفّر بـ`CredentialVault` على `CREDENTIALS_KEY` + مفاتيح سابقة للتدوير، fail-closed بدون المفتاح)، `CredentialResolver` (الخزنة ثم env)، إدخال write-only عبر POST عادي، masking (fingerprint/last4)، Rotate/Revoke مُدقَّق؛ `ProviderHealthCheck` abstraction لكل Adapter (القرار C) + `provider_health_checks` + Test Connection يدوي مع SSRF re-validation.
 - **C4:** `ai.routing.mode` (`env` افتراضي / `db`) مع `AI_ROUTING_MODE` كـemergency override، محاكاة قبل التبديل، تبديل مُدقَّق لـSuper Admin، `is_primary=groq` أولًا ثم التبديل بلا فرق ثم تغيير الأساسي بقرار مقصود.
 
-## 7) ترتيب النشر لـC0
+## 8) ترتيب النشر لـC0
 
 1. دمج PR C0 بموافقة صريحة.
 2. `php artisan migrate --force` (جداول Spatie + أعمدة `audit_logs`).

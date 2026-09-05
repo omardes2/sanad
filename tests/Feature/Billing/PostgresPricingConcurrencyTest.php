@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Models\AiModel;
 use App\Models\AiProvider;
+use App\Models\AuditLog;
 use App\Models\ModelPrice;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\Process\Process;
@@ -46,6 +47,10 @@ function pricingConcurrencyModel(): AiModel
 
 function pricingConcurrencyCleanup(AiModel $model): void
 {
+    // Since Phase C2 every publication is audited; remove those rows too so a
+    // non-RefreshDatabase test leaves nothing behind for the rest of the suite.
+    $priceIds = ModelPrice::where('model_id', $model->id)->pluck('id');
+    AuditLog::where('subject_type', (new ModelPrice)->getMorphClass())->whereIn('subject_id', $priceIds)->delete();
     ModelPrice::where('model_id', $model->id)->delete();
     $providerId = $model->provider_id;
     AiModel::whereKey($model->id)->delete();

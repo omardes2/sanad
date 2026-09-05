@@ -7,6 +7,7 @@ namespace App\Services\Ai;
 use App\Contracts\Ai\CatalogSource;
 use App\Data\Ai\Catalog\ModelSpec;
 use App\Data\Ai\Catalog\ResolvedRoute;
+use App\Data\Ai\Catalog\RouteEvaluation;
 use App\Data\Ai\Catalog\RoutingContext;
 use App\Enums\AiOperation;
 use App\Exceptions\Ai\AiConfigurationException;
@@ -24,9 +25,13 @@ use App\Services\Billing\Pricing\CostEstimator;
  * context's maxUnitCost. The chosen model's declared fallback, when present
  * among the remaining candidates, is placed first in `alternatives`.
  *
- * In Phase B2 the operational preference deliberately stays AI_PROVIDER; the
- * database `is_primary` flag is stored for the Phase C cutover and not read
- * here, so B2 cannot change which provider production uses.
+ * evaluate() exposes the same policy with a reason per candidate; route() is
+ * evaluate() plus the exception. The admin routing page and the enable/
+ * disable simulation (Phase C2) call evaluate() on real or hypothetical
+ * candidate lists, so they can never disagree with production routing.
+ *
+ * The operational preference deliberately stays AI_PROVIDER; the database
+ * `is_primary` flag is stored for the Phase C4 cutover and not read here.
  */
 class SanadAiRouter
 {
@@ -42,9 +47,43 @@ class SanadAiRouter
     public function route(AiOperation $operation, ?RoutingContext $context = null): ResolvedRoute
     {
         $context ??= new RoutingContext;
-        $preferred = $context->preferredProvider ?? (string) config('ai.provider', 'groq');
+        $evaluation = $this->evaluate($operation, $context);
 
-        $candidates = $this->catalog->candidates($operation, $context);
+        if ($evaluation->selected === null) {
+            throw AiConfigurationException::noRoute($operation);
+        }
+
+        $spec = $evaluation->selected;
+        $remaining = [];
+        $seen = false;
+
+        foreach ($evaluation->candidates as $row) {
+            if ($seen) {
+                $remaining[] = $row['spec'];
+            } elseif ($row['spec'] === $spec) {
+                $seen = true;
+            }
+        }
+
+        return new ResolvedRoute(
+            provider: $this->manager->provider($spec->provider),
+            model: $spec->model,
+            spec: $spec,
+            alternatives: $this->alternatives($spec, $remaining),
+        );
+    }
+
+    /**
+     * Apply the selection policy to the catalog's candidates (or to an
+     * explicit list) and explain every decision.
+     *
+     * @param  list<ModelSpec>|null  $candidates  hypothetical list; null = the live catalog
+     */
+    public function evaluate(AiOperation $operation, ?RoutingContext $context = null, ?array $candidates = null): RouteEvaluation
+    {
+        $context ??= new RoutingContext;
+        $preferred = $context->preferredProvider ?? (string) config('ai.provider', 'groq');
+        $candidates ??= $this->catalog->candidates($operation, $context);
 
         // Stable sort: within the same provider/priority the catalog's own
         // order (e.g. model priority in the database catalog) is preserved.
@@ -54,44 +93,57 @@ class SanadAiRouter
                 <=> [$a->provider === $preferred, $a->priority],
         );
 
-        foreach ($candidates as $index => $spec) {
-            if (! $spec->enabled || ! $this->manager->has($spec->provider)) {
-                continue;
+        $rows = [];
+        $selected = null;
+
+        foreach ($candidates as $spec) {
+            [$status, $reason, $estimate] = $this->judge($spec, $operation, $context);
+
+            if ($status === 'eligible' && $selected === null) {
+                $status = 'selected';
+                $selected = $spec;
             }
 
-            $provider = $this->manager->provider($spec->provider);
-
-            if (! $provider->supports($operation) || ! $provider->isConfigured()) {
-                continue;
-            }
-
-            if ($this->exceedsCostGuardrail($spec, $context)) {
-                continue;
-            }
-
-            return new ResolvedRoute(
-                provider: $provider,
-                model: $spec->model,
-                spec: $spec,
-                alternatives: $this->alternatives($spec, array_slice($candidates, $index + 1)),
-            );
+            $rows[] = ['spec' => $spec, 'status' => $status, 'reason' => $reason, 'estimate' => $estimate];
         }
 
-        throw AiConfigurationException::noRoute($operation);
+        return new RouteEvaluation($preferred, $rows, $selected);
     }
 
     /**
-     * Only a KNOWN estimate can exceed the guardrail; unknown costs never skip.
+     * @return array{0: string, 1: ?string, 2: ?float} status, reason, estimate
      */
-    private function exceedsCostGuardrail(ModelSpec $spec, RoutingContext $context): bool
+    private function judge(ModelSpec $spec, AiOperation $operation, RoutingContext $context): array
     {
-        if ($context->maxUnitCost === null) {
-            return false;
+        if (! $spec->enabled) {
+            return ['skipped', 'disabled', null];
         }
 
-        $estimate = $this->estimator->estimate($spec);
+        if (! $spec->supports($operation)) {
+            return ['skipped', 'unsupported_operation', null];
+        }
 
-        return $estimate !== null && $estimate > $context->maxUnitCost;
+        if (! $this->manager->has($spec->provider)) {
+            return ['skipped', 'unknown_provider', null];
+        }
+
+        $provider = $this->manager->provider($spec->provider);
+
+        if (! $provider->supports($operation)) {
+            return ['skipped', 'provider_unsupported_operation', null];
+        }
+
+        if (! $provider->isConfigured()) {
+            return ['skipped', 'unconfigured', null];
+        }
+
+        $estimate = $context->maxUnitCost === null ? null : $this->estimator->estimate($spec);
+
+        if ($context->maxUnitCost !== null && $estimate !== null && $estimate > $context->maxUnitCost) {
+            return ['skipped', 'cost_guardrail', $estimate];
+        }
+
+        return ['eligible', null, $estimate];
     }
 
     /**

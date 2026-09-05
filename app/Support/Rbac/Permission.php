@@ -36,6 +36,8 @@ enum Permission: string
 
     case UsageView = 'usage.view';
     case UsageViewCosts = 'usage.view_costs';
+    /** Streaming CSV export of the ledger (super_admin + finance only). */
+    case UsageExport = 'usage.export';
 
     case AuditView = 'audit.view';
 
@@ -63,6 +65,7 @@ enum Permission: string
             self::PersonaManage => 'إدارة شخصية سَنَد والـPrompts',
             self::UsageView => 'عرض الاستخدام',
             self::UsageViewCosts => 'عرض التكاليف',
+            self::UsageExport => 'تصدير الاستخدام (CSV)',
             self::AuditView => 'عرض سجل التدقيق',
             self::PlansManage => 'إدارة الباقات',
             self::SubscribersView => 'عرض المشتركين',

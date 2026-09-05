@@ -9,6 +9,8 @@ use App\Models\AiModel;
 use App\Models\AiProvider;
 use App\Services\Ai\AiManager;
 use App\Services\Ai\Catalog\CatalogCache;
+use App\Services\Audit\AuditLogger;
+use App\Support\Audit\AuditActions;
 use Illuminate\Console\Command;
 use Illuminate\Console\ConfirmableTrait;
 use Illuminate\Support\Facades\DB;
@@ -26,6 +28,7 @@ use Illuminate\Support\Facades\DB;
  *    options — it never imposes a commercial model choice.
  *  - NEVER writes a price. Prices are published only through sanad:ai:price
  *    with values reviewed by a human.
+ *  - Audited (Phase C2): the applied plan is recorded in the same transaction.
  *  - Never changes the provider production uses: is_primary stays false and
  *    AI_PROVIDER remains the router's preference in B2.
  */
@@ -41,7 +44,7 @@ class AiBootstrapCommand extends Command
 
     protected $description = 'Register AI providers/models in the database catalog from config or explicit options (dry run by default, never writes prices)';
 
-    public function handle(AiManager $manager): int
+    public function handle(AiManager $manager, AuditLogger $audit): int
     {
         $apply = (bool) $this->option('apply');
 
@@ -69,7 +72,7 @@ class AiBootstrapCommand extends Command
             return self::SUCCESS;
         }
 
-        DB::transaction(function () use ($plan): void {
+        DB::transaction(function () use ($plan, $audit): void {
             $providers = [];
 
             foreach ($plan as $row) {
@@ -87,9 +90,18 @@ class AiBootstrapCommand extends Command
 
                 $this->writeModel($row, $providers[$row['provider']] ?? AiProvider::query()->where('key', $row['provider'])->firstOrFail());
             }
+
+            // Same transaction as the writes: no audit row without the change,
+            // no change without its audit row (Phase C2).
+            $audit->record(AuditActions::AiCatalogBootstrapApplied, null, [], [
+                'plan' => array_map(static fn (array $row): array => [
+                    'kind' => $row['kind'], 'handle' => $row['handle'], 'action' => $row['action'],
+                ], $plan),
+                'update_metadata' => (bool) $this->option('update-metadata'),
+            ]);
         });
 
-        CatalogCache::flush();
+        CatalogCache::flushAfterCommit();
         $this->info('Catalog bootstrap applied.');
 
         return self::SUCCESS;
