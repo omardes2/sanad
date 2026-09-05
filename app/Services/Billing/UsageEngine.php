@@ -20,11 +20,33 @@ use Illuminate\Support\Facades\DB;
  * charging go through here — counters are never incremented ad-hoc in WhatsApp
  * or AI code. Channel-agnostic: it only knows subscribers and dimensions.
  *
- * Concurrency: charge() runs inside a transaction and locks the per-window
- * counter rows (SELECT ... FOR UPDATE) before checking and incrementing, so
- * concurrent workers cannot push a counter past its hard limit. Idempotency:
- * each charge carries a key (the inbound message id); a duplicate webhook or a
- * job retry records/charges at most once (unique idempotency_key on the ledger).
+ * Concurrency & the counter-creation race
+ * ---------------------------------------
+ * The hard limit is enforced by an ATOMIC CONDITIONAL UPSERT per window:
+ *
+ *   INSERT ... VALUES (used = weight)
+ *   ON CONFLICT (subscriber, dimension, period, period_key)
+ *   DO UPDATE SET used = used + weight
+ *   WHERE used + weight <= cap
+ *
+ * This is safe even when the counter row does not exist yet — the failing case
+ * for `SELECT ... FOR UPDATE`, which cannot lock a non-existent row. With two
+ * "first" messages arriving together:
+ *   - both attempt the INSERT; the unique constraint lets exactly one succeed,
+ *     the other's statement waits on the conflicting row (PostgreSQL) and then
+ *     takes the DO UPDATE branch;
+ *   - the DO UPDATE only increments while `used + weight <= cap`, so the counter
+ *     can never pass the cap — the loser gets 0 affected rows → LimitReached.
+ * A single statement does check-and-increment atomically, so there is no
+ * read-then-increment window to exploit, and no reliance on locking a row that
+ * isn't there.
+ *
+ * Idempotency: each charge carries a key (the inbound message id). A duplicate
+ * webhook or a job retry inserts the ledger row at most once (unique
+ * idempotency_key); a concurrent duplicate's INSERT loses the race and the whole
+ * charge rolls back (so it is never counted twice). A caught unique violation is
+ * followed only by ROLLBACK, so an aborted PostgreSQL transaction is never
+ * reused.
  */
 class UsageEngine
 {
@@ -32,7 +54,8 @@ class UsageEngine
 
     /**
      * Non-locking pre-check used BEFORE calling a metered provider, so we don't
-     * call the AI provider when the subscriber is already over the limit.
+     * call the AI provider when the subscriber is already over the limit. This
+     * is advisory only — charge() is the authoritative, race-safe gate.
      */
     public function check(User $subscriber, UsageDimension $dimension): UsageDecision
     {
@@ -62,8 +85,9 @@ class UsageEngine
     }
 
     /**
-     * Atomically and idempotently charge one usage of a dimension. This is the
-     * authoritative hard-limit gate (safe under concurrency).
+     * Atomically and idempotently charge one usage of a dimension. The
+     * authoritative hard-limit gate (safe under concurrency and the
+     * counter-creation race — see the class docblock).
      *
      * @param  array<string, mixed>  $meta
      */
@@ -87,58 +111,52 @@ class UsageEngine
 
         [$dayKey, $monthKey] = $this->periodKeys($subscriber);
 
-        return DB::transaction(function () use (
-            $subscriber, $dimension, $idempotencyKey, $meta, $inputTokens, $outputTokens, $ent, $dayKey, $monthKey
-        ): UsageDecision {
-            // Idempotent replay (duplicate webhook / retry) — already charged.
-            if (UsageEvent::query()->where('idempotency_key', $idempotencyKey)->exists()) {
-                return new UsageDecision(UsageOutcome::AlreadyCharged, $dimension);
-            }
-
-            $weight = $ent->weight;
-
-            /** @var list<UsageCounter> $locked */
-            $locked = [];
-
-            foreach ($this->cappedWindows($ent, $dayKey, $monthKey) as [$period, $periodKey, $cap]) {
-                $counter = $this->lockCounter($subscriber, $dimension, $period, $periodKey);
-
-                if ($counter->used + $weight > $cap) {
-                    // Rollback (no increment, no ledger row) and report the limit.
-                    return new UsageDecision(UsageOutcome::LimitReached, $dimension, $period);
+        try {
+            return DB::transaction(function () use (
+                $subscriber, $dimension, $idempotencyKey, $meta, $inputTokens, $outputTokens, $ent, $dayKey, $monthKey
+            ): UsageDecision {
+                // Sequential replay (already committed) — allowed, not re-charged.
+                if (UsageEvent::query()->where('idempotency_key', $idempotencyKey)->exists()) {
+                    return new UsageDecision(UsageOutcome::AlreadyCharged, $dimension);
                 }
 
-                $locked[] = $counter;
-            }
+                $weight = $ent->weight;
 
-            $cost = $this->costs->cost($dimension, $weight, $inputTokens, $outputTokens);
+                // Atomic conditional upsert per capped window. Any window that
+                // would exceed its cap aborts the whole charge (rollback).
+                foreach ($this->cappedWindows($ent, $dayKey, $monthKey) as [$period, $periodKey, $cap]) {
+                    if (! $this->increment($subscriber, $dimension, $period, $periodKey, $weight, $cap)) {
+                        throw new UsageChargeAborted(UsageOutcome::LimitReached, $period);
+                    }
+                }
 
-            try {
-                UsageEvent::create([
-                    'user_id' => $subscriber->id,
-                    'type' => $dimension->value,
-                    'idempotency_key' => $idempotencyKey,
-                    'provider' => (string) ($meta['provider'] ?? 'internal'),
-                    'model' => $meta['model'] ?? null,
-                    'input_units' => $inputTokens,
-                    'output_units' => $outputTokens,
-                    'quantity' => $weight,
-                    'cost' => $cost['cost'],
-                    'currency' => $cost['currency'],
-                    'metadata' => $meta['metadata'] ?? null,
-                ]);
-            } catch (UniqueConstraintViolationException) {
-                // Concurrent replay inserted the same key first — do not double charge.
-                return new UsageDecision(UsageOutcome::AlreadyCharged, $dimension);
-            }
+                $cost = $this->costs->cost($dimension, $weight, $inputTokens, $outputTokens);
 
-            foreach ($locked as $counter) {
-                $counter->used += $weight;
-                $counter->save();
-            }
+                try {
+                    UsageEvent::create([
+                        'user_id' => $subscriber->id,
+                        'type' => $dimension->value,
+                        'idempotency_key' => $idempotencyKey,
+                        'provider' => (string) ($meta['provider'] ?? 'internal'),
+                        'model' => $meta['model'] ?? null,
+                        'input_units' => $inputTokens,
+                        'output_units' => $outputTokens,
+                        'quantity' => $weight,
+                        'cost' => $cost['cost'],
+                        'currency' => $cost['currency'],
+                        'metadata' => $meta['metadata'] ?? null,
+                    ]);
+                } catch (UniqueConstraintViolationException) {
+                    // Concurrent duplicate won the ledger insert — roll back the
+                    // counter increments so this duplicate is never counted.
+                    throw new UsageChargeAborted(UsageOutcome::AlreadyCharged);
+                }
 
-            return UsageDecision::allow($dimension);
-        });
+                return UsageDecision::allow($dimension);
+            });
+        } catch (UsageChargeAborted $aborted) {
+            return new UsageDecision($aborted->outcome, $dimension, $aborted->window);
+        }
     }
 
     public function entitlement(User $subscriber, UsageDimension $dimension): Entitlement
@@ -162,7 +180,34 @@ class UsageEngine
     }
 
     /**
-     * @param  array{0: string, 1: string, 2: int}  ...$_
+     * Atomic check-and-increment for one window. Returns true when the weight
+     * was consumed, false when the cap would be exceeded. Safe even if the row
+     * does not exist yet (INSERT ... ON CONFLICT), and cross-database (PostgreSQL
+     * and SQLite both support the conditional upsert).
+     */
+    private function increment(User $subscriber, UsageDimension $dimension, string $period, string $periodKey, int $weight, int $cap): bool
+    {
+        // A fresh INSERT is not covered by the DO UPDATE ... WHERE cap guard, so
+        // refuse up front when even the first unit would exceed the cap.
+        if ($weight > $cap) {
+            return false;
+        }
+
+        $now = CarbonImmutable::now()->toDateTimeString();
+
+        $affected = DB::affectingStatement(
+            'insert into usage_counters (subscriber_id, dimension, period, period_key, used, created_at, updated_at)'
+            .' values (?, ?, ?, ?, ?, ?, ?)'
+            .' on conflict (subscriber_id, dimension, period, period_key)'
+            .' do update set used = usage_counters.used + ?, updated_at = ?'
+            .' where usage_counters.used + ? <= ?',
+            [$subscriber->id, $dimension->value, $period, $periodKey, $weight, $now, $now, $weight, $now, $weight, $cap],
+        );
+
+        return $affected >= 1;
+    }
+
+    /**
      * @return list<array{0: string, 1: string, 2: int}>
      */
     private function cappedWindows(Entitlement $ent, string $dayKey, string $monthKey): array
@@ -178,28 +223,6 @@ class UsageEngine
         }
 
         return $windows;
-    }
-
-    private function lockCounter(User $subscriber, UsageDimension $dimension, string $period, string $periodKey): UsageCounter
-    {
-        $keys = [
-            'subscriber_id' => $subscriber->id,
-            'dimension' => $dimension->value,
-            'period' => $period,
-            'period_key' => $periodKey,
-        ];
-
-        $counter = UsageCounter::query()->where($keys)->lockForUpdate()->first();
-
-        if ($counter !== null) {
-            return $counter;
-        }
-
-        try {
-            return UsageCounter::create($keys + ['used' => 0]);
-        } catch (UniqueConstraintViolationException) {
-            return UsageCounter::query()->where($keys)->lockForUpdate()->firstOrFail();
-        }
     }
 
     private function used(User $subscriber, UsageDimension $dimension, string $period, string $periodKey): int
