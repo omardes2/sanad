@@ -55,6 +55,7 @@ final class RoleMatrix
                 Permission::FinanceExport,
                 Permission::FinancePaymentsManage,
                 Permission::FinanceReconcile,
+                Permission::FinanceFxManage,
                 Permission::AuditView,
                 Permission::SubscribersView,
             ],

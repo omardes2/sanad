@@ -9,6 +9,7 @@ use App\Enums\SettingPrecedence;
 use App\Enums\SettingType;
 use App\Exceptions\Settings\InvalidSettingValueException;
 use App\Exceptions\Settings\ReadOnlySettingException;
+use App\Exceptions\Settings\TypedConfirmationRequiredException;
 use App\Models\AppSetting;
 use App\Services\Audit\AuditLogger;
 use App\Support\Audit\AuditActions;
@@ -106,17 +107,27 @@ class SettingsRepository
      * RoutingCutover). Same validation, transaction and audit as set(); only
      * the "managed" refusal is lifted. Never call this from a page.
      */
-    public function setManaged(string $key, mixed $value, ?string $reason = null): EffectiveSetting
+    public function setManaged(string $key, mixed $value, ?string $reason = null, ?string $typedConfirmation = null): EffectiveSetting
     {
-        return $this->write($key, $value, $reason, true);
+        return $this->write($key, $value, $reason, true, $typedConfirmation);
     }
 
-    private function write(string $key, mixed $value, ?string $reason, bool $viaManagedWriter): EffectiveSetting
+    /**
+     * @throws AuthorizationException|ReadOnlySettingException|InvalidSettingValueException|TypedConfirmationRequiredException
+     */
+    private function write(string $key, mixed $value, ?string $reason, bool $viaManagedWriter, ?string $typedConfirmation = null): EffectiveSetting
     {
         $definition = $this->registry->require($key);
         $this->guard($definition, $viaManagedWriter);
 
         $casted = $this->validate($definition, $value);
+
+        // Phase E3: a typed-confirmation key is refused HERE, before any I/O,
+        // unless the new value was spelled out verbatim — whoever the caller is.
+        if ($definition->requiresTypedConfirmation && ($typedConfirmation === null || ! hash_equals((string) $casted, $typedConfirmation))) {
+            throw TypedConfirmationRequiredException::for($definition->key);
+        }
+
         $before = $this->effective($key);
         $actorRef = $this->actorRef();
 

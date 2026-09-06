@@ -36,6 +36,10 @@ final class SettingsRegistry
 
     public const GROUP_EMERGENCY = 'emergency';
 
+    public const GROUP_FINANCE = 'finance';
+
+    public const REPORTING_CURRENCY = 'finance.reporting_currency';
+
     /** @var array<string, SettingDefinition>|null */
     private ?array $definitions = null;
 
@@ -101,6 +105,7 @@ final class SettingsRegistry
             self::GROUP_GUARDRAILS => 'الحواجز المالية',
             self::GROUP_HEALTH => 'صحة المزوّدين',
             self::GROUP_EMERGENCY => 'مفاتيح الطوارئ',
+            self::GROUP_FINANCE => 'المالية',
         ];
     }
 
@@ -388,6 +393,22 @@ final class SettingsRegistry
                 envKey: 'BILLING_ENFORCE',
                 overrideConfigPath: 'billing.overrides.enforce',
                 readOnly: true,
+            ),
+            // Phase E3 — reporting currency: written ONLY by ReportingCurrencyService
+            // (finance.fx.manage + typed confirmation + audit). Changing it never
+            // recomputes or rewrites any frozen conversion.
+            new SettingDefinition(
+                key: self::REPORTING_CURRENCY,
+                type: SettingType::String,
+                group: self::GROUP_FINANCE,
+                label: 'عملة التقرير (Reporting currency)',
+                description: 'العملة التي تُعرض بها القيم المحوَّلة للتقارير. الافتراضي عملة التكلفة. لا تحويل ضمني: يظهر فقط ما حُوِّل بسعر مسجَّل صراحة.',
+                permission: Permission::FinanceFxManage,
+                precedence: SettingPrecedence::Operational,
+                defaultConfigPath: 'billing.cost_currency',
+                rules: ['required', 'string', 'size:3', 'regex:/^[A-Z]{3}$/'],
+                managed: true,
+                requiresTypedConfirmation: true,
             ),
         ];
     }

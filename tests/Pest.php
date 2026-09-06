@@ -633,7 +633,7 @@ function e2ConfirmedInvoice(array $lines = ['service' => '100.000000'], array $o
 /**
  * Reconcile a scope from invoice evidence. Defaults: provider/groq, 2026-08, USD, no previous reconciliation.
  *
- * @param  list<array{0: int, 1: string}>  $allocations  [lineId, amount]
+ * @param  list<array{0: int, 1: string, 2?: int}>  $allocations  [lineId, amount, fxRateId?]
  * @param  array<string, mixed>  $overrides  ReconciliationInput constructor arguments
  */
 function e2Reconcile(array $allocations, array $overrides = []): CostReconciliation
@@ -645,7 +645,7 @@ function e2Reconcile(array $allocations, array $overrides = []): CostReconciliat
         'currency' => 'USD',
         'expectedCurrentReconciliationId' => null,
         'source' => 'invoice',
-        'allocations' => array_map(static fn (array $a) => new EvidenceAllocation($a[0], $a[1]), $allocations),
+        'allocations' => array_map(static fn (array $a) => new EvidenceAllocation($a[0], $a[1], $a[2] ?? null), $allocations),
         'reasonCode' => 'monthly',
     ], $overrides)));
 }
@@ -656,6 +656,71 @@ function e2Rule(callable $fn): string
     try {
         $fn();
     } catch (ReconciliationRuleException $e) {
+        return $e->rule;
+    }
+
+    return 'none';
+}
+
+// ---- FX & reporting currency (Phase E3) ---------------------------------------------
+
+use App\Data\Fx\RecordRateInput;
+use App\Data\Fx\ReportingConversionInput;
+use App\Exceptions\Fx\FxRuleException;
+use App\Models\FxConversion;
+use App\Models\FxPair;
+use App\Models\FxRate;
+use App\Services\Fx\FxPairBook;
+use App\Services\Fx\FxRateBook;
+use App\Services\Fx\ReportingConversionService;
+
+/** The canonical pair for two currencies in the given official orientation (created once). */
+function fxPair(string $base = 'USD', string $quote = 'ILS'): FxPair
+{
+    return app(FxPairBook::class)->find($base, $quote) ?? app(FxPairBook::class)->create($base, $quote);
+}
+
+/**
+ * Record a manual quote revision. Defaults: USD/ILS 3.650000000000 on 2026-08-10, no previous revision.
+ *
+ * @param  array<string, mixed>  $overrides  RecordRateInput constructor arguments
+ */
+function fxRate(array $overrides = []): FxRate
+{
+    $base = $overrides['baseCurrency'] ?? 'USD';
+    $quote = $overrides['quoteCurrency'] ?? 'ILS';
+    fxPair($base, $quote);
+
+    return app(FxRateBook::class)->record(new RecordRateInput(...array_merge([
+        'baseCurrency' => $base,
+        'quoteCurrency' => $quote,
+        'rateDate' => '2026-08-10',
+        'rate' => '3.650000000000',
+        'evidenceRef' => 'boi:2026-08-10',
+    ], $overrides)));
+}
+
+/**
+ * Freeze a reporting conversion with an explicit rate id.
+ *
+ * @param  array<string, mixed>  $overrides  ReportingConversionInput constructor arguments
+ */
+function fxConvert(string $subjectType, int $subjectId, string $target, int $fxRateId, array $overrides = []): FxConversion
+{
+    return app(ReportingConversionService::class)->convert(new ReportingConversionInput(...array_merge([
+        'subjectType' => $subjectType,
+        'subjectId' => $subjectId,
+        'targetCurrency' => $target,
+        'fxRateId' => $fxRateId,
+    ], $overrides)));
+}
+
+/** The rule name an E3 service refuses with, or "none". */
+function fxRule(callable $fn): string
+{
+    try {
+        $fn();
+    } catch (FxRuleException $e) {
         return $e->rule;
     }
 

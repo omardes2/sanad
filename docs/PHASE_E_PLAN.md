@@ -132,11 +132,44 @@ scope projection بدل `is_current` (`cost_reconciliation_scopes` = هدف ال
 ### ترتيب النشر لـE2 (بعد الدمج وبموافقة صريحة)
 `php artisan migrate --force` (الجداول السبعة). لا أوامر أخرى؛ لا backfill.
 
-## 6) E3–E5 (مخطَّطة، لا تبدأ قبل الاعتماد)
+## 6) E3 — FX & Reporting Currency (منفَّذ)
 
-- **E3**: `fx_rates` يدوية + إعداد `finance.reporting_currency`؛ `fx_rate_id` في كل تحويل؛ RBAC `finance.fx.manage`.
+### القرارات المعتمدة (20 تعديلًا على الخطة)
+السعر quote لتاريخ محدد (`rate_date`) لا فترة صلاحية؛ `FxConverter` لا يبحث عن أحدث/أقرب/سابق/احتياطي — غياب السعر المناسب ⇒ `FX_RATE_MISSING` · مراجعات append-only عبر `fx_rate_scopes` (قفل + مؤشر + version؛ 6 إداريين ⇒ 1/5) · هوية زوج قانونية `min:max` مع اتجاه رسمي محفوظ؛ الإدخال المعاكس مرفوض لا مقلوب · inverse على نفس `fx_rate_id` بقسمة، `direction` + `rate_snapshot`، لا reciprocal · FX على مستوى `cost_invoice_allocations` (source_amount/currency + fx_* لكل تخصيص؛ cap على `source_amount`؛ `amount` محوَّل بعملة النطاق؛ NATIVE بلا سعر) · تاريخ السياسة للفواتير `issued_at` · `fx_conversions` للتقرير فقط بـ`fx_conversion_scopes` للتصحيح · تواريخ السياسة: دفعة `received_at`، استرداد `refunded_at`، تسوية `period_end` · تحويل النقد للعرض فقط بلا مساس بالأصل · NATIVE بلا rate=1 · `finance.reporting_currency` managed بافتراضي `billing.cost_currency`، DB > config، بلا env، تأكيد مكتوب، لا إعادة حساب · الإجمالي فقط عند اكتمال كل البنود · مقياس السعر 12، `source_scale`/`target_scale` محفوظان، تقريب واحد half-up · التسوية تجمّد الـrate المسمّى وتُرفض إن استُبدل · RBAC `finance.fx.manage` · UI أدنى · عدد migrations من الملفات · نطاق E3 فقط.
+
+### الجداول
+`fx_pairs` · `fx_rate_scopes` · `fx_rates` · `fx_conversion_scopes` · `fx_conversions` · أعمدة FX على `cost_invoice_allocations` — التفاصيل في [DATABASE.md](DATABASE.md). ستة migrations (`2026_09_06_001101…001106`)؛ حدّ rollback في `UsageLedgerMigrationTest` = **33**.
+
+### الخدمات (`App\Services\Fx`)
+- `FxPairBook::create(base, quote)`: `pair_key = min:max` فريد (savepoint ⇒ `pair_exists`)، audit `fx.pair_created`. `find(a, b)`.
+- `FxRateBook::record(RecordRateInput)`: الاتجاه الرسمي فقط (`orientation`)، `rate_date` ≤ اليوم بصيغة صارمة، `rate` > 0 بمقياس 12، `evidence_ref` إلزامي؛ find-or-create لنطاق (pair, date) → `FOR UPDATE` → `expected_current_rate_id` وإلا `StaleFxException` → مراجعة جديدة (`supersedes_id`) → مؤشر + version → audit `fx.rate_recorded`. `quotesFor(a, b, date)` أداة عرض للتاريخ نفسه فقط. `isCurrent(rate)`.
+- `ReportingConversionService::convert(ReportingConversionInput)`: الموضوع بعملة الهدف ⇒ `native` مرفوض؛ `acceptedRate(id, from, to, policyDate)`: موجود، يغطي العملتين، `rate_date == policyDate`، وهو المراجعة الحالية وإلا stale؛ `FxMath::convert` (direct ضرب / inverse قسمة، تقريب واحد half-up بمقياس الموضوع) → `fx_conversions` تحت قفل نطاق التحويل مع `expected_current_conversion_id` → audit `fx.converted` بكل عناصر الـsnapshot.
+- `ReportingCurrencyService::change(code, typed)`: `finance.fx.manage` + الرمز مكتوبًا حرفيًا + `setManaged` + audit `finance.reporting_currency_changed` (`conversions_recomputed: 0`).
+- `ReportingView::cash(from, to)` / `cost(fromMonth, toMonth)`: لكل بند الأصل + الحالة؛ الإجماليات (`Gross Cash Collected`, `Refunds`, `Net Cash`, `Base Reconciled Cost`) رقم فقط عند اكتمال كل البنود.
+- `FxMath` (brick/math): `convert(source, sourceScale, rate, direction, targetScale)`، `rateToScaled`, `directionFor`, `formatAtScale`.
+- E2: `EvidenceAllocation(lineId, amount, ?fxRateId)`؛ `CostReconciliationService` يطلب `fx_rate_id` عند اختلاف العملة (`FX_REQUIRED`)، يتحقق بـ`acceptedRate` على `issued_at`، يجمّد السعر في التخصيص، cap على `source_amount`، audit `evidence_fx`.
+- Probes للاختبار فقط: `sanad:fx-probe {create-pair|record-rate|convert}`؛ `sanad:reconciliation-probe … <line>:<amount>:<fx_rate_id>`.
+
+### RBAC والصفحة
+`finance.fx.manage` (super_admin + finance). الصفحة `/dashboard/finance/fx` (`Livewire\Dashboard\Finance\Fx`): الخمس عمليات + عرض النقد والتكلفة؛ mount وكل action يعيدان الفحص. `finance.view` يقرأ القيم المحوَّلة الموجودة ولا ينشئ تحويلًا.
+
+### الاختبارات
+- `FxPairAndRateTest`: زوج قانوني واحد ورفض المعاكس (+ CHECK)، اتجاه رسمي، تاريخ صارم غير مستقبلي، دليل إلزامي، مقياس 12، مراجعات append-only بمؤشر وstale، لا فترة صلاحية ولا كلمات lookup في كود الخدمات، atomic.
+- `FxMathTest`: direct/inverse، تقريب واحد half-up (0.005 ↑، 0.004 ↓، 0.015 ↑)، لا reciprocal مقرَّب، مبالغ تتجاوز int64.
+- `ReportingConversionTest`: دفعة direct 100 USD → 365.00 ILS، استرداد inverse 10 ILS → 2.74 USD بنفس الصف، رفض سعر يوم سابق/زوج آخر/مراجعة مستبدَلة/معرّف مفقود/موضوع NATIVE، مراجعة التحويل بمؤشر وstale، تسوية على `period_end` بمقياس 6، atomic.
+- `AllocationFxTest`: `FX_REQUIRED` بلا معرّف، `FX_RATE_MISSING` لسعر بغير تاريخ الإصدار، تجميد السعر لكل تخصيص، cap على الحصة المصدر عبر الأشهر، خليط NATIVE/CONVERTED في تسوية واحدة، سعر مستبدَل ⇒ stale، audit `evidence_fx`.
+- `ReportingViewTest`: الافتراضي `billing.cost_currency`، التأكيد المكتوب، audit، لا إعادة حساب؛ NATIVE/CONVERTED/NOT CONVERTED مع الأصل؛ إجمالي مكتمل فقط؛ تبديل عملة التقرير يغيّر الحالات لا التحويلات؛ التكلفة المسوّاة بنفس القواعد.
+- `FxPageTest`: RBAC (route/nav/mount/action مع سحب الدور)، الدورة الكاملة من الصفحة، لا Revenue/Gross Margin.
+- `PostgresFxConcurrencyTest` (عمليات حقيقية): سباق الزوج المعاكس (زوج واحد)، سباق مراجعة السعر (1/5، مؤشر واحد)، سباق التحويل (1/5)، تسوية cross-currency تجمّد X أثناء تصحيحه وتُرفض بعد استبداله. CI يشغّله مع حارس "لا skip".
+- `UsageLedgerMigrationTest`: الحدّ **33**.
+
+### ترتيب النشر لـE3 (بعد الدمج وبموافقة صريحة)
+`php artisan migrate --force`. لا أوامر أخرى؛ لا تحويل تاريخي آلي.
+
+## 7) E4–E5 (مخطَّطة، لا تبدأ قبل الاعتماد)
+
 - **E4**: `finance_period_closes` append-only بشروط الإقفال وإعادة الفتح بسجل جديد؛ مقاييس Cash Collected / Refunds / Gateway Fees / Net Cash After Gateway Fees / Reconciled Service Cost / Reconciled Cash Contribution؛ Gross Profit/Margin `NOT AVAILABLE`؛ RBAC `finance.close_period` (super_admin).
 - **E5**: صفحات Payments / Invoices & Reconciliation / FX / Period Close، CSV بعقد `section` + أعلام reconciled، RBAC النهائي.
 
-## 7) مؤجَّل لما بعد E
+## 8) مؤجَّل لما بعد E
 بوابة دفع حية وشحن فعلي، فوترة العملاء الصادرة، الضرائب، dunning، churn/cohorts/LTV، rollups مادية، تسجيل أحداث WhatsApp في الدفتر، جلب فواتير المزوّدين آليًا، سياسة Revenue Recognition.

@@ -104,4 +104,16 @@ final class AuditActions
 
     /** Phase E2 — a signed adjustment was appended to the current reconciliation. */
     public const CostAdjusted = 'cost.adjusted';
+
+    /** Phase E3 — a canonical FX pair was created with its official orientation. */
+    public const FxPairCreated = 'fx.pair_created';
+
+    /** Phase E3 — a manual quote (or a revision of one) was recorded for a pair and date. */
+    public const FxRateRecorded = 'fx.rate_recorded';
+
+    /** Phase E3 — a frozen reporting conversion (or a revision) was recorded. */
+    public const FxConverted = 'fx.converted';
+
+    /** Phase E3 — the reporting currency setting changed (typed confirmation). */
+    public const FinanceReportingCurrencyChanged = 'finance.reporting_currency_changed';
 }
