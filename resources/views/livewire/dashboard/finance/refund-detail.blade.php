@@ -11,7 +11,7 @@
             <a href="{{ route('dashboard.finance.refunds') }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50">قائمة الاستردادات</a>
             <a href="{{ route('dashboard.finance.payments.show', $payment->id) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50" data-testid="payment-link">الدفعة #{{ $payment->id }}</a>
             @if ($canAudit)
-                <a href="{{ $auditUrl }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50" data-testid="audit-link">سجل التدقيق (read-only)</a>
+                <a href="{{ $auditUrl }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50" data-testid="audit-link" title="payment.refunded and refund.allocated are recorded under the payment subject">سجل التدقيق (read-only) — subject CustomerPayment #{{ $payment->id }}</a>
             @endif
         </div>
     </header>

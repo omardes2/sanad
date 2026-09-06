@@ -57,6 +57,14 @@ class PaymentProbe extends Command
                 'dispute' => 'ok:'.$payments->transition(CustomerPayment::query()->findOrFail((int) $args[0]), CustomerPaymentEventType::Disputed, $args[1], PaymentSource::Manual, 'probe')->latest_event_id,
                 'resolve' => 'ok:'.$payments->transition(CustomerPayment::query()->findOrFail((int) $args[0]), CustomerPaymentEventType::DisputeResolved, $args[1], PaymentSource::Manual, 'probe')->latest_event_id,
                 'claim' => SubmitAttempt::claim('probe', $args[0]) ? 'ok:claimed' : 'duplicate',
+                // The UI path for actions E1 does not key: claim the attempt key (kept on success), then the service.
+                'allocate-claimed' => SubmitAttempt::claim('allocation', $args[0]) ? 'ok:'.$allocations->allocatePayment((int) $args[1], (int) $args[2], $args[3])->id : 'duplicate',
+                'allocate-refund-claimed' => SubmitAttempt::claim('refund_allocation', $args[0]) ? 'ok:'.$allocations->allocateRefund((int) $args[1], (int) $args[2], $args[3])->id : 'duplicate',
+                'release' => (static function (string $scope, string $key): string {
+                    SubmitAttempt::release($scope, $key);
+
+                    return 'ok:released';
+                })($args[0], $args[1]),
                 default => throw new \InvalidArgumentException('Unknown op'),
             };
         } catch (PaymentRuleException $e) {

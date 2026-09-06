@@ -798,3 +798,56 @@ function periodEvent(User $user, string $start = '2026-09-01', string $end = '20
         'to_period_start' => CarbonImmutable::parse($start, 'UTC'), 'to_period_end' => CarbonImmutable::parse($end, 'UTC'), 'effective_at' => now(), 'source' => 'admin', 'actor_ref' => 'console',
     ]);
 }
+
+use App\Models\AuditLog;
+use Symfony\Component\Process\Process;
+
+// ---- PostgreSQL race helpers for the payment probes (E1 / E5.2a) ------------------
+
+function e1Run(array $args): Process
+{
+    $p = new Process(['php', 'artisan', 'sanad:payment-probe', ...$args], base_path());
+    $p->start();
+
+    return $p;
+}
+
+/** @return list<string> */
+function e1Outcomes(array $processes): array
+{
+    $outcomes = [];
+    foreach ($processes as $p) {
+        $p->wait();
+        expect($p->getExitCode())->toBe(0, $p->getOutput().$p->getErrorOutput());
+        $outcomes[] = trim($p->getOutput());
+    }
+
+    return $outcomes;
+}
+
+function e1Cleanup(User $user, ?Plan $plan = null): void
+{
+    $paymentIds = CustomerPayment::query()->where('subscriber_id', $user->id)->pluck('id');
+    $refundIds = CustomerRefund::query()->whereIn('customer_payment_id', $paymentIds)->pluck('id');
+    DB::table('refund_allocations')->whereIn('customer_refund_id', $refundIds)->delete();
+    DB::table('payment_allocations')->whereIn('customer_payment_id', $paymentIds)->delete();
+    DB::table('customer_refunds')->whereIn('id', $refundIds)->delete();
+    DB::table('customer_payment_events')->whereIn('customer_payment_id', $paymentIds)->delete();
+    AuditLog::where('subject_type', (new CustomerPayment)->getMorphClass())->whereIn('subject_id', $paymentIds)->delete();
+    DB::table('customer_payments')->whereIn('id', $paymentIds)->delete();
+    DB::table('subscription_events')->where('subscriber_id', $user->id)->delete();
+    Subscription::query()->where('subscriber_id', $user->id)->delete();
+    $user->delete();
+    $plan?->delete();
+}
+
+function e1PeriodEvent(User $user, Plan $plan): SubscriptionEvent
+{
+    $subscription = Subscription::create(['subscriber_id' => $user->id, 'plan_id' => $plan->id, 'status' => 'active', 'started_at' => now()]);
+
+    return SubscriptionEvent::query()->create([
+        'subscription_id' => $subscription->id, 'subscriber_id' => $user->id, 'event_type' => 'extended', 'from_status' => 'active', 'to_status' => 'active',
+        'to_period_start' => CarbonImmutable::parse('2026-09-01', 'UTC'), 'to_period_end' => CarbonImmutable::parse('2026-10-01', 'UTC'),
+        'effective_at' => now(), 'source' => 'admin', 'actor_ref' => 'console',
+    ]);
+}

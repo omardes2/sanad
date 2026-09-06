@@ -2,12 +2,15 @@
 
 declare(strict_types=1);
 
+use App\Enums\CustomerPaymentEventType;
+use App\Enums\PaymentSource;
 use App\Livewire\Dashboard\Finance\RefundDetail;
 use App\Livewire\Dashboard\Finance\Refunds;
 use App\Models\AuditLog;
 use App\Models\PaymentAllocation;
 use App\Models\RefundAllocation;
 use App\Services\Payments\AllocationService;
+use App\Services\Payments\CustomerPaymentService;
 use App\Support\Audit\AuditActions;
 use App\Support\Rbac\Role;
 use Carbon\CarbonImmutable;
@@ -91,4 +94,47 @@ it('allocates a refund from the detail: only the payment\'s own allocations are 
 
     $page->set('allocationKey', $key)->call('openConfirm', 'allocate')->set('rallocAllocationId', (string) $allocation->id)->set('rallocAmount', '1.00')->call('allocateRefund')->assertHasErrors(['refund_allocation.duplicate']);
     expect(RefundAllocation::count())->toBe(1);
+});
+
+it('audit subject mapping: refund, payment allocation, refund allocation, dispute and resolve are all recorded under CustomerPayment#<payment>; the refund detail link reaches the refund and refund-allocation records', function () {
+    $fx = closableMonth();
+    $finance = userWithRole(Role::Finance);
+    $payment = $fx['usd'];
+    $event = periodEvent($fx['subscriber']);
+    $allocation = app(AllocationService::class)->allocatePayment($payment->id, $event->id, '50.00');
+    $refund = e1Refund($payment, ['amount' => '20.00', 'refundedAt' => CarbonImmutable::parse('2026-08-20', 'UTC')]);
+    $refundAllocation = app(AllocationService::class)->allocateRefund($refund->id, $allocation->id, '20.00');
+    $service = app(CustomerPaymentService::class);
+    $service->transition($payment->fresh(), CustomerPaymentEventType::Disputed, $payment->fresh()->stateToken(), PaymentSource::Gateway, 'chargeback');
+    $service->transition($payment->fresh(), CustomerPaymentEventType::DisputeResolved, $payment->fresh()->stateToken(), PaymentSource::Gateway, 'won');
+
+    // The real mapping: operation → subject_type → subject_id (every E1 write audits the payment row it locked).
+    $rows = AuditLog::query()->whereIn('action', [AuditActions::PaymentRefunded, AuditActions::PaymentAllocated, AuditActions::RefundAllocated, AuditActions::PaymentTransitioned])
+        ->orderBy('id')->get(['action', 'subject_type', 'subject_id', 'metadata']);
+    $mapping = $rows->map(fn ($r) => [$r->action, class_basename($r->subject_type), $r->subject_id])->unique()->values()->all();
+    expect($mapping)->toContain([AuditActions::PaymentRefunded, 'CustomerPayment', $payment->id])
+        ->toContain([AuditActions::PaymentAllocated, 'CustomerPayment', $payment->id])
+        ->toContain([AuditActions::RefundAllocated, 'CustomerPayment', $payment->id])
+        ->toContain([AuditActions::PaymentTransitioned, 'CustomerPayment', $payment->id])
+        ->and(AuditLog::query()->where('subject_type', 'like', '%CustomerRefund%')->count())->toBe(0) // nothing is ever recorded under a refund subject
+        ->and(AuditLog::query()->where('subject_type', 'like', '%Allocation%')->count())->toBe(0);
+
+    // Follow the refund detail's audit link: the refund and the refund-allocation records for THIS refund are reachable there.
+    $detail = $this->actingAs($finance)->get(route('dashboard.finance.refunds.show', $refund->id))->assertOk()->assertSee('subject CustomerPayment #'.$payment->id);
+    preg_match('/data-testid="audit-link"[^>]*href="([^"]+)"|href="([^"]+)"[^>]*data-testid="audit-link"/', $detail->getContent(), $m);
+    $link = html_entity_decode($m[1] ?: $m[2]);
+    expect($link)->toContain('subject_type=CustomerPayment')->toContain('subject_id='.$payment->id);
+
+    $audit = $this->actingAs($finance)->get($link)->assertOk()->getContent();
+    expect($audit)->toContain('payment.refunded')->toContain('refund.allocated')->toContain('payment.transitioned')->toContain('payment.allocated')
+        ->toContain('&quot;id&quot;: '.$refund->id) // the refund id inside the payment.refunded changes
+        ->toContain('&quot;refund_id&quot;: '.$refund->id) // the refund id inside the refund.allocated context
+        ->toContain('&quot;id&quot;: '.$refundAllocation->id)
+        ->toContain('CustomerPayment#'.$payment->id)
+        ->not->toContain($fx['subscriber']->email);
+
+    // The payment detail's link is the same subject and shows the dispute / resolve rows.
+    $paymentDetail = $this->actingAs($finance)->get(route('dashboard.finance.payments.show', $payment->id))->assertOk()->getContent();
+    preg_match('/data-testid="audit-link"[^>]*href="([^"]+)"|href="([^"]+)"[^>]*data-testid="audit-link"/', $paymentDetail, $m);
+    expect(html_entity_decode($m[1] ?: $m[2]))->toBe($link);
 });
