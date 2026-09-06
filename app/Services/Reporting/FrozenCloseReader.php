@@ -8,6 +8,7 @@ use App\Data\Reporting\FrozenCloseDetail;
 use App\Data\Reporting\MonthFigures;
 use App\Enums\CloseInputType;
 use App\Enums\PeriodCloseStatus;
+use App\Models\CostInvoiceAllocation;
 use App\Models\FinancePeriodClose;
 use App\Models\FinancePeriodCloseInput;
 use App\Models\FinancePeriodCloseScope;
@@ -116,7 +117,8 @@ final class FrozenCloseReader
 
     /**
      * A close exactly as frozen: row + scope + input rows grouped by type (+ the
-     * immutable rate_date of every fx_rates row named by an input). Three queries.
+     * immutable rate_date of every fx_rates row named by an input, + the immutable
+     * evidence references of every frozen reconciliation). Four queries at most.
      */
     public function detail(FinancePeriodClose $close): FrozenCloseDetail
     {
@@ -134,6 +136,15 @@ final class FrozenCloseReader
         $rateIds = $rows->pluck('fx_rate_id')->filter()->unique()->values()->all();
         $rateDates = $rateIds === [] ? [] : FxRate::query()->whereIn('id', $rateIds)->get(['id', 'rate_date'])->mapWithKeys(fn (FxRate $r) => [$r->id => $r->rateDate()])->all();
 
-        return new FrozenCloseDetail($close, $scope, $grouped, $rateDates, $scope->current_close_id === $close->id);
+        // Evidence references of the frozen reconciliations: the append-only allocation rows (ids only, one query).
+        $reconciliationIds = array_map(static fn (FinancePeriodCloseInput $r): int => $r->input_id, $grouped[CloseInputType::Reconciliation->value]);
+        $evidence = [];
+        if ($reconciliationIds !== []) {
+            foreach (CostInvoiceAllocation::query()->whereIn('cost_reconciliation_id', $reconciliationIds)->orderBy('id')->get(['cost_reconciliation_id', 'cost_invoice_id', 'cost_invoice_line_id']) as $allocation) {
+                $evidence[$allocation->cost_reconciliation_id][] = 'invoice:#'.$allocation->cost_invoice_id.' line:#'.$allocation->cost_invoice_line_id;
+            }
+        }
+
+        return new FrozenCloseDetail($close, $scope, $grouped, $rateDates, $scope->current_close_id === $close->id, $evidence);
     }
 }

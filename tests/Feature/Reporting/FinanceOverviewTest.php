@@ -50,14 +50,14 @@ it('renders the five bands with the three vocabularies visibly separate and the 
         ->assertSee('data-testid="section-current"', false)->assertSee('data-testid="section-window"', false)->assertSee('data-testid="section-cash"', false)->assertSee('data-testid="section-reconciled"', false)->assertSee('data-testid="section-history"', false)
         ->assertSee('Known Provider Cost')->assertSee('Gross Cash Collected')->assertSee('Reconciled Service Cost')->assertSee('Reconciled Cash Contribution')
         ->assertSee('FEES UNKNOWN / NOT CONVERTED / NOT RECONCILED / NOT AVAILABLE')
-        ->assertSee('NOT AVAILABLE — no Revenue Recognition policy')
+        ->assertSee('Profitability metrics: <strong>NOT AVAILABLE — no Revenue Recognition policy</strong>', false)
         ->assertSee('No total row by design')
         ->assertDontSee('Gross Profit:')->assertDontSee('Margin:')->assertDontSee('Revenue:')->assertDontSee('Accounting Profit')
         ->getContent();
 
-    // The Gross Margin card is a status card only — no amount inside it.
-    $card = substr($html, strpos($html, 'data-testid="gross-margin"'), 1200);
-    expect(preg_match('/\d+\.\d{6}/', $card))->toBe(0);
+    // The former D2 margin card is now a non-financial status card — no amount, no metric name.
+    $card = substr($html, strpos($html, 'data-testid="profitability-status"'), 1200);
+    expect(preg_match('/\d+\.\d{6}/', $card))->toBe(0)->and($card)->not->toContain('Gross Margin')->and($html)->not->toContain('Gross Margin');
 });
 
 it('CASH band: live per native currency, FEES UNKNOWN never 0, reporting totals INCOMPLETE / NOT AVAILABLE while any line is NOT CONVERTED and complete once converted', function () {

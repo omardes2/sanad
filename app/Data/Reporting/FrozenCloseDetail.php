@@ -19,6 +19,7 @@ final readonly class FrozenCloseDetail
     /**
      * @param  array<string, list<FinancePeriodCloseInput>>  $inputs  keyed by input type in display order
      * @param  array<int, string>  $rateDates
+     * @param  array<int, list<string>>  $evidence  reconciliation id → "invoice:#x line:#y" from the append-only cost_invoice_allocations rows (immutable evidence references, never amounts)
      */
     public function __construct(
         public FinancePeriodClose $close,
@@ -26,6 +27,7 @@ final readonly class FrozenCloseDetail
         public array $inputs,
         public array $rateDates,
         public bool $isCurrent,
+        public array $evidence = [],
     ) {}
 
     public function basisLabel(): string

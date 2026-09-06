@@ -18,10 +18,12 @@
     </div>
 
     <section class="mb-6 grid gap-3 md:grid-cols-4" data-testid="identity" dir="ltr">
-        <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Revision</p><p class="text-lg font-bold">{{ $close->revision }}</p></div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Previous close</p><p class="text-lg font-bold">@if ($close->previous_close_id)<a class="text-emerald-700 hover:underline" href="{{ route('dashboard.finance.close.show', $close->previous_close_id) }}">#{{ $close->previous_close_id }}</a>@else —@endif</p></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Month (UTC)</p><p class="text-lg font-bold" data-testid="field-month">{{ $close->month() }}</p></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Status</p><p class="text-lg font-bold" data-testid="field-status">{{ strtoupper($close->status->value) }}</p></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Revision</p><p class="text-lg font-bold" data-testid="field-revision">{{ $close->revision }}</p></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Previous close</p><p class="text-lg font-bold" data-testid="field-previous">@if ($close->previous_close_id)<a class="text-emerald-700 hover:underline" href="{{ route('dashboard.finance.close.show', $close->previous_close_id) }}">#{{ $close->previous_close_id }}</a>@else —@endif</p></div>
         <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Reopened close</p><p class="text-lg font-bold">@if ($close->reopened_close_id)<a class="text-emerald-700 hover:underline" href="{{ route('dashboard.finance.close.show', $close->reopened_close_id) }}">#{{ $close->reopened_close_id }}</a>@else —@endif</p></div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Reporting currency</p><p class="text-lg font-bold">{{ $close->reporting_currency }}</p></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Reporting currency</p><p class="text-lg font-bold" data-testid="field-reporting-currency">{{ $close->reporting_currency }}</p></div>
         <div class="rounded-2xl border border-slate-200 bg-white p-3 md:col-span-2"><p class="text-[11px] text-slate-500">Period (UTC, half-open)</p><p class="font-mono text-sm">{{ $close->period_start->utc()->format('Y-m-d H:i:s') }} → {{ $close->period_end->utc()->format('Y-m-d H:i:s') }}</p></div>
         <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Closed at (UTC)</p><p class="font-mono text-sm">{{ $close->closed_at->utc()->format('Y-m-d H:i:s') }}</p></div>
         <div class="rounded-2xl border border-slate-200 bg-white p-3"><p class="text-[11px] text-slate-500">Actor</p><p class="font-mono text-sm">{{ $close->actor_ref }}</p></div>
@@ -76,7 +78,7 @@
                         <thead class="bg-slate-50 text-slate-500"><tr>
                             <th class="px-2 py-1 text-left">id</th><th class="px-2 py-1 text-right">amount</th><th class="px-2 py-1 text-left">currency</th><th class="px-2 py-1 text-left">status</th>
                             <th class="px-2 py-1 text-right">reporting amount</th><th class="px-2 py-1 text-left">reporting currency</th>
-                            <th class="px-2 py-1 text-left">conversion</th><th class="px-2 py-1 text-left">fx rate id</th><th class="px-2 py-1 text-left">rate date</th><th class="px-2 py-1 text-left">rate snapshot</th><th class="px-2 py-1 text-left">direction</th><th class="px-2 py-1 text-left">refs / flags</th>
+                            <th class="px-2 py-1 text-left">conversion</th><th class="px-2 py-1 text-left">fx rate id</th><th class="px-2 py-1 text-left">rate date</th><th class="px-2 py-1 text-left">rate snapshot</th><th class="px-2 py-1 text-left">direction</th><th class="px-2 py-1 text-left">refs / flags (frozen)</th><th class="px-2 py-1 text-left">evidence ids (immutable allocation rows)</th>
                         </tr></thead>
                         <tbody>
                         @forelse ($rows as $row)
@@ -93,9 +95,10 @@
                                 <td class="px-2 py-1 font-mono">{{ $row->fx_rate_snapshot === null ? '—' : (string) $row->fx_rate_snapshot }}</td>
                                 <td class="px-2 py-1">{{ $row->fx_direction ?? '—' }}</td>
                                 <td class="px-2 py-1 text-slate-600">{{ implode(' · ', (array) $row->flags) }}</td>
+                                <td class="px-2 py-1 font-mono text-slate-600">{{ $type === 'reconciliation' ? implode(' · ', $detail->evidence[$row->input_id] ?? ['— (manual / confirmed zero)']) : '—' }}</td>
                             </tr>
                         @empty
-                            <tr><td colspan="12" class="px-2 py-2 text-center text-slate-400">none</td></tr>
+                            <tr><td colspan="13" class="px-2 py-2 text-center text-slate-400">none</td></tr>
                         @endforelse
                         </tbody>
                     </table>

@@ -45,7 +45,7 @@
             <table class="w-full min-w-[840px] text-right text-sm">
                 <thead class="bg-slate-50 text-xs uppercase text-slate-500">
                     <tr>
-                        <th class="px-4 py-3 font-medium">الوقت</th>
+                        <th class="px-4 py-3 font-medium">الوقت (UTC)</th>
                         <th class="px-4 py-3 font-medium">الإجراء</th>
                         <th class="px-4 py-3 font-medium">الفاعل</th>
                         <th class="px-4 py-3 font-medium">الموضوع</th>

@@ -151,3 +151,42 @@ it('close history page: rows come from the frozen rows, the current close drift 
     expect((string) $v1->fresh()->reconciled_cash_contribution)->toBe('131.000000')->and((string) $v2->fresh()->reconciled_cash_contribution)->toBe('132.000000')
         ->and(FinancePeriodClose::count())->toBe(3);
 });
+
+it('shows every frozen field by name (month UTC, status, revision, previous close, reporting currency, hash, evidence ids) and no names / phones / emails / notes / raw metadata', function () {
+    $fx = closableMonth();
+    $v1 = closeMonth('2026-08', null, 'k1');
+    $this->actingAs(userWithRole(Role::SuperAdmin));
+    $reopen = app(PeriodCloseService::class)->reopen($v1->id, $v1->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
+    $v2 = closeMonth('2026-08', $reopen->id, 'k2');
+
+    $html = $this->actingAs(userWithRole(Role::Finance))->get(route('dashboard.finance.close.show', $v2->id))->assertOk()->getContent();
+    $field = function (string $name) use ($html): string {
+        $start = strpos($html, '>', (int) strpos($html, 'data-testid="field-'.$name.'"')) + 1;
+
+        return trim(strip_tags(substr($html, $start, (int) strpos($html, '</p>', $start) - $start)));
+    };
+
+    expect($field('month'))->toStartWith('2026-08')->and($field('status'))->toStartWith('CLOSED')->and($field('revision'))->toStartWith('2')
+        ->and($field('previous'))->toStartWith('#'.$v1->id)->and($field('reporting-currency'))->toStartWith('USD')
+        ->and(substr($html, (int) strpos($html, 'data-testid="input-hash"'), 200))->toContain('>'.$v2->input_hash.'<')
+        ->and(tableRow($html, 'input-reconciliation-'.$fx['reconciliation']->id))->toContain('invoice:#'.$fx['invoice']->id.' line:#'.$fx['invoice']->lines()->first()->id)
+        ->and(tableRow($html, 'input-reconciliation-'.$fx['communication']->id))->toContain('manual / confirmed zero')
+        ->and($html)->not->toContain($fx['subscriber']->name)->not->toContain($fx['subscriber']->email)->not->toContain('<pre')->not->toContain('metadata')->not->toContain('"changes"')->not->toContain('note');
+});
+
+it('audit link: shown only with audit.view, points at the audit page filtered by subject_type + subject_id, and that page still requires audit.view', function () {
+    closableMonth();
+    $close = closeMonth('2026-08', null, 'k1');
+    $url = route('dashboard.audit', ['subject_type' => 'FinancePeriodCloseScope', 'subject_id' => $close->scope_id]);
+
+    $this->actingAs(userWithRole(Role::Finance))->get(route('dashboard.finance.close.show', $close->id))->assertOk()->assertSee(e($url), false);
+    $this->actingAs(userWithRole(Role::Finance))->get(route('dashboard.finance.close', ['month' => '2026-08']))->assertOk()->assertSee(e($url), false);
+    $this->actingAs(userWithRole(Role::Finance))->get($url)->assertOk()->assertSee('finance.period_closed')->assertSee('FinancePeriodCloseScope#'.$close->scope_id)->assertSee('الوقت (UTC)');
+
+    $viewer = userWithRole(Role::Finance);
+    Spatie\Permission\Models\Role::findByName(Role::Finance->value)->revokePermissionTo('audit.view');
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+    $this->actingAs($viewer->fresh())->get(route('dashboard.finance.close.show', $close->id))->assertOk()->assertDontSee('data-testid="audit-link"', false);
+    $this->actingAs($viewer->fresh())->get($url)->assertForbidden();
+    $this->actingAs(userWithRole(Role::Operations))->get($url)->assertForbidden();
+});

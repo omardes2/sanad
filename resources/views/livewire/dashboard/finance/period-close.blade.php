@@ -80,7 +80,12 @@
     @endif
 
     <section class="mt-6" data-testid="section-history">
-        <h2 class="text-base font-bold text-slate-800">سجل الإقفال — {{ $month }}</h2>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-base font-bold text-slate-800">سجل الإقفال — {{ $month }}</h2>
+            @if ($scope !== null && $canAudit)
+                <a href="{{ route('dashboard.audit', ['subject_type' => 'FinancePeriodCloseScope', 'subject_id' => $scope->id]) }}" class="text-xs text-emerald-700 hover:underline" data-testid="audit-link">سجل التدقيق (read-only) — scope #{{ $scope->id }}</a>
+            @endif
+        </div>
         <p class="mb-2 text-xs text-slate-500">كل صف يُقرأ من الصفوف المجمَّدة فقط (<span dir="ltr">FROZEN CLOSE REVISION n</span>)؛ لا يُعاد تقييم أي إقفال تاريخي عند العرض. الانحراف للإقفال الحالي يُقارن بالـhash الحي المعروض أعلاه؛ للمراجعات الأقدم اضغط <span dir="ltr">CHECK CURRENT DRIFT</span>. القيم المجمَّدة لا تتغير في الحالتين.</p>
         <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
             <table class="min-w-full text-sm" dir="ltr">

@@ -154,6 +154,7 @@ class PeriodClose extends Component
             'reportingCurrency' => $reporting->current(),
             'canClose' => (bool) $user->can(Permission::FinanceClosePeriod->value),
             'canExport' => (bool) $user->can(Permission::FinanceExport->value),
+            'canAudit' => (bool) $user->can(Permission::AuditView->value),
         ]);
     }
 

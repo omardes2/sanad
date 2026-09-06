@@ -8,6 +8,7 @@ use App\Data\Reporting\MonthFigures;
 use App\Models\FinancePeriodCloseScope;
 use App\Services\Close\ClosePreflight;
 use App\Services\Fx\ReportingCurrencyService;
+use App\Services\Reconciliation\ReconciledCostQuery;
 use Carbon\CarbonImmutable;
 
 /**
@@ -16,14 +17,16 @@ use Carbon\CarbonImmutable;
  * currency only, each with exactly one basis —
  *  - FROZEN CLOSE REVISION n: the scope's current close (finance_period_closes
  *    row; nothing live touches it);
- *  - LIVE / CURRENT: no current close ⇒ the live preflight, blockers included.
+ *  - LIVE / CURRENT: no current close ⇒ the live preflight, blockers included,
+ *    plus the current reconciliation per scope (ReconciledCostQuery: coverage,
+ *    variance-or-UNKNOWN, LEDGER MOVED / EVIDENCE flags).
  * Rows are a series, never a total: months, reporting currencies and
  * revisions are never added together. Closes in another reporting currency
  * are not part of this band (they stay in the close history).
  */
 final class ReconciledMonthSeries
 {
-    public function __construct(private readonly FrozenCloseReader $reader, private readonly ClosePreflight $preflight, private readonly ReportingCurrencyService $reporting) {}
+    public function __construct(private readonly FrozenCloseReader $reader, private readonly ClosePreflight $preflight, private readonly ReportingCurrencyService $reporting, private readonly ReconciledCostQuery $costs) {}
 
     /**
      * @return list<MonthFigures>
@@ -51,6 +54,7 @@ final class ReconciledMonthSeries
                 $month, $target, MonthFigures::LIVE, $scope === null ? 'never closed' : $scope->state, null, null, $evaluation->inputHash,
                 $evaluation->metrics, $evaluation->blocking(),
                 array_values(array_map(static fn (array $c): string => $c['code'].' ('.$c['detail'].')', array_filter($evaluation->conditions, static fn (array $c): bool => ! $c['blocking']))),
+                $this->costs->summarise($month, $month), // Calculated vs Reconciled per scope — the E2 read service, live months only
             );
         }
 

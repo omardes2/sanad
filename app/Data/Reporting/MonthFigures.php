@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Data\Reporting;
 
+use App\Data\Reconciliation\ScopeSummary;
+
 /**
  * One calendar month UTC in the Reconciled band of the finance overview, in
  * ONE reporting currency (the current one). Exactly one basis:
@@ -23,6 +25,7 @@ final readonly class MonthFigures
      * @param  array<string, ?string>  $figures  the seven cash-basis figures
      * @param  list<string>  $blocking  blocking condition labels (live only; a frozen close has none)
      * @param  list<string>  $informational
+     * @param  list<ScopeSummary>  $scopes  LIVE months only: the current reconciliation per scope (Calculated vs Reconciled coverage / variance status, flags) from ReconciledCostQuery; a frozen month keeps its frozen conditions instead
      */
     public function __construct(
         public string $month,
@@ -35,7 +38,21 @@ final readonly class MonthFigures
         public array $figures,
         public array $blocking,
         public array $informational,
+        public array $scopes = [],
     ) {}
+
+    /** The E2 flags of the live scopes (LEDGER MOVED SINCE RECONCILIATION, EVIDENCE VOIDED / SUPERSEDED …) as warnings. */
+    public function warnings(): array
+    {
+        $out = [];
+        foreach ($this->scopes as $scope) {
+            foreach ($scope->flags as $flag) {
+                $out[] = $flag.' · '.$scope->component.':'.$scope->counterpartyKey.' (reconciliation:'.$scope->reconciliationId.')';
+            }
+        }
+
+        return $out;
+    }
 
     public function isFrozen(): bool
     {
