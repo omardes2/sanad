@@ -726,3 +726,61 @@ function fxRule(callable $fn): string
 
     return 'none';
 }
+
+// ---- Period close (Phase E4) ---------------------------------------------------------
+
+use App\Exceptions\Close\CloseBlockedException;
+use App\Exceptions\Close\CloseRuleException;
+use App\Models\FinancePeriodClose;
+use App\Services\Close\PeriodCloseService;
+
+/**
+ * A fully closable August 2026 in reporting currency USD:
+ *  payments: 100.00 USD (fee 3.00) native; 365.00 ILS (fee 3.65) converted at 3.65 ⇒ 100.00 (fee 1.00)
+ *  refund:   10.00 USD native
+ *  ledger:   provider groq 50.000000 USD priced ⇒ expected provider = groq
+ *  cost:     groq reconciliation 60.000000 USD (native) + adjustment −5.000000; communication and external CONFIRMED ZERO
+ *  ⇒ Gross 200.00 · Refunds 10.00 · Net 190.00 · Fees 4.00 · Net after fees 186.00 · Cost 55.000000 · Contribution 131.000000
+ *
+ * @return array<string, mixed>
+ */
+function closableMonth(): array
+{
+    config(['billing.cost_currency' => 'USD']);
+    $subscriber = billingSubscriber();
+    $usd = e1Payment($subscriber, ['amount' => '100.00', 'currency' => 'USD', 'receivedAt' => CarbonImmutable::parse('2026-08-10 09:00:00', 'UTC'), 'gatewayFeeAmount' => '3.00', 'feeCurrency' => 'USD']);
+    $ils = e1Payment($subscriber, ['amount' => '365.00', 'currency' => 'ILS', 'receivedAt' => CarbonImmutable::parse('2026-08-10 10:00:00', 'UTC'), 'gatewayFeeAmount' => '3.65', 'feeCurrency' => 'ILS']);
+    $refund = e1Refund($usd, ['amount' => '10.00', 'refundedAt' => CarbonImmutable::parse('2026-08-12 10:00:00', 'UTC')]);
+    $rate = fxRate(['rate' => '3.65', 'rateDate' => '2026-08-10']);
+    $conversion = fxConvert('customer_payment', $ils->id, 'USD', $rate->id);
+
+    financeRow(['provider' => 'groq', 'provider_cost' => '50.000000', 'total_cost' => '50.000000', 'occurred_at' => CarbonImmutable::parse('2026-08-15 10:00:00', 'UTC')]);
+    $invoice = e2ConfirmedInvoice(['service' => '60.000000']);
+    $reconciliation = e2Reconcile([[$invoice->lines()->first()->id, '60.000000']]);
+    $adjustment = app(CostReconciliationService::class)->adjust($reconciliation->id, '-5.000000', 'credit_note', 'cn:1');
+    $zero = fn (string $component, string $cp) => e2Reconcile([], ['component' => $component, 'counterpartyKey' => $cp, 'source' => 'confirmed_zero', 'reasonCode' => 'none', 'evidenceRef' => 'att:'.$component, 'typedConfirmation' => 'ZERO']);
+    $communication = $zero('communication', 'meta-whatsapp');
+    $external = $zero('external', 'none-declared');
+
+    return compact('subscriber', 'usd', 'ils', 'refund', 'rate', 'conversion', 'invoice', 'reconciliation', 'adjustment', 'communication', 'external');
+}
+
+/** Close a month as the console actor (super_admin semantics in tests come from acting users where relevant). */
+function closeMonth(string $month = '2026-08', ?int $expected = null, ?string $key = null): FinancePeriodClose
+{
+    return app(PeriodCloseService::class)->close($month, $expected, $key ?? 'close:'.str()->random(10), 'CLOSE '.$month);
+}
+
+/** The rule name an E4 service refuses with, "blocked:<codes>" for a blocked close, or "none". */
+function closeRule(callable $fn): string
+{
+    try {
+        $fn();
+    } catch (CloseRuleException $e) {
+        return $e->rule;
+    } catch (CloseBlockedException $e) {
+        return 'blocked:'.implode('|', array_map(static fn (string $c): string => explode(' ', $c)[0], $e->conditions));
+    }
+
+    return 'none';
+}

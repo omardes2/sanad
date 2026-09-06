@@ -166,10 +166,36 @@ scope projection بدل `is_current` (`cost_reconciliation_scopes` = هدف ال
 ### ترتيب النشر لـE3 (بعد الدمج وبموافقة صريحة)
 `php artisan migrate --force`. لا أوامر أخرى؛ لا تحويل تاريخي آلي.
 
-## 7) E4–E5 (مخطَّطة، لا تبدأ قبل الاعتماد)
+## 7) E4 — Period Close & Reconciled Cash Contribution (منفَّذ)
 
-- **E4**: `finance_period_closes` append-only بشروط الإقفال وإعادة الفتح بسجل جديد؛ مقاييس Cash Collected / Refunds / Gateway Fees / Net Cash After Gateway Fees / Reconciled Service Cost / Reconciled Cash Contribution؛ Gross Profit/Margin `NOT AVAILABLE`؛ RBAC `finance.close_period` (super_admin).
+### القرارات المعتمدة
+الرسوم المجهولة **مانع صلب** (`FEES_INCOMPLETE`؛ `Net Cash After Gateway Fees` و`Reconciled Cash Contribution` = NOT AVAILABLE؛ لا صفر) · اكتمال provider مشتق من مفاتيح المزوّدين ذات النشاط في دفتر الشهر (لا سجل يدوي)؛ communication/external تتطلب تسوية حالية أو CONFIRMED ZERO صريحًا (NO PRODUCER ليس اكتمالًا) · رسوم البوابة تتبع تحويل الدفعة نفسه (نفس `fx_rate_id`/snapshot/direction، بلا صف تحويل مستقل؛ الدفعة غير المحوَّلة ⇒ الرسوم `FX_INCOMPLETE`) · التخزين: `inputs_snapshot` JSON قانوني هو مصدر `input_hash`، و`finance_period_close_inputs` projection immutable من اللقطة نفسها في المعاملة نفسها · شهر UTC · الإقفال append-only بمراجعات · إعادة الفتح لا تعدّل القديم · تغيير عملة التقرير لا يعيد حساب إقفال قديم · البيانات الحية تبقى قابلة للتغيير بقواعد وحداتها واللقطة ثابتة · `DRIFT SINCE CLOSE` معلوماتي · `finance.close_period` = super_admin فقط؛ finance قراءة · تأكيد مكتوب `CLOSE YYYY-MM` / `REOPEN YYYY-MM` · `Reconciled Cash Contribution` لا يُسمّى Gross Profit/Margin/Revenue/Accounting Profit · لا Revenue Recognition · لا إعادة تحويل تاريخي · لا نشر.
+
+### الجداول
+`finance_period_close_scopes` · `finance_period_closes` · `finance_period_close_inputs` — التفاصيل في [DATABASE.md](DATABASE.md). ثلاثة migrations (`2026_09_06_001201…001203`)؛ حدّ rollback في `UsageLedgerMigrationTest` = **36**.
+
+### الخدمات (`App\Services\Close`)
+- `ClosePreflight::evaluate(month, ?reportingCurrency)` — قراءة فقط: الدفعات الناجحة بـ`received_at` والاستردادات بـ`refunded_at` (NATIVE / CONVERTED من مؤشر `fx_conversion_scopes` / NOT CONVERTED)؛ الرسوم بتحويل الدفعة نفسه؛ `FEES_INCOMPLETE`، `FX_INCOMPLETE_CASH`، `UNRESOLVED_DISPUTES` (`current_status = disputed`)؛ التسويات الحالية للشهر: `RECONCILIATION_MISSING (provider:<key>)` من مفاتيح الدفتر، `RECONCILIATION_MISSING (communication|external …)`، `LEDGER_MOVED`، `EVIDENCE_STALE`، `FX_INCOMPLETE_COST` (Base والتعديلات؛ `FxSubjectType::CostAdjustment` بتاريخ `period_end`)، `PERIOD_NOT_ENDED`؛ معلوماتي: `CONFIRMED_ZERO`, `CALCULATED_COVERAGE_PARTIAL`. المقاييس السبعة NULL ما لم تكتمل مدخلاتها؛ `Reconciled Cash Contribution = Net Cash After Gateway Fees − Reconciled Service Cost`. اللقطة القانونية (ترتيب مفاتيح ثابت) و`input_hash = sha256(JSON)`.
+- `PeriodCloseService::close(month, expectedCurrentCloseId, idempotencyKey, 'CLOSE YYYY-MM')` — `finance.close_period` → replay بنفس المفتاح يرجع الإقفال نفسه → find-or-create للنطاق → `FOR UPDATE` → المؤشر وإلا `StaleCloseException` → الحالة open وإلا `ALREADY_CLOSED` → إعادة التقييم تحت القفل ورفض أي شرط مانع (`CloseBlockedException`) → إدراج الإقفال (`revision`, `previous_close_id`) → `projectInputs` من اللقطة نفسها → المؤشر `closed` → audit `finance.period_closed`. `reopen(closeId, expected, reason, evidence, 'REOPEN YYYY-MM')` — سجل `reopened` بـ`reopened_close_id` → الحالة `open` → audit `finance.period_reopened`؛ القديم لا يُمسّ. `drift(close)` يقارن hash التقييم الحي بالمجمَّد.
+- E2 refinement: `LedgerSnapshotter` لمكوّني communication/external يحصر الصفوف بما يحمل تكلفة ذلك المكوّن (صفوف AI لا تحرّك snapshot CONFIRMED ZERO).
+- Probe للاختبار فقط: `sanad:close-probe {close|reopen}`.
+
+### RBAC والصفحة
+`finance.close_period` لـsuper_admin فقط (finance لا يملكه؛ operations/support/legacy 403). الصفحة `/dashboard/finance/close` (`Livewire\Dashboard\Finance\PeriodClose`) بـ`finance.view` للقراءة؛ الإجراءان يعيدان فحص `finance.close_period` والخدمة تفحص مجددًا.
+
+### الاختبارات
+- `ClosePreflightTest`: الأرقام الصريحة (200 / 10 / 190 / 4 / 186 / 55 / 131)، الرسوم المجهولة، FX النقد (والرسوم تتبع)، النزاع، اكتمال المكوّنات من الدفتر وNO PRODUCER، ledger moved، evidence stale، FX التكلفة (Base + تعديل)، الفترة غير المنتهية، تبديل عملة التقرير.
+- `PeriodCloseTest`: الإقفال الكامل (المقاييس، اللقطة، hash من الـJSON القانوني، صفوف المدخلات ↔ اللقطة واحدًا لواحد، رسوم ILS بنفس تحويل الدفعة)، immutability للإقفال والصفوف والنطاق وفحص المصدر، blocked/typed/stale/ALREADY_CLOSED/idempotency، reopen (سبب/دليل/typed/stale، القديم وصفوفه ثابتة) ومراجعة 2 بـ`previous_close_id`، drift وتغيير عملة التقرير بلا إعادة حساب، RBAC داخل الخدمة، atomic بلا صفوف وبلا كتابة على أي جدول مالي آخر (wire-level).
+- `PeriodClosePageTest`: RBAC (finance عرض فقط؛ super_admin يقفل؛ سحب الدور)، الدورة الكاملة من الصفحة، الشهر المحظور.
+- `PostgresCloseConcurrencyTest` (عمليات حقيقية): 6 إقفالات ⇒ 1/5 مع مجموعة مدخلات واحدة وaudit واحد، سباق idempotency ⇒ إقفال واحد، 6 إعادات فتح ⇒ 1/5 والقديم ثابت. CI يشغّله مع حارس "لا skip".
+- `UsageLedgerMigrationTest`: الحدّ **36**.
+
+### ترتيب النشر لـE4 (بعد الدمج وبموافقة صريحة)
+`php artisan migrate --force`. لا أوامر أخرى.
+
+## 8) E5 (مخطَّطة، لا تبدأ قبل الاعتماد)
+
 - **E5**: صفحات Payments / Invoices & Reconciliation / FX / Period Close، CSV بعقد `section` + أعلام reconciled، RBAC النهائي.
 
-## 8) مؤجَّل لما بعد E
+## 9) مؤجَّل لما بعد E
 بوابة دفع حية وشحن فعلي، فوترة العملاء الصادرة، الضرائب، dunning، churn/cohorts/LTV، rollups مادية، تسجيل أحداث WhatsApp في الدفتر، جلب فواتير المزوّدين آليًا، سياسة Revenue Recognition.

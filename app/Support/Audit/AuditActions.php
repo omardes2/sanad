@@ -116,4 +116,10 @@ final class AuditActions
 
     /** Phase E3 — the reporting currency setting changed (typed confirmation). */
     public const FinanceReportingCurrencyChanged = 'finance.reporting_currency_changed';
+
+    /** Phase E4 — a calendar month was closed (frozen figures + canonical inputs hash). */
+    public const FinancePeriodClosed = 'finance.period_closed';
+
+    /** Phase E4 — a closed month was reopened by a new record (the old close untouched). */
+    public const FinancePeriodReopened = 'finance.period_reopened';
 }

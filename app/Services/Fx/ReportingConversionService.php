@@ -39,7 +39,7 @@ final class ReportingConversionService
     public function convert(ReportingConversionInput $input): FxConversion
     {
         FinanceAuthorization::assertCan(Permission::FinanceFxManage);
-        $type = FxSubjectType::tryFrom(trim($input->subjectType)) ?? throw FxRuleException::of('subject_type', 'نوع الموضوع يجب أن يكون customer_payment أو customer_refund أو cost_reconciliation.');
+        $type = FxSubjectType::tryFrom(trim($input->subjectType)) ?? throw FxRuleException::of('subject_type', 'نوع الموضوع يجب أن يكون customer_payment أو customer_refund أو cost_reconciliation أو cost_adjustment.');
         $target = FxPairBook::currency($input->targetCurrency, 'target_currency');
         $reason = FxRateBook::ref($input->reasonCode, 32, 'reason_code');
 
@@ -52,7 +52,7 @@ final class ReportingConversionService
 
         $sourceCurrency = (string) $subject->getAttribute('currency');
         $sourceAmount = FxMath::formatAtScale((string) $subject->getAttribute($type->amountField()), $type->scale());
-        $subjectDate = CarbonImmutable::instance($subject->getAttribute($type->policyDateField()))->utc();
+        $subjectDate = $type->policyDate($subject);
 
         if ($sourceCurrency === $target) {
             throw FxRuleException::of('native', "الموضوع بعملة التقرير نفسها ({$target}): يُعرض NATIVE بلا تحويل ولا سعر.");

@@ -165,6 +165,15 @@
 ### `cost_invoice_allocations` (E3 additive)
 أعمدة جديدة: `source_amount`/`source_currency` (الحصة بعملة السطر؛ الـcap يُحسب عليها) و`fx_rate_id?`/`fx_rate_snapshot?`/`fx_direction?`/`fx_rate_date?` (NULL = NATIVE؛ قيد CHECK على PostgreSQL يربطها بعملة مختلفة). `amount` يبقى بعملة نطاق التسوية.
 
+### `finance_period_close_scopes` (E4، projection)
+صف لكل (`period_start` = أول الشهر UTC, `reporting_currency`) فريد: `state` (`open|closed`) · `current_close_id?` · `version` · `updated_by_ref`؛ هدف `FOR UPDATE` للإقفال وإعادة الفتح؛ هويته ثابتة ولا يُحذف.
+
+### `finance_period_closes` (E4، append-only)
+`scope_id` (**restrictOnDelete**) · النطاق · `status` (`closed|reopened`) · `revision` · `previous_close_id?` (سلسلة المراجعات) · `reopened_close_id?` · `idempotency_key` فريد · المقاييس السبعة decimal(20,6) nullable (NULL = NOT AVAILABLE): `gross_cash_collected`, `refunds`, `net_cash`, `gateway_fees`, `net_cash_after_gateway_fees`, `reconciled_service_cost`, `reconciled_cash_contribution` · `conditions` json · `inputs_snapshot` json (اللقطة القانونية) · `input_hash` sha256 من الـJSON القانوني فقط · `typed_confirmation` · `reason_code?`/`evidence_ref?` (إلزاميان لـreopened بقيد CHECK) · `closed_at(6)` · `actor_ref`. لا update ولا delete. `Reconciled Cash Contribution` مقياس داخلي على أساس النقد — ليس Gross Profit ولا Margin ولا Revenue.
+
+### `finance_period_close_inputs` (E4، append-only projection)
+صف لكل مدخل من اللقطة القانونية نفسها داخل معاملة الإقفال: `close_id` (**restrictOnDelete**) · `input_type` (`payment|refund|gateway_fee|reconciliation|adjustment`) · `input_id` · `amount` + `currency` + `scale` · `reporting_amount?` + `reporting_currency` · `status` (`NATIVE|CONVERTED|NOT CONVERTED|FEES UNKNOWN`) · `fx_conversion_id?` · `fx_rate_id?` · `fx_rate_snapshot?` · `fx_direction?` · `flags` json. فريد `(close_id, input_type, input_id)`. ليس مصدر حقيقة مستقلًا؛ لا يُحدَّث ولا يُحذف.
+
 ### `audit_logs`
 سجل تدقيق **append-only**.
 - `user_id?` → `users` (**nullOnDelete**)

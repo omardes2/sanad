@@ -20,6 +20,7 @@ use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Finance;
 use App\Livewire\Dashboard\Finance\Fx as FinanceFx;
 use App\Livewire\Dashboard\Finance\Payments as FinancePayments;
+use App\Livewire\Dashboard\Finance\PeriodClose as FinancePeriodClose;
 use App\Livewire\Dashboard\Finance\Reconciliation as FinanceReconciliation;
 use App\Livewire\Dashboard\Messages;
 use App\Livewire\Dashboard\Overview;
@@ -105,6 +106,8 @@ Route::middleware(['auth', 'admin'])
         Route::get('/finance/reconciliation', FinanceReconciliation::class)->middleware('permission:finance.reconcile')->name('dashboard.finance.reconciliation');
         // Phase E3 — manual FX quotes, frozen reporting conversions, reporting currency (finance.fx.manage).
         Route::get('/finance/fx', FinanceFx::class)->middleware('permission:finance.fx.manage')->name('dashboard.finance.fx');
+        // Phase E4 — period close: finance.view reads preflight/history; close/reopen re-check finance.close_period (super_admin only).
+        Route::get('/finance/close', FinancePeriodClose::class)->middleware('permission:finance.view')->name('dashboard.finance.close');
     });
 
 // Local chat simulator — 404 outside local/testing (see EnsureDevEnvironment).

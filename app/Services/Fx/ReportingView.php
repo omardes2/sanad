@@ -103,7 +103,7 @@ final class ReportingView
         foreach ($subjects as $subject) {
             $currency = (string) $subject->getAttribute('currency');
             $amount = FxMath::formatAtScale((string) $subject->getAttribute($type->amountField()), $type->scale());
-            $date = CarbonImmutable::instance($subject->getAttribute($type->policyDateField()))->utc()->format('Y-m-d');
+            $date = $type->policyDate($subject)->format('Y-m-d');
 
             if ($currency === $target) {
                 $out[] = new ReportingLine($type->value, $subject->getKey(), $date, $amount, $currency, 'NATIVE', $amount, null, null, null, null, null);

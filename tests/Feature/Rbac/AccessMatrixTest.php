@@ -167,3 +167,14 @@ it('grants finance.fx.manage (Phase E3) to super_admin and finance only', functi
     rbacSync();
     expect(User::factory()->create(['is_admin' => true])->can('finance.fx.manage'))->toBeFalse();
 });
+
+it('grants finance.close_period (Phase E4) to super_admin only — finance can view but never close or reopen', function () {
+    expect(userWithRole(Role::SuperAdmin)->can('finance.close_period'))->toBeTrue()
+        ->and(userWithRole(Role::Finance)->can('finance.close_period'))->toBeFalse()
+        ->and(userWithRole(Role::Finance)->can('finance.view'))->toBeTrue()
+        ->and(userWithRole(Role::Operations)->can('finance.close_period'))->toBeFalse()
+        ->and(userWithRole(Role::Support)->can('finance.close_period'))->toBeFalse();
+
+    rbacSync();
+    expect(User::factory()->create(['is_admin' => true])->can('finance.close_period'))->toBeFalse();
+});
