@@ -89,4 +89,19 @@ final class AuditActions
 
     /** A refund was attributed to a payment allocation. */
     public const RefundAllocated = 'refund.allocated';
+
+    /** Phase E2 — a supplier invoice (evidence) was recorded as a draft. */
+    public const CostInvoiceRecorded = 'cost_invoice.recorded';
+
+    /** Phase E2 — a signed line was added to a draft invoice. */
+    public const CostInvoiceLineAdded = 'cost_invoice.line_added';
+
+    /** Phase E2 — the invoice lifecycle moved (confirmed / voided / superseded). */
+    public const CostInvoiceTransitioned = 'cost_invoice.transitioned';
+
+    /** Phase E2 — a cost reconciliation became the scope's current one. */
+    public const CostReconciled = 'cost.reconciled';
+
+    /** Phase E2 — a signed adjustment was appended to the current reconciliation. */
+    public const CostAdjusted = 'cost.adjusted';
 }

@@ -552,3 +552,112 @@ function e1Refund(CustomerPayment $payment, array $overrides = []): CustomerRefu
         'reasonCode' => 'test',
     ], $overrides)));
 }
+
+// ---- Cost invoices & reconciliation (Phase E2) ------------------------------------
+
+use App\Data\Reconciliation\CostInvoiceInput;
+use App\Data\Reconciliation\EvidenceAllocation;
+use App\Data\Reconciliation\InvoiceLineInput;
+use App\Data\Reconciliation\ReconciliationInput;
+use App\Exceptions\Reconciliation\ReconciliationRuleException;
+use App\Models\CostInvoice;
+use App\Models\CostInvoiceLine;
+use App\Models\CostReconciliation;
+use App\Services\Reconciliation\CostInvoiceService;
+use App\Services\Reconciliation\CostReconciliationService;
+use App\Support\Reconciliation\ReconciliationRules;
+
+/** The AI provider row a provider-component invoice must name (created once per test). */
+function e2Provider(string $key = 'groq'): AiProvider
+{
+    return AiProvider::query()->where('key', $key)->first() ?? AiProvider::factory()->create(['key' => $key, 'driver' => $key, 'priority' => 100]);
+}
+
+/**
+ * Record a DRAFT invoice through the service. Defaults: provider/groq, 100 USD, covering August 2026.
+ *
+ * @param  array<string, mixed>  $overrides  CostInvoiceInput constructor arguments
+ */
+function e2Invoice(array $overrides = []): CostInvoice
+{
+    if (($overrides['component'] ?? 'provider') === 'provider' && in_array($overrides['counterpartyKey'] ?? 'groq', ['groq', 'openai'], true)) {
+        e2Provider($overrides['counterpartyKey'] ?? 'groq'); // only the known catalog keys are auto-created
+    }
+
+    return app(CostInvoiceService::class)->recordDraft(new CostInvoiceInput(...array_merge([
+        'component' => 'provider',
+        'counterpartyKey' => 'groq',
+        'idempotencyKey' => 'inv:'.str()->random(12),
+        'issuedAt' => CarbonImmutable::parse('2026-09-02', 'UTC'),
+        'periodStart' => CarbonImmutable::parse('2026-08-01', 'UTC'),
+        'periodEnd' => CarbonImmutable::parse('2026-09-01', 'UTC'),
+        'currency' => 'USD',
+        'totalAmount' => '100.000000',
+    ], $overrides)));
+}
+
+/**
+ * Add a signed line. Defaults: next line number, service, 100.
+ *
+ * @param  array<string, mixed>  $overrides  InvoiceLineInput constructor arguments
+ */
+function e2Line(CostInvoice $invoice, array $overrides = []): CostInvoiceLine
+{
+    $next = (int) CostInvoiceLine::query()->where('cost_invoice_id', $invoice->id)->max('line_no') + 1;
+
+    return app(CostInvoiceService::class)->addLine(new InvoiceLineInput(...array_merge([
+        'costInvoiceId' => $invoice->id,
+        'lineNo' => $next,
+        'kind' => 'service',
+        'descriptionCode' => 'api_usage',
+        'amount' => '100.000000',
+    ], $overrides)));
+}
+
+/** A CONFIRMED invoice with the given signed lines (kind => amount pairs), total = Σ lines. */
+function e2ConfirmedInvoice(array $lines = ['service' => '100.000000'], array $overrides = []): CostInvoice
+{
+    $total = 0;
+    foreach ($lines as $amount) {
+        $total += CostReconciliationService::scaledOf($amount);
+    }
+    $invoice = e2Invoice($overrides + ['totalAmount' => ReconciliationRules::format($total)]);
+    $n = 1;
+    foreach ($lines as $kind => $amount) {
+        e2Line($invoice, ['lineNo' => $n++, 'kind' => is_string($kind) ? preg_replace('/\d+$/', '', $kind) : 'service', 'amount' => $amount]);
+    }
+
+    return app(CostInvoiceService::class)->confirm($invoice->id, $invoice->fresh()->stateToken());
+}
+
+/**
+ * Reconcile a scope from invoice evidence. Defaults: provider/groq, 2026-08, USD, no previous reconciliation.
+ *
+ * @param  list<array{0: int, 1: string}>  $allocations  [lineId, amount]
+ * @param  array<string, mixed>  $overrides  ReconciliationInput constructor arguments
+ */
+function e2Reconcile(array $allocations, array $overrides = []): CostReconciliation
+{
+    return app(CostReconciliationService::class)->reconcile(new ReconciliationInput(...array_merge([
+        'component' => 'provider',
+        'counterpartyKey' => 'groq',
+        'month' => '2026-08',
+        'currency' => 'USD',
+        'expectedCurrentReconciliationId' => null,
+        'source' => 'invoice',
+        'allocations' => array_map(static fn (array $a) => new EvidenceAllocation($a[0], $a[1]), $allocations),
+        'reasonCode' => 'monthly',
+    ], $overrides)));
+}
+
+/** The rule name an E2 service refuses with, or "none". */
+function e2Rule(callable $fn): string
+{
+    try {
+        $fn();
+    } catch (ReconciliationRuleException $e) {
+        return $e->rule;
+    }
+
+    return 'none';
+}

@@ -52,6 +52,8 @@ enum Permission: string
     /** Record manual payments / refunds and allocate them (super_admin + finance). Write-side only; finance.view never grants it. */
     case FinancePaymentsManage = 'finance.payments.manage';
 
+    case FinanceReconcile = 'finance.reconcile';
+
     case PlansManage = 'plans.manage';
     case SubscribersView = 'subscribers.view';
     case SubscribersManage = 'subscribers.manage';
@@ -83,6 +85,7 @@ enum Permission: string
             self::FinanceView => 'عرض المالية (محسوبة)',
             self::FinanceExport => 'تصدير المالية (CSV)',
             self::FinancePaymentsManage => 'تسجيل المدفوعات والاستردادات وتخصيصها',
+            self::FinanceReconcile => 'فواتير المزوّدين وتسوية التكلفة',
             self::PlansManage => 'إدارة الباقات',
             self::SubscribersView => 'عرض المشتركين',
             self::SubscribersManage => 'إدارة المشتركين',

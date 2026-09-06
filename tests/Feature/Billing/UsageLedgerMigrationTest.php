@@ -16,7 +16,9 @@ uses(RefreshDatabase::class);
  * columns back-filled by the migration itself (no separate command).
  */
 it('back-fills derived ledger columns for rows that pre-date the ledger and stays reversible', function () {
-    // Undo the five E1 migrations (refund_allocations, payment_allocations,
+    // Undo the seven E2 migrations (cost_adjustments, cost_invoice_allocations,
+    // cost_reconciliations, cost_reconciliation_scopes, cost_invoice_lines,
+    // cost_invoice_events, cost_invoices), the five E1 migrations (refund_allocations, payment_allocations,
     // customer_refunds, customer_payment_events, customer_payments), the
     // two E0 migrations (plan_price_versions, subscription_events), the
     // two D1 migrations (finance_mrr_snapshots, finance indexes), the
@@ -24,9 +26,16 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
     // migration (app_settings), the two C0 migrations (audit context, permission
     // tables), the four B2 migrations (pricing refs, model_prices, ai_models,
     // ai_providers) and the two B1 migrations (usage_charges, ledger).
-    Artisan::call('migrate:rollback', ['--step' => 20, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 27, '--force' => true]);
 
-    expect(Schema::hasTable('refund_allocations'))->toBeFalse()
+    expect(Schema::hasTable('cost_adjustments'))->toBeFalse()
+        ->and(Schema::hasTable('cost_invoice_allocations'))->toBeFalse()
+        ->and(Schema::hasTable('cost_reconciliations'))->toBeFalse()
+        ->and(Schema::hasTable('cost_reconciliation_scopes'))->toBeFalse()
+        ->and(Schema::hasTable('cost_invoice_lines'))->toBeFalse()
+        ->and(Schema::hasTable('cost_invoice_events'))->toBeFalse()
+        ->and(Schema::hasTable('cost_invoices'))->toBeFalse()
+        ->and(Schema::hasTable('refund_allocations'))->toBeFalse()
         ->and(Schema::hasTable('payment_allocations'))->toBeFalse()
         ->and(Schema::hasTable('customer_refunds'))->toBeFalse()
         ->and(Schema::hasTable('customer_payment_events'))->toBeFalse()
@@ -99,6 +108,13 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
         ->and(Schema::hasTable('customer_refunds'))->toBeTrue()
         ->and(Schema::hasTable('payment_allocations'))->toBeTrue()
         ->and(Schema::hasTable('refund_allocations'))->toBeTrue()
+        ->and(Schema::hasTable('cost_invoices'))->toBeTrue()
+        ->and(Schema::hasTable('cost_invoice_events'))->toBeTrue()
+        ->and(Schema::hasTable('cost_invoice_lines'))->toBeTrue()
+        ->and(Schema::hasTable('cost_reconciliation_scopes'))->toBeTrue()
+        ->and(Schema::hasTable('cost_reconciliations'))->toBeTrue()
+        ->and(Schema::hasTable('cost_invoice_allocations'))->toBeTrue()
+        ->and(Schema::hasTable('cost_adjustments'))->toBeTrue()
         ->and(Schema::hasIndex('usage_events', 'usage_events_occurred_idx'))->toBeTrue()
         ->and(Schema::hasIndex('usage_events', 'usage_events_plan_occurred_idx'))->toBeTrue()
         ->and(Schema::hasIndex('usage_events', 'usage_events_provider_model_occurred_idx'))->toBeTrue();

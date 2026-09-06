@@ -6,6 +6,7 @@ namespace App\Models;
 
 use App\Enums\CostSource;
 use App\Enums\UsageEventOutcome;
+use App\Exceptions\Payments\ImmutableFinancialRecordException;
 use Database\Factories\UsageEventFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -34,6 +35,29 @@ class UsageEvent extends Model
 {
     /** @use HasFactory<UsageEventFactory> */
     use HasFactory;
+
+    /**
+     * Cost / pricing facts are IMMUTABLE once recorded (Phase E2 guard): a
+     * difference between calculated and actual cost lives in the
+     * reconciliation / adjustment tables next to the ledger, never inside it.
+     * Rows are never deleted by the application.
+     */
+    public const IMMUTABLE_COST_FIELDS = ['cost', 'provider_cost', 'communication_cost', 'external_cost', 'total_cost', 'currency', 'cost_source', 'pricing_snapshot', 'model_price_id', 'ai_model_id', 'occurred_at', 'provider', 'model'];
+
+    protected static function booted(): void
+    {
+        static::updating(static function (self $event): void {
+            foreach (self::IMMUTABLE_COST_FIELDS as $attribute) {
+                if ($event->isDirty($attribute)) {
+                    throw ImmutableFinancialRecordException::for($event, "update of ledger fact [{$attribute}]");
+                }
+            }
+        });
+
+        static::deleting(static function (self $event): void {
+            throw ImmutableFinancialRecordException::for($event, 'delete');
+        });
+    }
 
     /**
      * @var list<string>

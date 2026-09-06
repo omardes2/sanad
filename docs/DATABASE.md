@@ -84,6 +84,7 @@
 - **unique(`provider`, `external_event_id`)** لضمان عدم ابتلاع الحدث مرتين.
 
 ### `usage_events`
+(بعد E2) حقول التكلفة/التسعير immutable على مستوى الموديل (`IMMUTABLE_COST_FIELDS`) ولا حذف؛ الفروق تعيش في جداول التسوية بجانبه.
 تتبّع استخدام وتكلفة الذكاء الاصطناعي (الدفتر المالي، انظر PHASE_B2/PHASE_D).
 - `user_id?` → `users` (**nullOnDelete** — نحتفظ بالسجل)
 - `type` · `provider` · `model?` · `input_units` (default 0) · `output_units` (default 0) · `cost` **decimal(12,6)** · `metadata? json`.
@@ -123,6 +124,28 @@
 ### `refund_allocations` (E1، append-only)
 إسناد استرداد إلى التخصيص الذي يعكسه: `Σ` لكل استرداد ≤ الاسترداد و`Σ` على كل تخصيص ≤ التخصيص.
 - `customer_refund_id` (**restrictOnDelete**) · `payment_allocation_id` (**restrictOnDelete**) · `amount` · `currency` · `allocated_at`(6) · `actor_ref` · `reason_code?` · `created_at` فقط.
+
+### `cost_invoices` (E2)
+فاتورة مورّد كـ**دليل** لمكوّن تكلفة واحد (`provider/communication/external`)؛ التأكيد لا يجعل الإجمالي تكلفة فعلية.
+- `component` · `counterparty_key` (مفتاح ثابت محدود؛ لمكوّن provider يجب أن يطابق `ai_providers.key`؛ لا أسماء ولا PII) · `invoice_ref?` (فريد مع `counterparty_key` عند وجوده) · `idempotency_key` (إلزامي، فريد) · `issued_at` · `period_start/period_end` (تغطية الفاتورة نفسها) · `currency` · `total_amount` decimal(16,6) موقَّع (كامل المستند بضرائبه وائتمانه) · `evidence_ref?` · `current_status` + `latest_event_id` + `superseded_by_id?` (projection) · `recorded_by_ref`. عدة فواتير لنفس الطرف والفترة مسموحة.
+
+### `cost_invoice_events` (E2، append-only)
+`draft / confirmed / voided / superseded` (enum + CHECK)؛ فهرس جزئي فريد "confirmed واحد لكل فاتورة" على المحرّكين.
+
+### `cost_invoice_lines` (E2، append-only)
+أسطر موقَّعة تُضاف للمسودة فقط: `service/tax/other ≥ 0`، `credit ≤ 0` (قيد CHECK على PostgreSQL)، `Σ الأسطر الموقَّعة = total_amount` شرط التأكيد. `line_no` فريد داخل الفاتورة، `description_code` رمز محدود، `period_start/end?`. `service` و`credit` فقط قابلان للتخصيص.
+
+### `cost_reconciliation_scopes` (E2، projection)
+صف لكل (`component`, `counterparty_key`, `period_start` = أول الشهر UTC, `currency`) فريد؛ يحمل `current_reconciliation_id?` و`version` و`updated_by_ref` فقط؛ هو هدف `FOR UPDATE` لكل تسوية/تعديل (يخدم communication/external بلا صف مزوّد). هويته ثابتة ولا يُحذف؛ المؤشر يتحرّك عبر الخدمة + القفل + audit.
+
+### `cost_reconciliations` (E2، append-only)
+`scope_id` (**restrictOnDelete**) · النطاق منسوخًا · `source` (`invoice / manual_evidenced / confirmed_zero`) · `reconciled_amount` · snapshot الدفتر: `calculated_known_amount`, `calculated_priced_rows`, `unpriced_rows`, `currency_mismatch_rows`, `ledger_max_event_id?`, `cost_coverage_status` (`complete/partial/no_producer`), `captured_at(6)`, `snapshot_hash` · `supersedes_id?` · `reason_code?` · `evidence_ref?` · `actor_ref` · `created_at`. قيد PostgreSQL: `confirmed_zero ⇒ reconciled_amount = 0`.
+
+### `cost_invoice_allocations` (E2، append-only)
+علاقة الدليل many-to-many: `cost_invoice_id`, `cost_invoice_line_id`, `cost_reconciliation_id` (كلها **restrictOnDelete**) · `amount` موقَّع بإشارة السطر · `currency` · `actor_ref`. `|Σ| ≤ |السطر|` عبر كل التسويات تحت قفل صف الفاتورة؛ لا proration تلقائي.
+
+### `cost_adjustments` (E2، append-only)
+`cost_reconciliation_id` (**restrictOnDelete**) · `amount` موقَّع ≠ 0 · `currency` · `reason_code` · `evidence_ref` (إلزاميان) · `actor_ref`. `Adjusted Reconciled Cost = Base + Σ adjustments`؛ الأساس لا يتغيّر.
 
 ### `audit_logs`
 سجل تدقيق **append-only**.
