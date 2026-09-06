@@ -14,6 +14,8 @@ use Illuminate\Support\Facades\Schema;
  * (lock → expected state → event → projection → audit, one transaction); the
  * payment row's current_status is only a projection of the latest row.
  * A manual payment is recorded as created → succeeded in one transaction.
+ * A partial unique index allows at most ONE `succeeded` event per payment on
+ * both engines: one collection can never be counted twice.
  */
 return new class extends Migration
 {
@@ -34,6 +36,9 @@ return new class extends Migration
             $table->index(['customer_payment_id', 'id'], 'customer_payment_events_payment_idx');
             $table->index('event_type', 'customer_payment_events_type_idx');
         });
+
+        // Partial unique index (PostgreSQL and SQLite): one `succeeded` event per payment.
+        DB::statement("CREATE UNIQUE INDEX customer_payment_events_one_success_per_payment ON customer_payment_events (customer_payment_id) WHERE event_type = 'succeeded'");
 
         if (DB::getDriverName() === 'pgsql') {
             $types = implode("', '", array_map(static fn (CustomerPaymentEventType $t): string => $t->value, CustomerPaymentEventType::cases()));

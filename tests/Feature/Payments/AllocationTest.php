@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Enums\CustomerPaymentEventType;
+use App\Enums\PaymentSource;
 use App\Exceptions\Payments\ImmutableFinancialRecordException;
 use App\Exceptions\Payments\PaymentRuleException;
 use App\Models\AuditLog;
@@ -14,6 +16,8 @@ use App\Models\User;
 use App\Services\Audit\AuditLogger;
 use App\Services\Billing\SubscriptionService;
 use App\Services\Payments\AllocationService;
+use App\Services\Payments\CashCollectedQuery;
+use App\Services\Payments\CustomerPaymentService;
 use App\Support\Audit\AuditActions;
 use App\Support\Billing\SubscriptionStateToken;
 use App\Support\Security\SecretRedactor;
@@ -189,4 +193,50 @@ it('is append-only for both allocation tables and atomic with the audit entry', 
     expect(PaymentAllocation::count())->toBe(1)->and(RefundAllocation::count())->toBe(1)
         ->and(AuditLog::where('action', AuditActions::PaymentAllocated)->count())->toBe(1)
         ->and(AuditLog::where('action', AuditActions::RefundAllocated)->count())->toBe(1);
+});
+
+it('refuses a new allocation once the payment is disputed, while its collected cash stays in history', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-09-06 12:00:00', 'UTC'));
+    $subscriber = billingSubscriber();
+    $payment = e1Payment($subscriber, ['amount' => '100.00', 'receivedAt' => CarbonImmutable::parse('2026-08-10', 'UTC')]);
+    $event = e1Event($subscriber, CarbonImmutable::parse('2026-08-01', 'UTC'), CarbonImmutable::parse('2026-09-01', 'UTC'));
+    allocations()->allocatePayment($payment->id, $event->id, '10.00');
+
+    app(CustomerPaymentService::class)->transition($payment, CustomerPaymentEventType::Disputed, $payment->stateToken(), PaymentSource::Gateway, 'chargeback');
+
+    $summary = app(CashCollectedQuery::class)->summarise(CarbonImmutable::parse('2026-08-01', 'UTC'), CarbonImmutable::parse('2026-09-01', 'UTC'))['USD'];
+    expect(fn () => allocations()->allocatePayment($payment->fresh()->id, $event->id, '10.00'))->toThrow(PaymentRuleException::class, 'succeeded الآن')
+        ->and(PaymentAllocation::count())->toBe(1)
+        ->and($summary->grossCashCollected)->toBe('100.00')
+        ->and($summary->allocatedCollectedAmount)->toBe('10.00');
+});
+
+it('caps refund allocations on ONE payment allocation across ALL refunds: Σ over every refund ≤ the allocation amount', function () {
+    $subscriber = billingSubscriber();
+    $payment = e1Payment($subscriber, ['amount' => '100.00']);
+    $event = e1Event($subscriber, CarbonImmutable::parse('2026-09-01', 'UTC'), CarbonImmutable::parse('2026-10-01', 'UTC'));
+    $allocation = allocations()->allocatePayment($payment->id, $event->id, '30.00');
+    $refundA = e1Refund($payment, ['amount' => '25.00']);
+    $refundB = e1Refund($payment, ['amount' => '25.00']);
+    $refundC = e1Refund($payment, ['amount' => '25.00']);
+
+    allocations()->allocateRefund($refundA->id, $allocation->id, '20.00'); // 20 of 30 used by refund A
+
+    $rule = function (int $refundId, string $amount) use ($allocation): string {
+        try {
+            allocations()->allocateRefund($refundId, $allocation->id, $amount);
+        } catch (PaymentRuleException $e) {
+            return $e->rule;
+        }
+
+        return 'none';
+    };
+
+    // Refund B alone has 25 available, but the ALLOCATION only has 10 left across all refunds.
+    expect($rule($refundB->id, '15.00'))->toBe('allocation_reversal_limit')
+        ->and($rule($refundB->id, '10.00'))->toBe('none') // exactly the remainder
+        ->and($rule($refundC->id, '0.01'))->toBe('allocation_reversal_limit') // fully reversed now, whatever refund asks
+        ->and(RefundAllocation::query()->where('payment_allocation_id', $allocation->id)->sum('amount'))->toEqual(30)
+        ->and(RefundAllocation::query()->where('payment_allocation_id', $allocation->id)->distinct()->count('customer_refund_id'))->toBe(2)
+        ->and((string) $allocation->fresh()->amount)->toBe('30.00');
 });

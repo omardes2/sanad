@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Enums\CustomerPaymentEventType;
+use App\Enums\PaymentSource;
 use App\Exceptions\Payments\ImmutableFinancialRecordException;
 use App\Exceptions\Payments\PaymentConflictException;
 use App\Exceptions\Payments\PaymentRuleException;
@@ -10,6 +11,8 @@ use App\Models\AuditLog;
 use App\Models\CustomerPayment;
 use App\Models\CustomerRefund;
 use App\Services\Audit\AuditLogger;
+use App\Services\Payments\CashCollectedQuery;
+use App\Services\Payments\CustomerPaymentService;
 use App\Support\Audit\AuditActions;
 use App\Support\Security\SecretRedactor;
 use Carbon\CarbonImmutable;
@@ -137,4 +140,25 @@ it('is append-only and atomic with its audit entry', function () {
 
     expect(fn () => e1Refund($payment, ['amount' => '5.00']))->toThrow(RuntimeException::class);
     expect(CustomerRefund::count())->toBe(1)->and(AuditLog::where('action', AuditActions::PaymentRefunded)->count())->toBe(1);
+});
+
+it('separates historical success from current eligibility: a disputed payment keeps its collected cash but accepts no new refund until the lifecycle allows it', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-09-06 12:00:00', 'UTC'));
+    $payment = e1Payment(billingSubscriber(), ['amount' => '100.00', 'receivedAt' => CarbonImmutable::parse('2026-08-10', 'UTC')]);
+    $cash = fn () => app(CashCollectedQuery::class)->summarise(CarbonImmutable::parse('2026-08-01', 'UTC'), CarbonImmutable::parse('2026-09-01', 'UTC'))['USD']->grossCashCollected;
+    $service = app(CustomerPaymentService::class);
+
+    e1Refund($payment, ['amount' => '10.00']); // allowed while succeeded
+    $service->transition($payment, CustomerPaymentEventType::Disputed, $payment->stateToken(), PaymentSource::Gateway, 'chargeback');
+
+    expect($payment->fresh()->hasSucceeded())->toBeTrue() // history intact
+        ->and($cash())->toBe('100.00') // the original 100 never disappears
+        ->and(fn () => e1Refund($payment->fresh(), ['amount' => '10.00']))->toThrow(PaymentRuleException::class, 'succeeded الآن')
+        ->and(CustomerRefund::count())->toBe(1);
+
+    // dispute_resolved is a distinct state: still not `succeeded`, still no new refund in E1.
+    $service->transition($payment->fresh(), CustomerPaymentEventType::DisputeResolved, $payment->fresh()->stateToken(), PaymentSource::Gateway);
+    expect(fn () => e1Refund($payment->fresh(), ['amount' => '10.00']))->toThrow(PaymentRuleException::class)
+        ->and($cash())->toBe('100.00')
+        ->and(CustomerRefund::count())->toBe(1);
 });

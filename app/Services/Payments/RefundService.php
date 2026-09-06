@@ -120,15 +120,23 @@ final class RefundService
     }
 
     /**
-     * Only a payment that actually succeeded (event-based, plus a projection
-     * that is not failed) may be refunded or allocated.
+     * Two different questions, both required for a NEW admin operation:
+     *  - historical: cash was actually collected (a `succeeded` event exists —
+     *    what Cash Collected is built on and what a later dispute never erases);
+     *  - operational: the payment is CURRENTLY in the `succeeded` state. A
+     *    disputed (or failed / resolved) payment keeps its history but accepts
+     *    no new refund or allocation until a clear lifecycle brings it back.
      *
      * @throws PaymentRuleException
      */
     public static function assertSucceeded(CustomerPayment $payment, string $operation): void
     {
-        if (! $payment->hasSucceeded() || $payment->current_status === CustomerPaymentEventType::Failed) {
-            throw PaymentRuleException::of('lifecycle', "العملية [{$operation}] مسموحة فقط لدفعة نجحت فعليًا (الحالة الحالية: {$payment->current_status->value}).");
+        if (! $payment->hasSucceeded()) {
+            throw PaymentRuleException::of('lifecycle', "العملية [{$operation}] مسموحة فقط لدفعة نجحت فعليًا (لا يوجد حدث succeeded).");
+        }
+
+        if ($payment->current_status !== CustomerPaymentEventType::Succeeded) {
+            throw PaymentRuleException::of('lifecycle', "العملية [{$operation}] تتطلب أن تكون الدفعة بحالة succeeded الآن (الحالة الحالية: {$payment->current_status->value}).");
         }
     }
 }

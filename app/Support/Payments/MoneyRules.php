@@ -19,9 +19,6 @@ final class MoneyRules
 {
     public const SCALE = 2;
 
-    /** Tolerance for clock skew between the admin's machine and the server. */
-    public const FUTURE_TOLERANCE_SECONDS = 300;
-
     /** @return int scaled amount (> 0) */
     public static function positiveAmount(string $amount, string $rule): int
     {
@@ -66,9 +63,10 @@ final class MoneyRules
         }
     }
 
+    /** Strict: a fact's timestamp must be ≤ server now. Backdating a real old payment is fine; the future is not. */
     public static function notInFuture(CarbonImmutable $at, string $rule): void
     {
-        if ($at->greaterThan(CarbonImmutable::now()->addSeconds(self::FUTURE_TOLERANCE_SECONDS))) {
+        if ($at->greaterThan(CarbonImmutable::now())) {
             throw PaymentRuleException::of($rule, 'الطابع الزمني في المستقبل غير مقبول.');
         }
     }
@@ -78,6 +76,12 @@ final class MoneyRules
         return DecimalMath::format($scaled, self::SCALE);
     }
 
+    /**
+     * A bounded reference TOKEN — letters, digits and simple separators only:
+     * no whitespace (so no sentences / free text), no `@` (e-mail), no run of
+     * 13+ digits (a PAN / IBAN / account number shape). These fields identify a document; they never
+     * carry personal or payment-instrument data.
+     */
     public static function boundedRef(?string $value, int $max, string $rule): ?string
     {
         if ($value === null) {
@@ -90,8 +94,12 @@ final class MoneyRules
             return null;
         }
 
-        if (mb_strlen($value) > $max || preg_match('/^[\p{L}\p{N} _\-.:\/#@]+$/u', $value) !== 1) {
-            throw PaymentRuleException::of($rule, "القيمة يجب ألا تتجاوز {$max} حرفًا وتقتصر على حروف/أرقام ورموز مرجعية بسيطة.");
+        if (mb_strlen($value) > $max || preg_match('/^[\p{L}\p{N}_\-.:\/#]+$/u', $value) !== 1) {
+            throw PaymentRuleException::of($rule, "القيمة يجب ألا تتجاوز {$max} حرفًا وتقتصر على حروف/أرقام ورموز مرجعية بسيطة (رمز مرجعي بلا مسافات، لا نص حر، لا بريد).");
+        }
+
+        if (preg_match('/\d{13,}/', $value) === 1) {
+            throw PaymentRuleException::of($rule, 'القيمة تشبه رقم بطاقة/حساب (13 رقمًا متتاليًا أو أكثر) ولا تُخزَّن هنا.');
         }
 
         return $value;

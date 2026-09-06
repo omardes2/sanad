@@ -110,7 +110,7 @@
 
 ### `customer_payment_events` (E1، append-only)
 دورة حياة الدفعة الرسمية: `created / succeeded / failed / disputed / dispute_resolved` (enum + قيد CHECK على PostgreSQL).
-- `customer_payment_id` → `customer_payments` (**restrictOnDelete**) · `event_type` · `occurred_at`(6) · `source` (`manual/gateway/system`) · `actor_ref` · `reason_code?` · `evidence_ref?` · `metadata?` · `created_at` فقط. لا update ولا delete.
+- `customer_payment_id` → `customer_payments` (**restrictOnDelete**) · `event_type` · `occurred_at`(6) · `source` (`manual/gateway/system`) · `actor_ref` · `reason_code?` · `evidence_ref?` · `metadata?` · `created_at` فقط. لا update ولا delete. فهرس جزئي فريد `customer_payment_events_one_success_per_payment`: حدث `succeeded` واحد لكل دفعة.
 
 ### `customer_refunds` (E1، append-only)
 استرداد جزئي/كلي ضدّ دفعة **نجحت فعليًا**؛ `Σ ≤ amount` الدفعة تحت قفل صفها، نفس العملة، `refunded_at ≥ received_at`.

@@ -12,6 +12,7 @@ use App\Models\AuditLog;
 use App\Models\CustomerPayment;
 use App\Models\CustomerPaymentEvent;
 use App\Services\Audit\AuditLogger;
+use App\Services\Payments\CashCollectedQuery;
 use App\Services\Payments\CustomerPaymentService;
 use App\Support\Audit\AuditActions;
 use App\Support\Security\SecretRedactor;
@@ -135,8 +136,8 @@ it('enforces the money and time rules: amount > 0, ISO currency, no future recei
         ->and(CustomerPayment::count())->toBe(0)
         ->and(AuditLog::count())->toBe(0);
 
-    // A small clock skew is tolerated; a fee of zero is a KNOWN fee.
-    $ok = e1Payment($subscriber, ['receivedAt' => CarbonImmutable::now('UTC')->addSeconds(30), 'gatewayFeeAmount' => '0', 'feeCurrency' => 'usd']);
+    // A fee of zero is a KNOWN fee.
+    $ok = e1Payment($subscriber, ['gatewayFeeAmount' => '0', 'feeCurrency' => 'usd']);
     expect($ok->feeIsKnown())->toBeTrue()->and((string) $ok->gateway_fee_amount)->toBe('0.00')->and($ok->fee_currency)->toBe('USD');
 });
 
@@ -230,3 +231,26 @@ it('refuses a direct projection write that does not go through the service (Post
     ])))->toThrow(QueryException::class, 'customer_payment_events_type_check');
     expect(CustomerPaymentEvent::query()->where('customer_payment_id', $payment->id)->count())->toBe(2);
 })->skip(fn () => DB::connection()->getDriverName() !== 'pgsql', 'CHECK constraints are PostgreSQL-only');
+
+it('never lets one collection succeed twice: the service refuses a second succeeded transition and the database refuses a second succeeded event, so cash is never double-counted', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-09-06 12:00:00', 'UTC'));
+    $service = app(CustomerPaymentService::class);
+    $payment = e1Payment(billingSubscriber(), ['amount' => '100.00', 'receivedAt' => CarbonImmutable::parse('2026-08-10', 'UTC')]);
+    $cash = fn () => app(CashCollectedQuery::class)->summarise(CarbonImmutable::parse('2026-08-01', 'UTC'), CarbonImmutable::parse('2026-09-01', 'UTC'))['USD'];
+
+    // Service level: succeeded → succeeded is not a transition; neither is disputed → succeeded nor dispute_resolved → succeeded.
+    expect(fn () => $service->transition($payment, CustomerPaymentEventType::Succeeded, $payment->stateToken(), PaymentSource::Gateway))->toThrow(PaymentRuleException::class);
+    $service->transition($payment->fresh(), CustomerPaymentEventType::Disputed, $payment->fresh()->stateToken(), PaymentSource::Gateway);
+    expect(fn () => $service->transition($payment->fresh(), CustomerPaymentEventType::Succeeded, $payment->fresh()->stateToken(), PaymentSource::Gateway))->toThrow(PaymentRuleException::class);
+    $service->transition($payment->fresh(), CustomerPaymentEventType::DisputeResolved, $payment->fresh()->stateToken(), PaymentSource::Gateway);
+    expect(fn () => $service->transition($payment->fresh(), CustomerPaymentEventType::Succeeded, $payment->fresh()->stateToken(), PaymentSource::Gateway))->toThrow(PaymentRuleException::class);
+
+    // Database level (both engines): a partial unique index allows ONE succeeded event per payment.
+    expect(fn () => DB::transaction(fn () => DB::table('customer_payment_events')->insert([
+        'customer_payment_id' => $payment->id, 'event_type' => 'succeeded', 'occurred_at' => now(), 'source' => 'gateway', 'actor_ref' => 'system', 'created_at' => now(),
+    ])))->toThrow(QueryException::class); // unique violation on customer_payment_events_one_success_per_payment
+
+    expect(CustomerPaymentEvent::query()->where('customer_payment_id', $payment->id)->where('event_type', 'succeeded')->count())->toBe(1)
+        ->and($cash()->paymentsCount)->toBe(1)
+        ->and($cash()->grossCashCollected)->toBe('100.00');
+});
