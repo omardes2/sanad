@@ -8,15 +8,20 @@
     <header class="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
             <h1 class="text-2xl font-bold text-slate-800">المالية</h1>
-            <p class="mt-1 text-sm text-slate-500">أرقام <strong>محسوبة (Calculated)</strong> داخليًا — ليست إيرادًا محصَّلًا ولا ربحية نهائية. التجميع اليومي/الشهري بتوقيت <span dir="ltr">UTC</span>. المصطلحات Collected / Actual / Reconciled تبدأ في Phase E.</p>
+            <p class="mt-1 text-sm text-slate-500">ثلاث مفردات مالية منفصلة لا تُخلط في رقم واحد: <strong>Calculated</strong> (تكلفة الاستخدام المسعَّرة) · <strong>Cash</strong> (نقد محصَّل فعليًا بالأحداث) · <strong>Reconciled</strong> (تكلفة مسوّاة بدليل وإقفال الفترة). التجميع بتوقيت <span dir="ltr">UTC</span>. لا Revenue ولا Gross Profit ولا Margin كأرقام — لا سياسة Revenue Recognition بعد.</p>
         </div>
-        @if ($canExport && $exportUrl)
-            <a href="{{ $exportUrl }}" class="rounded-lg border border-emerald-600 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50">تصدير CSV (Calculated)</a>
+        @if ($canExport)
+            <div class="flex flex-wrap gap-2" data-testid="export-links">
+                @if ($exportUrl)<a href="{{ $exportUrl }}" class="rounded-lg border border-emerald-600 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50">CSV Calculated</a>@endif
+                @foreach ($exports as $key => $url)
+                    <a href="{{ $url }}" class="rounded-lg border border-emerald-600 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50">CSV {{ ucfirst($key) }}</a>
+                @endforeach
+            </div>
         @endif
     </header>
 
     <div class="mb-6 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900" data-testid="finance-disclaimer">
-        Calculated, not collected · timezone <span dir="ltr">UTC</span> · Historical revenue: <strong>NOT AVAILABLE</strong> · Gross margin: <strong>NOT AVAILABLE — Phase E</strong>
+        timezone <span dir="ltr">UTC</span> · Calculated ≠ Cash ≠ Reconciled · Historical revenue: <strong>NOT AVAILABLE</strong> · Gross margin: <strong>NOT AVAILABLE — no Revenue Recognition policy</strong> · unknown ≠ 0 (FEES UNKNOWN / NOT CONVERTED / NOT RECONCILED / NOT AVAILABLE)
     </div>
 
     {{-- ─── 1. Current subscription run-rate — as of now ─────────────────── --}}
@@ -46,9 +51,10 @@
         <p class="text-[11px] text-slate-400">العملات لا تُجمع مع بعضها (لا FX).</p>
     </section>
 
-    {{-- ─── 2. Usage & cost analysis — selected UTC window ───────────────── --}}
+    {{-- ─── 2. CALCULATED — usage & cost analysis — selected UTC window ──── --}}
     <section class="mb-8" data-testid="section-window">
-        <h2 class="text-lg font-bold text-slate-800">تحليل الاستخدام والتكلفة — النافذة المحددة (UTC)</h2>
+        <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400" dir="ltr">Band: CALCULATED</p>
+        <h2 class="text-lg font-bold text-slate-800">تحليل الاستخدام والتكلفة (Calculated) — النافذة المحددة (UTC)</h2>
         <p class="mb-3 text-xs text-slate-500">Usage &amp; Cost Analysis — selected UTC window (حتى {{ $maxDays }} يومًا). التكلفة المعروفة تُجمع من الصفوف المسعَّرة فقط؛ غير المسعَّر يُعدّ ولا يُجمع.</p>
 
         <div class="mb-4 grid gap-3 md:grid-cols-4">
@@ -233,7 +239,83 @@
         @endif
     </section>
 
-    {{-- ─── 3. MRR snapshot history — run-rate, not revenue ──────────────── --}}
+    {{-- ─── 3. CASH — selected UTC window, LIVE / CURRENT ──────────────────── --}}
+    @if ($window)
+        <section class="mb-8" data-testid="section-cash">
+            <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400" dir="ltr">Band: CASH · basis LIVE / CURRENT</p>
+            <h2 class="text-lg font-bold text-slate-800">النقد (Cash) — النافذة المحددة (UTC)</h2>
+            <p class="mb-3 text-xs text-slate-500" dir="ltr">Event-based: succeeded payments by received_at, refunds by refunded_at, in {{ $window['from'] }} → {{ $window['to'] }}. Each native currency apart; gateway fee unknown = <strong>FEES UNKNOWN</strong>, never 0. Not revenue.</p>
+            @if ($window['cash'] === [])
+                <div class="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-500" data-testid="cash-empty">لا مدفوعات ولا استردادات في هذه النافذة.</div>
+            @else
+                <div class="grid gap-3 md:grid-cols-2">
+                    @foreach ($window['cash'] as $currency => $c)
+                        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="cash-{{ $currency }}" dir="ltr">
+                            <p class="text-xs font-semibold text-slate-500">{{ $currency }} · {{ $c->paymentsCount }} payments · {{ $c->refundsCount }} refunds</p>
+                            <div class="mt-2 grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
+                                <div><p class="text-[11px] text-slate-500">Gross Cash Collected</p><p class="font-bold">{{ $c->grossCashCollected }}</p></div>
+                                <div><p class="text-[11px] text-slate-500">Refunds</p><p class="font-bold">{{ $c->refunds }}</p></div>
+                                <div><p class="text-[11px] text-slate-500">Net Cash</p><p class="font-bold">{{ $c->netCash }}</p></div>
+                                <div><p class="text-[11px] text-slate-500">Gateway Fees</p><p class="font-bold {{ $c->feesUnknownCount > 0 ? 'text-amber-800' : '' }}">{{ $c->feesUnknownCount > 0 ? 'FEES UNKNOWN ('.$c->feesUnknownCount.' of '.$c->paymentsCount.')' : $c->gatewayFeesKnown }}</p></div>
+                                <div><p class="text-[11px] text-slate-500">Fees status</p><p class="font-bold {{ $c->feesUnknownCount > 0 ? 'text-amber-800' : 'text-emerald-700' }}">{{ $c->feesUnknownCount > 0 ? 'FEES UNKNOWN — no partial fee total' : 'known' }}</p></div>
+                                <div><p class="text-[11px] text-slate-500">Net Cash After Gateway Fees</p><p class="font-bold">{{ $c->netCashAfterGatewayFees ?? 'NOT AVAILABLE' }}</p></div>
+                            </div>
+                            <p class="mt-2 text-[11px] text-slate-500">allocated {{ $c->allocatedCollectedAmount }} · refund allocated {{ $c->refundAllocatedAmount }} · unallocated gross {{ $c->unallocatedGrossCollectedAmount }}</p>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+            @php($rc = $window['reportingCash'])
+            <div class="mt-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="cash-reporting" dir="ltr">
+                <p class="text-xs font-semibold text-slate-700">Reporting currency {{ $rc['currency'] }} — every line NATIVE or CONVERTED (frozen current conversion), otherwise INCOMPLETE / NOT AVAILABLE</p>
+                <div class="mt-2 grid gap-2 md:grid-cols-3">
+                    @foreach ($rc['totals'] as $key => $total)
+                        <div data-testid="reporting-{{ $key }}">
+                            <p class="text-[11px] text-slate-500">{{ $total->label }} ({{ $total->targetCurrency }})</p>
+                            <p class="font-bold {{ $total->amount === null ? 'text-amber-800' : '' }}">{{ $total->amount ?? 'INCOMPLETE / NOT AVAILABLE' }}</p>
+                            <p class="text-[11px] text-slate-500">{{ $total->lines }} lines · native {{ $total->native }} · converted {{ $total->converted }} · NOT CONVERTED {{ $total->notConverted }}</p>
+                        </div>
+                    @endforeach
+                </div>
+            </div>
+        </section>
+
+        {{-- ─── 4. RECONCILED — calendar months, one basis each, never a total ── --}}
+        <section class="mb-8" data-testid="section-reconciled">
+            <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400" dir="ltr">Band: RECONCILED · calendar months UTC · reporting currency {{ $rc['currency'] }}</p>
+            <h2 class="text-lg font-bold text-slate-800">التكلفة المسوّاة وإقفال الفترة (Reconciled) — لكل شهر تقويمي</h2>
+            <p class="mb-3 text-xs text-slate-500" dir="ltr">One row per calendar month overlapping the window. <strong>FROZEN CLOSE REVISION n</strong> = the month's current close (frozen figures, never re-evaluated). <strong>LIVE / CURRENT</strong> = no current close (live preflight, may be blocked). Months are a series — never summed; revisions and other reporting currencies never enter this band. Reconciled Cash Contribution is a cash-basis internal metric, not gross profit.</p>
+            <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <table class="min-w-full text-sm" dir="ltr" data-testid="months-table">
+                    <thead class="bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-2 text-left">Month (UTC)</th><th class="px-3 py-2 text-left">Basis</th><th class="px-3 py-2 text-left">State</th><th class="px-3 py-2 text-right">Reconciled Service Cost</th><th class="px-3 py-2 text-right">Net Cash After Gateway Fees</th><th class="px-3 py-2 text-right">Reconciled Cash Contribution</th><th class="px-3 py-2 text-left">Conditions</th><th class="px-3 py-2 text-left">Links</th></tr></thead>
+                    <tbody>
+                    @foreach ($window['months'] as $m)
+                        <tr class="border-t border-slate-100 align-top" data-testid="month-{{ $m->month }}" data-basis="{{ $m->isFrozen() ? 'frozen' : 'live' }}">
+                            <td class="px-3 py-2 font-mono">{{ $m->month }}</td>
+                            <td class="px-3 py-2 text-xs font-semibold {{ $m->isFrozen() ? 'text-sky-800' : 'text-slate-700' }}">{{ $m->basisLabel() }}</td>
+                            <td class="px-3 py-2 text-xs">{{ $m->state }}</td>
+                            <td class="px-3 py-2 text-right font-mono">{{ $m->figure('reconciled_service_cost') }}</td>
+                            <td class="px-3 py-2 text-right font-mono">{{ $m->figure('net_cash_after_gateway_fees') }}</td>
+                            <td class="px-3 py-2 text-right font-mono font-bold">{{ $m->figure('reconciled_cash_contribution') }}</td>
+                            <td class="px-3 py-2 text-xs">
+                                <x-finance.banners :blocking="$m->blocking" :info="$m->informational" :frozen="$m->isFrozen()" testid="month-banners-{{ $m->month }}" />
+                            </td>
+                            <td class="px-3 py-2 text-xs">
+                                <a class="text-emerald-700 hover:underline" href="{{ route('dashboard.finance.close', ['month' => $m->month]) }}">close page</a>
+                                @if ($m->closeId)
+                                    · <a class="text-emerald-700 hover:underline" href="{{ route('dashboard.finance.close.show', $m->closeId) }}">close #{{ $m->closeId }}</a>
+                                @endif
+                            </td>
+                        </tr>
+                    @endforeach
+                    </tbody>
+                </table>
+            </div>
+            <p class="mt-1 text-[11px] text-slate-400" dir="ltr">No total row by design: months, reporting currencies and revisions are never aggregated.</p>
+        </section>
+    @endif
+
+    {{-- ─── 5. MRR snapshot history — run-rate, not revenue ──────────────── --}}
     @if ($window)
         @php($series = $window['history'])
         <section class="mb-8" data-testid="section-history">

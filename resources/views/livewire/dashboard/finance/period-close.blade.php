@@ -23,7 +23,10 @@
             <p class="text-sm text-rose-700" data-testid="preflight-error">{{ $error }}</p>
         @else
             <h2 class="text-lg font-bold text-slate-800">Preflight — {{ $evaluation->month }} ({{ $evaluation->reportingCurrency }})</h2>
-            <p class="mb-2 text-xs text-slate-500" dir="ltr">input hash {{ substr($evaluation->inputHash, 0, 16) }}… · {{ $evaluation->canClose() ? 'READY TO CLOSE' : 'BLOCKED' }}</p>
+            <p class="mb-2 text-xs text-slate-500" dir="ltr">basis <strong>LIVE / CURRENT</strong> · input hash {{ substr($evaluation->inputHash, 0, 16) }}… · {{ $evaluation->canClose() ? 'READY TO CLOSE' : 'BLOCKED' }}</p>
+            <x-finance.banners testid="preflight-banners"
+                :blocking="$evaluation->blocking()"
+                :info="array_values(array_map(fn ($c) => $c['code'].' ('.$c['detail'].')', array_filter($evaluation->conditions, fn ($c) => ! $c['blocking'])))" />
             <div class="mb-3 grid gap-3 md:grid-cols-4">
                 @foreach (['gross_cash_collected' => 'Gross Cash Collected', 'refunds' => 'Refunds', 'net_cash' => 'Net Cash', 'gateway_fees' => 'Gateway Fees', 'net_cash_after_gateway_fees' => 'Net Cash After Gateway Fees', 'reconciled_service_cost' => 'Reconciled Service Cost', 'reconciled_cash_contribution' => 'Reconciled Cash Contribution'] as $key => $label)
                     <div class="rounded-2xl border border-slate-200 bg-white p-3" data-testid="metric-{{ $key }}">
@@ -78,19 +81,37 @@
 
     <section class="mt-6" data-testid="section-history">
         <h2 class="text-base font-bold text-slate-800">سجل الإقفال — {{ $month }}</h2>
+        <p class="mb-2 text-xs text-slate-500">كل صف يُقرأ من الصفوف المجمَّدة فقط (<span dir="ltr">FROZEN CLOSE REVISION n</span>)؛ لا يُعاد تقييم أي إقفال تاريخي عند العرض. الانحراف للإقفال الحالي يُقارن بالـhash الحي المعروض أعلاه؛ للمراجعات الأقدم اضغط <span dir="ltr">CHECK CURRENT DRIFT</span>. القيم المجمَّدة لا تتغير في الحالتين.</p>
         <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
             <table class="min-w-full text-sm" dir="ltr">
-                <thead class="bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-2 text-left">#</th><th class="px-3 py-2 text-left">Status</th><th class="px-3 py-2 text-left">Rev</th><th class="px-3 py-2 text-left">Previous</th><th class="px-3 py-2 text-right">Reconciled Cash Contribution</th><th class="px-3 py-2 text-left">Hash</th><th class="px-3 py-2 text-left">Closed at</th><th class="px-3 py-2 text-left">Flags</th></tr></thead>
+                <thead class="bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-2 text-left">#</th><th class="px-3 py-2 text-left">Status</th><th class="px-3 py-2 text-left">Basis</th><th class="px-3 py-2 text-left">Previous</th><th class="px-3 py-2 text-right">Reconciled Cash Contribution</th><th class="px-3 py-2 text-left">Hash</th><th class="px-3 py-2 text-left">Closed at (UTC)</th><th class="px-3 py-2 text-left">Flags</th><th class="px-3 py-2 text-left">Drift</th><th class="px-3 py-2 text-left">Links</th></tr></thead>
                 <tbody>
                 @forelse ($history as $record)
                     <tr class="border-t border-slate-100" data-testid="close-{{ $record->id }}">
-                        <td class="px-3 py-2">{{ $record->id }}</td><td class="px-3 py-2 font-semibold">{{ strtoupper($record->status->value) }}</td><td class="px-3 py-2">{{ $record->revision }}</td><td class="px-3 py-2">{{ $record->previous_close_id ?? '—' }}</td>
+                        <td class="px-3 py-2">{{ $record->id }}</td><td class="px-3 py-2 font-semibold">{{ strtoupper($record->status->value) }}</td><td class="px-3 py-2 text-xs">{{ $record->status->value === 'closed' ? 'FROZEN CLOSE REVISION '.$record->revision : 'reopen record (rev '.$record->revision.')' }}</td><td class="px-3 py-2">{{ $record->previous_close_id ?? '—' }}</td>
                         <td class="px-3 py-2 text-right">{{ $record->status->value === 'closed' ? ($record->reconciled_cash_contribution ?? 'NOT AVAILABLE') : '—' }}</td>
-                        <td class="px-3 py-2 text-xs">{{ $record->input_hash ? substr($record->input_hash, 0, 16).'…' : '—' }}</td><td class="px-3 py-2">{{ $record->closed_at->format('Y-m-d H:i') }}</td>
-                        <td class="px-3 py-2 text-xs text-amber-800">{{ ($drift[$record->id] ?? false) ? 'DRIFT SINCE CLOSE' : ($scope?->current_close_id === $record->id ? 'CURRENT' : '') }}{{ $record->status->value === 'reopened' ? ' reopened #'.$record->reopened_close_id.' ('.$record->reason_code.')' : '' }}</td>
+                        <td class="px-3 py-2 text-xs">{{ $record->input_hash ? substr($record->input_hash, 0, 16).'…' : '—' }}</td><td class="px-3 py-2">{{ $record->closed_at->utc()->format('Y-m-d H:i') }}</td>
+                        <td class="px-3 py-2 text-xs text-amber-800">{{ $scope?->current_close_id === $record->id ? 'CURRENT' : '' }}{{ $record->status->value === 'reopened' ? ' reopened #'.$record->reopened_close_id.' ('.$record->reason_code.')' : '' }}</td>
+                        <td class="px-3 py-2 text-xs">
+                            @if ($record->status->value === 'closed')
+                                @if (array_key_exists($record->id, $drift))
+                                    <span class="{{ $drift[$record->id] ? 'font-semibold text-amber-800' : 'text-emerald-700' }}" data-testid="drift-{{ $record->id }}">{{ $drift[$record->id] ? 'DRIFT SINCE CLOSE' : 'NO DRIFT' }}</span>
+                                @else
+                                    <button type="button" wire:click="checkDrift({{ $record->id }})" class="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50" data-testid="check-drift-{{ $record->id }}">CHECK CURRENT DRIFT</button>
+                                @endif
+                            @else
+                                —
+                            @endif
+                        </td>
+                        <td class="px-3 py-2 text-xs">
+                            <a class="text-emerald-700 hover:underline" href="{{ route('dashboard.finance.close.show', $record->id) }}">detail</a>
+                            @if ($canExport && $record->status->value === 'closed')
+                                · <a class="text-emerald-700 hover:underline" href="{{ route('dashboard.finance.close.export', $record->id) }}">CSV</a>
+                            @endif
+                        </td>
                     </tr>
                 @empty
-                    <tr><td colspan="8" class="px-3 py-3 text-center text-slate-500">لا سجلات إقفال لهذا الشهر.</td></tr>
+                    <tr><td colspan="10" class="px-3 py-3 text-center text-slate-500">لا سجلات إقفال لهذا الشهر.</td></tr>
                 @endforelse
                 </tbody>
             </table>

@@ -178,3 +178,30 @@ it('grants finance.close_period (Phase E4) to super_admin only — finance can v
     rbacSync();
     expect(User::factory()->create(['is_admin' => true])->can('finance.close_period'))->toBeFalse();
 });
+
+it('Phase E5.1 read-only reporting routes: overview and close detail need finance.view, exports need finance.export; operations/support/legacy admin 403', function () {
+    rbacSync();
+    closableMonth();
+    $close = closeMonth('2026-08', null, 'k-matrix');
+    $view = [route('dashboard.finance.close.show', $close->id)];
+    $export = [
+        route('dashboard.finance.cash.export', ['from' => '2026-08-01', 'to' => '2026-08-31']),
+        route('dashboard.finance.cost.export', ['from' => '2026-08', 'to' => '2026-08']),
+        route('dashboard.finance.fx.export', ['from' => '2026-08-01', 'to' => '2026-08-31']),
+        route('dashboard.finance.close.export', $close->id),
+    ];
+
+    foreach ([...$view, ...$export] as $url) {
+        $this->get($url)->assertRedirect(route('login')); // guest, before any actingAs
+    }
+
+    foreach ([...$view, ...$export] as $url) {
+        $this->actingAs(User::factory()->create(['is_admin' => true]))->get($url)->assertForbidden();
+        $this->actingAs(userWithRole(Role::Operations))->get($url)->assertForbidden();
+        $this->actingAs(userWithRole(Role::Support))->get($url)->assertForbidden();
+        $this->actingAs(userWithRole(Role::Finance))->get($url)->assertOk();
+        $this->actingAs(userWithRole(Role::SuperAdmin))->get($url)->assertOk();
+    }
+
+    expect(userWithRole(Role::Finance)->can('finance.close_period'))->toBeFalse(); // E5.1 adds no permission and moves no action
+});

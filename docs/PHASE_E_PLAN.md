@@ -193,9 +193,23 @@ scope projection بدل `is_current` (`cost_reconciliation_scopes` = هدف ال
 ### ترتيب النشر لـE4 (بعد الدمج وبموافقة صريحة)
 `php artisan migrate --force`. لا أوامر أخرى.
 
-## 8) E5 (مخطَّطة، لا تبدأ قبل الاعتماد)
+## 8) E5 — Finance Operations UI, Reporting & Export
 
-- **E5**: صفحات Payments / Invoices & Reconciliation / FX / Period Close، CSV بعقد `section` + أعلام reconciled، RBAC النهائي.
+واجهة وتشغيل فقط فوق E0–E4: لا منطق مالي جديد، لا إعادة حساب، لا mutation عبر أي صفحة عرض أو تصدير، لا صلاحيات جديدة (العرض `finance.view`، التصدير `finance.export`، الكتابة تبقى بصلاحيات مراحلها). المفردات الثلاث (Calculated / Cash / Reconciled) منفصلة بصريًا ولا تُخلط في رقم؛ لا Revenue ولا Gross Profit ولا Margin ولا Accounting Profit كأرقام.
+
+### E5.1 — Reporting surfaces & exports (منفَّذ، read-only، 0 migrations)
+
+- **الإقفالات التاريخية = بيانات مجمَّدة فقط**: `App\Services\Reporting\FrozenCloseReader` يقرأ `finance_period_close_scopes` / `finance_period_closes` / `finance_period_close_inputs` فقط (عدد استعلامات ثابت لا يعتمد على عدد المراجعات أو الصفوف)؛ لا `ClosePreflight` لأي إقفال تاريخي ولا FX/تسوية/دفعة حية تغيّر أرقامه. `rate_date` يُعرض من صف `fx_rates` الثابت الذي سمّاه المدخل. الانحراف فحص منفصل وموسوم `CHECK CURRENT DRIFT` عند الطلب (`PeriodCloseService::drift`)؛ الإقفال الحالي في صفحة الإقفال يقارن الـhash الحي المعروض أصلًا بلا تقييم إضافي. القيم المجمَّدة لا تتغير في الحالتين.
+- **الشهر المفتوح ≠ الشهر المقفل**: `ReconciledMonthSeries` يعطي صفًا لكل شهر تقويمي UTC يتقاطع مع النافذة بعملة التقرير الحالية، بأساس واحد: `FROZEN CLOSE REVISION n` (الإقفال الحالي للنطاق، من صف الإقفال) أو `LIVE / CURRENT` (preflight، مع الشروط المانعة). سلسلة بلا إجمالي: لا جمع عبر الأشهر ولا العملات ولا المراجعات؛ إقفالات بعملة تقرير أخرى لا تدخل الشريط.
+- **النظرة المالية** (`/dashboard/finance`): خمسة أشرطة — Run-rate · CALCULATED (D2 كما هو مع بطاقة Gross Margin `NOT AVAILABLE`) · CASH (`CashCollectedQuery` لكل عملة أصلية؛ رسوم مجهولة ⇒ `FEES UNKNOWN (n of m)` بلا إجمالي رسوم جزئي؛ `ReportingView::cash` للإجماليات بعملة التقرير فقط عند اكتمال كل بند وإلا `INCOMPLETE / NOT AVAILABLE`) · RECONCILED (السلسلة أعلاه) · MRR Snapshot History. لافتات مشتركة `<x-finance.banners>` (BLOCKING / WARNING / INFO / FROZEN) بنص الشرط نفسه.
+- **تفاصيل الإقفال** (`/dashboard/finance/close/{close}`، `finance.view`): المراجعة والسلسلة، عملة التقرير، الفترة UTC، الأرقام السبعة المجمَّدة، الشروط المسجَّلة، hash، صفوف المدخلات بالنوع مع حقائق FX، سجل تدقيق read-only ورابط بفلاتر الموضوع. صفحة الإقفال تقرأ السجل من الصفوف المجمَّدة وتقدّم الانحراف عند الطلب لكل مراجعة.
+- **CSV** (`finance.export`، `App\Services\Reporting\CsvWriter`): BOM UTF-8، streamed، `no-store`، `nosniff`، عمود `section`، صفوف `meta` أولًا (`timezone=UTC`، `basis`، `reporting_currency`، النافذة/الشهر، `generated_at`)، الخلية الرقمية المجهولة فارغة + عمود حالة (لا 0)، معرّفات ومراجع محدودة فقط (لا أسماء/هواتف/بريد/نص حر/payloads). `CashExporter` (cash_summary · reporting_totals · payments · refunds · payment_allocations · refund_allocations) و`CostExporter` (scopes · reporting · reporting_totals · invoices · invoice_lines · evidence_allocations · adjustments) و`FxExporter` (pairs · rates مع `is_current_revision` · conversions مع `is_current_conversion`) تقرأ خدمات الصفحات نفسها؛ `CloseExporter` (figures · conditions · expected_providers · inputs) يقرأ الصفوف المجمَّدة فقط. تصدير D2 (Calculated) يبقى.
+- **التدقيق**: فلاتر `subject_type` (قائمة نماذج التطبيق) و`subject_id` على فهرس `nullableMorphs('subject')` القائم — لا migration (اختبار EXPLAIN على PostgreSQL).
+- **الاختبارات** (`tests/Feature/Reporting`): `FinanceOverviewTest` (الأشرطة الخمسة والمفردات، FEES UNKNOWN ≠ 0، اكتمال عملة التقرير، FROZEN مقابل LIVE مع بيانات حية تتحرك، لا إجمالي عبر الأشهر/المراجعات، RBAC، لا PII)، `CloseDetailTest` (تجميد بعد تحرك البيانات والـFX وعملة التقرير، الانحراف عند الطلب فقط، السلسلة وسجل التدقيق، RBAC، صفحة الإقفال)، `FinanceExportsTest` (العقد المشترك، مطابقة الخدمات، فراغ + حالة، تصدير الإقفال ثابت بايتًا بعد تحرك البيانات، لا نص حر)، `ReadOnlyGuardTest` (wire-level: لا INSERT/UPDATE/DELETE على أي جدول أثناء العرض والتصدير والانحراف وفلاتر التدقيق + فحص مصدر)، `QueryCountTest` (لا preflight لكل صف، عدد ثابت مهما كثرت المراجعات/الصفوف، الشهر المجمَّد بلا تقييم، فهرس التدقيق على PostgreSQL)، ومصفوفة الوصول.
+
+### E5.2 — Operational UI upgrades (مخطَّطة، لا تبدأ قبل الاعتماد)
+
+فلاتر وpagination وتفاصيل وتأكيدات للعمليات عالية الأثر على صفحات Payments / Reconciliation / FX (الكتابة تبقى في خدمات E1–E3 بصلاحياتها)، وتحذيرات ledger drift / evidence stale داخل صفوف التسوية مع مسار التصحيح.
 
 ## 9) مؤجَّل لما بعد E
 بوابة دفع حية وشحن فعلي، فوترة العملاء الصادرة، الضرائب، dunning، churn/cohorts/LTV، rollups مادية، تسجيل أحداث WhatsApp في الدفتر، جلب فواتير المزوّدين آليًا، سياسة Revenue Recognition.
