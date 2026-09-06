@@ -4,19 +4,20 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Exceptions\Billing\StaleSubscriptionStateException;
 use App\Models\Subscription;
 use App\Services\Billing\SubscriptionService;
 use Illuminate\Console\Command;
 
 /**
- * Testing-only probe: applies ONE transition (suspend | activate | extend) to a
- * subscription through SubscriptionService and prints the resulting status.
- * Launched concurrently by the PostgreSQL concurrency test to prove the row
- * lock serialises transitions and the event chain stays consistent.
+ * Testing-only probe: applies ONE admin transition (suspend | activate |
+ * extend) with the given expected state token and prints "ok:<status>" or
+ * "stale". Launched concurrently by the PostgreSQL concurrency test to prove
+ * that of N admins acting on the same viewed state exactly one wins.
  */
 class SubscriptionTransitionProbe extends Command
 {
-    protected $signature = 'sanad:subscription-transition-probe {subscription} {action}';
+    protected $signature = 'sanad:subscription-transition-probe {subscription} {action} {expected}';
 
     protected $description = 'Testing only: apply one subscription transition and print the status';
 
@@ -26,14 +27,22 @@ class SubscriptionTransitionProbe extends Command
     {
         $subscription = Subscription::query()->findOrFail((int) $this->argument('subscription'));
 
-        $result = match ((string) $this->argument('action')) {
-            'suspend' => $service->suspend($subscription),
-            'activate' => $service->activate($subscription),
-            'extend' => $service->extend($subscription, 1),
-            default => throw new \InvalidArgumentException('Unknown action'),
-        };
+        $expected = (string) $this->argument('expected');
 
-        $this->line($result->status->value);
+        try {
+            $result = match ((string) $this->argument('action')) {
+                'suspend' => $service->suspend($subscription, $expected),
+                'activate' => $service->activate($subscription, $expected),
+                'extend' => $service->extend($subscription, 1, $expected),
+                default => throw new \InvalidArgumentException('Unknown action'),
+            };
+        } catch (StaleSubscriptionStateException) {
+            $this->line('stale');
+
+            return self::SUCCESS;
+        }
+
+        $this->line('ok:'.$result->status->value);
 
         return self::SUCCESS;
     }

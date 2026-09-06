@@ -10,10 +10,12 @@ use App\Enums\SubscriptionEventSource;
 use App\Enums\SubscriptionEventType;
 use App\Enums\SubscriptionStatus;
 use App\Enums\UsageDimension;
+use App\Exceptions\Billing\StaleSubscriptionStateException;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Services\Settings\SettingsRepository;
+use App\Support\Billing\SubscriptionStateToken;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
@@ -26,6 +28,12 @@ use Illuminate\Support\Facades\DB;
  * row, saves the new state, appends a subscription_events row and writes the
  * audit entry — a failure anywhere rolls all of it back, so the history can
  * never disagree with the state.
+ *
+ * Admin mutations are never last-writer-wins: they carry the
+ * SubscriptionStateToken the admin acted on; after the row lock the current
+ * token is recomputed and a mismatch is refused BEFORE anything is written
+ * (no state, no event, no audit). Onboarding keeps its own idempotent
+ * semantics (unique subscriber, never a second trial).
  */
 class SubscriptionService
 {
@@ -74,7 +82,7 @@ class SubscriptionService
             return DB::transaction(function () use ($subscriber, $attributes, $now): Subscription {
                 $subscription = Subscription::create(['subscriber_id' => $subscriber->id] + $attributes);
 
-                $this->history->record($subscription, SubscriptionEventType::Activated, null, null, SubscriptionEventSource::Onboarding, $now, 'default plan on onboarding', [
+                $this->history->record($subscription, SubscriptionEventType::Activated, null, null, null, null, SubscriptionEventSource::Onboarding, $now, 'default plan on onboarding', [
                     'trial_ends_at' => $subscription->trial_ends_at?->toIso8601String(),
                     'current_period_end' => $subscription->current_period_end?->toIso8601String(),
                 ]);
@@ -162,14 +170,24 @@ class SubscriptionService
     /**
      * Assign (or re-assign) a plan to a subscriber and activate: creates the
      * subscription when the subscriber has none (from_* NULL in the event).
+     * $expectedToken is the state the admin saw — SubscriptionStateToken::NONE
+     * when they saw no subscription.
+     *
+     * @throws StaleSubscriptionStateException
      */
-    public function activateFor(User $subscriber, Plan $plan, SubscriptionEventSource $source = SubscriptionEventSource::Admin): Subscription
+    public function activateFor(User $subscriber, Plan $plan, string $expectedToken, SubscriptionEventSource $source = SubscriptionEventSource::Admin): Subscription
     {
-        return DB::transaction(function () use ($subscriber, $plan, $source): Subscription {
+        return DB::transaction(function () use ($subscriber, $plan, $expectedToken, $source): Subscription {
             $existing = Subscription::query()->where('subscriber_id', $subscriber->id)->lockForUpdate()->first();
 
             if ($existing !== null) {
+                $this->assertToken($existing, $expectedToken);
+
                 return $this->activateLocked($existing, $plan, $source);
+            }
+
+            if ($expectedToken !== SubscriptionStateToken::NONE) {
+                throw StaleSubscriptionStateException::forToken($expectedToken, SubscriptionStateToken::NONE);
             }
 
             $now = CarbonImmutable::now();
@@ -183,44 +201,53 @@ class SubscriptionService
                 'renews_at' => $plan->billing_period->endFrom($now),
             ]);
 
-            $this->history->record($subscription, SubscriptionEventType::Activated, null, null, $source, $now, 'plan assigned');
+            $this->history->record($subscription, SubscriptionEventType::Activated, null, null, null, null, $source, $now, 'plan assigned');
 
             return $subscription;
         });
     }
 
-    public function activate(Subscription $subscription, ?Plan $plan = null, SubscriptionEventSource $source = SubscriptionEventSource::Admin): Subscription
+    /**
+     * @throws StaleSubscriptionStateException
+     */
+    public function activate(Subscription $subscription, string $expectedToken, ?Plan $plan = null, SubscriptionEventSource $source = SubscriptionEventSource::Admin): Subscription
     {
-        return DB::transaction(function () use ($subscription, $plan, $source): Subscription {
-            $locked = $this->lock($subscription);
+        return DB::transaction(function () use ($subscription, $expectedToken, $plan, $source): Subscription {
+            $locked = $this->lock($subscription, $expectedToken);
 
-            return $this->activateLocked($locked, $plan ?? $locked->plan, $source);
+            return $this->sync($subscription, $this->activateLocked($locked, $plan ?? $locked->plan, $source));
         });
     }
 
-    public function suspend(Subscription $subscription, SubscriptionEventSource $source = SubscriptionEventSource::Admin, ?string $reason = null): Subscription
+    /**
+     * @throws StaleSubscriptionStateException
+     */
+    public function suspend(Subscription $subscription, string $expectedToken, SubscriptionEventSource $source = SubscriptionEventSource::Admin, ?string $reason = null): Subscription
     {
-        return DB::transaction(function () use ($subscription, $source, $reason): Subscription {
-            $locked = $this->lock($subscription);
-            $fromStatus = $locked->status;
+        return DB::transaction(function () use ($subscription, $expectedToken, $source, $reason): Subscription {
+            $locked = $this->lock($subscription, $expectedToken);
+            [$fromStatus, $fromPlanId, $fromStart, $fromEnd] = $this->before($locked);
             $now = CarbonImmutable::now();
 
             $locked->forceFill(['status' => SubscriptionStatus::Suspended])->save();
-            $this->history->record($locked, SubscriptionEventType::Suspended, $fromStatus, $locked->plan_id, $source, $now, $reason);
+            $this->history->record($locked, SubscriptionEventType::Suspended, $fromStatus, $fromPlanId, $fromStart, $fromEnd, $source, $now, $reason);
 
             return $this->sync($subscription, $locked);
         });
     }
 
-    public function cancel(Subscription $subscription, SubscriptionEventSource $source = SubscriptionEventSource::Admin, ?string $reason = null): Subscription
+    /**
+     * @throws StaleSubscriptionStateException
+     */
+    public function cancel(Subscription $subscription, string $expectedToken, SubscriptionEventSource $source = SubscriptionEventSource::Admin, ?string $reason = null): Subscription
     {
-        return DB::transaction(function () use ($subscription, $source, $reason): Subscription {
-            $locked = $this->lock($subscription);
-            $fromStatus = $locked->status;
+        return DB::transaction(function () use ($subscription, $expectedToken, $source, $reason): Subscription {
+            $locked = $this->lock($subscription, $expectedToken);
+            [$fromStatus, $fromPlanId, $fromStart, $fromEnd] = $this->before($locked);
             $now = CarbonImmutable::now();
 
             $locked->forceFill(['status' => SubscriptionStatus::Cancelled, 'cancelled_at' => $now])->save();
-            $this->history->record($locked, SubscriptionEventType::Cancelled, $fromStatus, $locked->plan_id, $source, $now, $reason);
+            $this->history->record($locked, SubscriptionEventType::Cancelled, $fromStatus, $fromPlanId, $fromStart, $fromEnd, $source, $now, $reason);
 
             return $this->sync($subscription, $locked);
         });
@@ -228,12 +255,14 @@ class SubscriptionService
 
     /**
      * Extend the current period (and any trial) by N days and keep access on.
+     *
+     * @throws StaleSubscriptionStateException
      */
-    public function extend(Subscription $subscription, int $days, SubscriptionEventSource $source = SubscriptionEventSource::Admin, ?string $reason = null): Subscription
+    public function extend(Subscription $subscription, int $days, string $expectedToken, SubscriptionEventSource $source = SubscriptionEventSource::Admin, ?string $reason = null): Subscription
     {
-        return DB::transaction(function () use ($subscription, $days, $source, $reason): Subscription {
-            $locked = $this->lock($subscription);
-            $fromStatus = $locked->status;
+        return DB::transaction(function () use ($subscription, $days, $expectedToken, $source, $reason): Subscription {
+            $locked = $this->lock($subscription, $expectedToken);
+            [$fromStatus, $fromPlanId, $fromStart, $fromEnd] = $this->before($locked);
             $now = CarbonImmutable::now();
             $previousEnd = $locked->current_period_end;
 
@@ -249,7 +278,7 @@ class SubscriptionService
                     : $locked->trial_ends_at,
             ])->save();
 
-            $this->history->record($locked, SubscriptionEventType::Extended, $fromStatus, $locked->plan_id, $source, $now, $reason, [
+            $this->history->record($locked, SubscriptionEventType::Extended, $fromStatus, $fromPlanId, $fromStart, $fromEnd, $source, $now, $reason, [
                 'days' => $days,
                 'current_period_end' => ['from' => $previousEnd?->toIso8601String(), 'to' => $end->toIso8601String()],
             ]);
@@ -261,8 +290,7 @@ class SubscriptionService
     private function activateLocked(Subscription $locked, ?Plan $plan, SubscriptionEventSource $source): Subscription
     {
         $now = CarbonImmutable::now();
-        $fromStatus = $locked->status;
-        $fromPlanId = $locked->plan_id;
+        [$fromStatus, $fromPlanId, $fromStart, $fromEnd] = $this->before($locked);
         $plan ??= $locked->plan;
 
         $locked->forceFill([
@@ -275,19 +303,54 @@ class SubscriptionService
             'cancelled_at' => null,
         ])->save();
 
-        $this->history->record($locked, SubscriptionEventType::Activated, $fromStatus, $fromPlanId, $source, $now);
+        $this->history->record($locked, SubscriptionEventType::Activated, $fromStatus, $fromPlanId, $fromStart, $fromEnd, $source, $now);
 
         if ($fromPlanId !== $locked->plan_id) {
-            $this->history->record($locked, SubscriptionEventType::PlanChanged, SubscriptionStatus::Active, $fromPlanId, $source, $now, 'plan changed on activation');
+            $this->history->record($locked, SubscriptionEventType::PlanChanged, SubscriptionStatus::Active, $fromPlanId, $fromStart, $fromEnd, $source, $now, 'plan changed on activation');
         }
 
         return $locked;
     }
 
-    /** Re-read the row under a row lock so concurrent mutations serialise. */
-    private function lock(Subscription $subscription): Subscription
+    /**
+     * Re-read the row under a row lock so concurrent mutations serialise, then
+     * refuse to continue when the state is not the one the admin acted on.
+     *
+     * @throws StaleSubscriptionStateException
+     */
+    private function lock(Subscription $subscription, string $expectedToken): Subscription
     {
-        return Subscription::query()->whereKey($subscription->id)->lockForUpdate()->firstOrFail();
+        $locked = Subscription::query()->whereKey($subscription->id)->lockForUpdate()->firstOrFail();
+        $this->assertToken($locked, $expectedToken);
+
+        return $locked;
+    }
+
+    /**
+     * @throws StaleSubscriptionStateException
+     */
+    private function assertToken(Subscription $locked, string $expectedToken): void
+    {
+        $current = SubscriptionStateToken::for($locked);
+
+        if (! hash_equals($current, $expectedToken)) {
+            throw StaleSubscriptionStateException::forToken($expectedToken, $current);
+        }
+    }
+
+    /**
+     * The state before a mutation, for the event's from_* snapshot.
+     *
+     * @return array{0: SubscriptionStatus, 1: ?int, 2: ?CarbonImmutable, 3: ?CarbonImmutable}
+     */
+    private function before(Subscription $locked): array
+    {
+        return [
+            $locked->status,
+            $locked->plan_id,
+            $locked->current_period_start === null ? null : CarbonImmutable::instance($locked->current_period_start),
+            $locked->current_period_end === null ? null : CarbonImmutable::instance($locked->current_period_end),
+        ];
     }
 
     /** Reflect the committed state on the caller's instance and return it. */

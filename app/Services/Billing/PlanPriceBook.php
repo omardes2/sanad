@@ -6,6 +6,7 @@ namespace App\Services\Billing;
 
 use App\Enums\PlanPriceVersionSource;
 use App\Exceptions\Billing\PlanPriceOverlapException;
+use App\Exceptions\Billing\StalePlanPriceVersionException;
 use App\Models\Plan;
 use App\Models\PlanPriceVersion;
 use App\Services\Audit\AuditLogger;
@@ -26,6 +27,11 @@ use Illuminate\Support\Facades\DB;
  *
  * Versions are never rewritten, split or back-dated; the only write to an
  * existing row is closing it once.
+ *
+ * Stale protection (admin edits): the caller passes the id of the open version
+ * it loaded the form from (NULL when the plan had none); after the lock the
+ * current open version is re-read and a mismatch is refused BEFORE anything is
+ * written — no close, no new version, no audit.
  */
 final class PlanPriceBook
 {
@@ -51,11 +57,36 @@ final class PlanPriceBook
     /**
      * @throws PlanPriceOverlapException
      */
-    public function recordVersion(Plan $plan, CarbonImmutable $from, PlanPriceVersionSource $source, ?int $createdBy = null): PlanPriceVersion
+    /**
+     * Under the plan row lock (the caller must hold it), refuse to continue
+     * when the open version is not the one the admin loaded.
+     *
+     * @throws StalePlanPriceVersionException
+     */
+    public function assertOpenVersionIs(int $planId, ?int $expectedOpenVersionId): void
     {
-        return DB::transaction(function () use ($plan, $from, $source, $createdBy): PlanPriceVersion {
+        $current = $this->openVersionFor($planId)?->id;
+
+        if ($current !== $expectedOpenVersionId) {
+            throw StalePlanPriceVersionException::forVersion($expectedOpenVersionId, $current);
+        }
+    }
+
+    /**
+     * @param  int|null  $expectedOpenVersionId  the open version the caller acted on (NULL = none); checked only when $enforceExpected
+     *
+     * @throws PlanPriceOverlapException
+     * @throws StalePlanPriceVersionException
+     */
+    public function recordVersion(Plan $plan, CarbonImmutable $from, PlanPriceVersionSource $source, ?int $createdBy = null, ?int $expectedOpenVersionId = null, bool $enforceExpected = false): PlanPriceVersion
+    {
+        return DB::transaction(function () use ($plan, $from, $source, $createdBy, $expectedOpenVersionId, $enforceExpected): PlanPriceVersion {
             // Serialise every version change for this plan on the parent row.
             $locked = Plan::query()->whereKey($plan->id)->lockForUpdate()->firstOrFail();
+
+            if ($enforceExpected) {
+                $this->assertOpenVersionIs($locked->id, $expectedOpenVersionId);
+            }
 
             $overlap = PlanPriceVersion::query()
                 ->where('plan_id', $locked->id)

@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use App\Enums\SubscriptionEventType;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -20,6 +22,12 @@ use Illuminate\Support\Facades\Schema;
  *    existed is never invented).
  *  - effective_at is the UTC instant the transition took effect — for a
  *    baseline that is the capture instant, never a back-dated one.
+ *  - from_period_* / to_period_* snapshot the service period boundaries
+ *    (current_period_start/end) before and after the transition — Phase E1
+ *    needs the period as it WAS at the event, not only status/plan. NULL on the
+ *    from side for a creation or a baseline; never back-filled or guessed.
+ *  - event_type is a fixed vocabulary (SubscriptionEventType); PostgreSQL
+ *    additionally enforces it with a CHECK constraint.
  *  - baseline_key ("sub:<id>") is unique so two baseline runs cannot both
  *    baseline the same subscription (NULL for every other event).
  *  - No updated_at: rows are never updated.
@@ -37,6 +45,10 @@ return new class extends Migration
             $table->string('to_status', 32);
             $table->unsignedBigInteger('from_plan_id')->nullable();
             $table->unsignedBigInteger('to_plan_id')->nullable();
+            $table->timestamp('from_period_start')->nullable();
+            $table->timestamp('from_period_end')->nullable();
+            $table->timestamp('to_period_start')->nullable();
+            $table->timestamp('to_period_end')->nullable();
             $table->timestamp('effective_at');
             $table->string('source', 32);
             $table->string('actor_ref', 64);
@@ -51,6 +63,11 @@ return new class extends Migration
             $table->index('event_type', 'subscription_events_type_idx');
             $table->index('source', 'subscription_events_source_idx');
         });
+
+        if (DB::getDriverName() === 'pgsql') {
+            $types = implode("', '", array_map(static fn (SubscriptionEventType $t): string => $t->value, SubscriptionEventType::cases()));
+            DB::statement("ALTER TABLE subscription_events ADD CONSTRAINT subscription_events_type_check CHECK (event_type IN ('{$types}'))");
+        }
     }
 
     public function down(): void

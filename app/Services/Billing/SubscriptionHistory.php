@@ -31,6 +31,8 @@ final class SubscriptionHistory
         SubscriptionEventType $type,
         ?SubscriptionStatus $fromStatus,
         ?int $fromPlanId,
+        ?CarbonImmutable $fromPeriodStart,
+        ?CarbonImmutable $fromPeriodEnd,
         SubscriptionEventSource $source,
         CarbonImmutable $effectiveAt,
         ?string $reason = null,
@@ -46,6 +48,10 @@ final class SubscriptionHistory
             'to_status' => $subscription->status->value,
             'from_plan_id' => $fromPlanId,
             'to_plan_id' => $subscription->plan_id,
+            'from_period_start' => $fromPeriodStart,
+            'from_period_end' => $fromPeriodEnd,
+            'to_period_start' => $subscription->current_period_start,
+            'to_period_end' => $subscription->current_period_end,
             'effective_at' => $effectiveAt,
             'source' => $source->value,
             'actor_ref' => self::actorRef(),
@@ -60,6 +66,7 @@ final class SubscriptionHistory
         $this->audit->record(AuditActions::SubscriptionTransitioned, $subscription, [
             'status' => ['from' => $fromStatus?->value, 'to' => $subscription->status->value],
             'plan_id' => ['from' => $fromPlanId, 'to' => $subscription->plan_id],
+            'current_period_end' => ['from' => $fromPeriodEnd?->toIso8601String(), 'to' => $subscription->current_period_end?->toIso8601String()],
         ], [
             'event_type' => $type->value,
             'event_id' => $event->id,

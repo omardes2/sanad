@@ -99,6 +99,8 @@ class FinanceHistoryBaselineCommand extends Command
                         SubscriptionEventType::Baseline,
                         null,
                         null,
+                        null,
+                        null,
                         SubscriptionEventSource::Baseline,
                         $now,
                         'financial history baseline',

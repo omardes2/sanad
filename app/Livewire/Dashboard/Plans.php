@@ -9,6 +9,7 @@ use App\Enums\PlanFeature;
 use App\Enums\PlanFeatureType;
 use App\Enums\PlanPriceVersionSource;
 use App\Enums\UsageDimension;
+use App\Exceptions\Billing\StalePlanPriceVersionException;
 use App\Models\Plan;
 use App\Services\Audit\AuditLogger;
 use App\Services\Billing\PlanPriceBook;
@@ -81,6 +82,9 @@ class Plans extends Component
 
     public int $sort_order = 0;
 
+    /** The open price version the form was loaded from (NULL = none); stale protection for financial edits. */
+    public ?int $expectedPriceVersionId = null;
+
     public function mount(): void
     {
         $this->currency = $this->defaultCurrency();
@@ -97,12 +101,14 @@ class Plans extends Component
         $this->currency = $this->defaultCurrency();
         $this->limits = $this->blankLimits();
         $this->features = $this->blankFeatures();
+        $this->expectedPriceVersionId = null;
         $this->showForm = true;
     }
 
-    public function edit(int $id): void
+    public function edit(int $id, PlanPriceBook $priceBook): void
     {
         $plan = Plan::findOrFail($id);
+        $this->expectedPriceVersionId = $priceBook->openVersionFor($plan->id)?->id;
 
         $this->editingId = $plan->id;
         $this->name = $plan->name;
@@ -135,6 +141,9 @@ class Plans extends Component
 
     public function save(AuditLogger $audit, PlanPriceBook $priceBook): void
     {
+        // A previous stale-conflict message must not shadow this attempt.
+        $this->resetErrorBag('price');
+
         $data = $this->validate([
             'name' => ['required', 'string', 'max:255'],
             'slug' => ['required', 'string', 'max:255', 'alpha_dash', Rule::unique('plans', 'slug')->ignore($this->editingId)],
@@ -170,27 +179,44 @@ class Plans extends Component
         ]);
 
         $financialChanges = $this->financialChanges($plan, $isNew);
+        $expected = $this->expectedPriceVersionId;
 
-        DB::transaction(function () use ($plan, $isNew, $financialChanges, $audit, $priceBook): void {
-            $plan->save();
+        try {
+            DB::transaction(function () use ($plan, $isNew, $financialChanges, $audit, $priceBook, $expected): void {
+                if (! $isNew && $financialChanges !== []) {
+                    // Lock the plan row first, then refuse a financial edit whose
+                    // open version is no longer the one the form was loaded from —
+                    // before the plan row, the versions or the audit are touched.
+                    Plan::query()->whereKey($plan->id)->lockForUpdate()->firstOrFail();
+                    $priceBook->assertOpenVersionIs($plan->id, $expected);
+                }
 
-            if ($isNew) {
-                $audit->record(AuditActions::PlanCreated, $plan, $financialChanges, ['slug' => $plan->slug]);
-            } elseif ($financialChanges !== []) {
-                $audit->record(AuditActions::PlanFinancialsUpdated, $plan, $financialChanges, ['slug' => $plan->slug]);
-            }
+                $plan->save();
 
-            if ($isNew || $financialChanges !== []) {
-                // E0: the terms just saved become the open version from this instant.
-                $priceBook->recordVersion($plan, CarbonImmutable::now(), PlanPriceVersionSource::Admin, auth()->id());
-            }
+                if ($isNew) {
+                    $audit->record(AuditActions::PlanCreated, $plan, $financialChanges, ['slug' => $plan->slug]);
+                } elseif ($financialChanges !== []) {
+                    $audit->record(AuditActions::PlanFinancialsUpdated, $plan, $financialChanges, ['slug' => $plan->slug]);
+                }
 
-            // At most one default plan.
-            if ($plan->is_default) {
-                Plan::query()->where('id', '!=', $plan->id)->where('is_default', true)->update(['is_default' => false]);
-            }
-        });
+                if ($isNew || $financialChanges !== []) {
+                    // E0: the terms just saved become the open version from this instant.
+                    $priceBook->recordVersion($plan, CarbonImmutable::now(), PlanPriceVersionSource::Admin, auth()->id(), $expected, true);
+                }
 
+                // At most one default plan.
+                if ($plan->is_default) {
+                    Plan::query()->where('id', '!=', $plan->id)->where('is_default', true)->update(['is_default' => false]);
+                }
+            });
+        } catch (StalePlanPriceVersionException) {
+            $this->addError('price', 'تغيّرت الشروط المالية لهذه الباقة منذ فتح النموذج (تعديل متزامن). لم يُحفظ شيء — أعد فتح الباقة وحاول مجددًا.');
+            $this->expectedPriceVersionId = $priceBook->openVersionFor((int) $plan->id)?->id;
+
+            return;
+        }
+
+        $this->expectedPriceVersionId = $priceBook->openVersionFor((int) $plan->id)?->id;
         $this->showForm = false;
     }
 

@@ -59,6 +59,9 @@ it('captures baseline events and price versions as of NOW, from NULL, and is ide
         ->and($eventA->to_status)->toBe(SubscriptionStatus::Active)->and($eventA->to_plan_id)->toBe($basic->id)
         ->and($eventA->effective_at->greaterThanOrEqualTo($before->subSecond()))->toBeTrue() // capture instant, NOT started_at (January)
         ->and($eventA->effective_at->year)->toBe($before->year)->and($eventA->effective_at->month)->toBe($before->month)
+        ->and($eventA->from_period_start)->toBeNull()->and($eventA->from_period_end)->toBeNull() // nothing before the baseline is guessed
+        ->and($eventA->to_period_start->equalTo($a->subscription->current_period_start))->toBeTrue()
+        ->and($eventA->to_period_end->equalTo($a->subscription->current_period_end))->toBeTrue()
         ->and($eventA->baseline_key)->toBe('sub:'.$a->subscription->id)
         ->and($eventA->actor_ref)->toBe('console')
         ->and($eventB->to_status)->toBe(SubscriptionStatus::PastDue)->and($eventB->to_plan_id)->toBe($ils->id);

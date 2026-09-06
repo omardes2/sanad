@@ -2,24 +2,28 @@
 
 declare(strict_types=1);
 
+use App\Enums\PlanPriceVersionSource;
 use App\Models\AuditLog;
 use App\Models\Plan;
 use App\Models\PlanPriceVersion;
 use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
 use App\Models\User;
+use App\Services\Billing\PlanPriceBook;
 use App\Support\Audit\AuditActions;
+use App\Support\Billing\SubscriptionStateToken;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\Process\Process;
 
 /**
  * GENUINE parallel tests for the Phase E0 financial history on PostgreSQL:
- *  - concurrent financial changes to ONE plan → versions serialised on the
- *    parent row lock: one open version, contiguous periods, no overlap;
+ *  - N admins editing ONE plan's price from the SAME open version → exactly one
+ *    wins (one close, one new version, one audit), the rest are stale, no
+ *    overlap; the losers can retry from the new version;
  *  - concurrent baseline runs → one baseline per subscription, one open
  *    version per plan, one audit entry;
- *  - concurrent subscription transitions → row lock serialises them and the
- *    event chain (from_status == previous to_status) stays consistent.
+ *  - N admins acting on the SAME viewed subscription state → exactly one
+ *    wins (one event, one audit), the rest are stale, projection = winner.
  *
  * Runs only on a reachable pgsql connection. Not wrapped in RefreshDatabase;
  * it removes only the rows it created.
@@ -65,13 +69,14 @@ function e0Run(array $args): Process
     return $p;
 }
 
-it('serialises concurrent financial changes on one plan: one open version, contiguous, no overlap', function () {
+it('of 6 concurrent financial edits from the same open version exactly one wins; the rest are stale; no overlap', function () {
     $plan = e0Plan('price');
+    $v1 = app(PlanPriceBook::class)->recordVersion($plan, now()->subMinute()->toImmutable(), PlanPriceVersionSource::Baseline);
 
     try {
         $processes = [];
         for ($i = 0; $i < 6; $i++) {
-            $processes[] = e0Run(['sanad:plan-price-probe', (string) $plan->id, (string) (11 + $i)]);
+            $processes[] = e0Run(['sanad:plan-price-probe', (string) $plan->id, (string) (11 + $i), (string) $v1->id]);
         }
 
         $outcomes = [];
@@ -82,21 +87,27 @@ it('serialises concurrent financial changes on one plan: one open version, conti
         }
 
         $versions = PlanPriceVersion::query()->where('plan_id', $plan->id)->orderBy('effective_from')->orderBy('id')->get();
-        $versioned = count(array_filter($outcomes, fn ($o) => $o === 'versioned'));
+        $counts = array_count_values($outcomes);
 
-        expect($versioned)->toBeGreaterThanOrEqual(1)
-            ->and($versions)->toHaveCount($versioned)
+        expect($counts['versioned'] ?? 0)->toBe(1)
+            ->and($counts['stale'] ?? 0)->toBe(5)
+            ->and($versions)->toHaveCount(2) // v1 (closed once) + the winner's version
+            ->and($versions[0]->id)->toBe($v1->id)
+            ->and($versions[0]->effective_until)->not->toBeNull()
+            ->and($versions[0]->effective_until->equalTo($versions[1]->effective_from))->toBeTrue() // contiguous, no overlap
+            ->and($versions[1]->effective_until)->toBeNull()
             ->and($versions->whereNull('effective_until'))->toHaveCount(1)
-            ->and($versions->last()->effective_until)->toBeNull();
+            ->and((string) $versions[1]->price)->toBe((string) $plan->fresh()->price) // projection = winner
+            ->and(AuditLog::where('subject_type', (new PlanPriceVersion)->getMorphClass())->where('subject_id', $versions[1]->id)->count())->toBe(1);
 
-        for ($i = 1; $i < $versions->count(); $i++) {
-            expect($versions[$i - 1]->effective_until)->not->toBeNull()
-                ->and($versions[$i - 1]->effective_until->equalTo($versions[$i]->effective_from))->toBeTrue() // contiguous
-                ->and($versions[$i]->effective_from->greaterThan($versions[$i - 1]->effective_from))->toBeTrue(); // strictly ordered, no overlap
-        }
-
-        // The open version carries the plan's final price.
-        expect((string) $versions->last()->price)->toBe((string) $plan->fresh()->price);
+        // A loser retries LATER from the NEW open version and succeeds (versions
+        // are second-precise: a retry in the same second as the winner's start is
+        // refused as an overlap, never written).
+        usleep(1_100_000);
+        $retry = e0Run(['sanad:plan-price-probe', (string) $plan->id, '99', (string) $versions[1]->id]);
+        $retry->wait();
+        expect(trim($retry->getOutput()))->toBe('versioned')
+            ->and(PlanPriceVersion::query()->where('plan_id', $plan->id)->count())->toBe(3);
     } finally {
         e0Cleanup([$plan], []);
     }
@@ -133,32 +144,41 @@ it('concurrent baseline runs leave one baseline per subscription, one open versi
     }
 });
 
-it('serialises concurrent subscription transitions and keeps the event chain consistent', function () {
+it('of 6 concurrent admin transitions from the same viewed state exactly one wins; the rest are stale; projection = winner', function () {
     $plan = e0Plan('transition');
     $user = User::factory()->create(['is_admin' => false]);
-    $subscription = Subscription::create(['subscriber_id' => $user->id, 'plan_id' => $plan->id, 'status' => 'active', 'started_at' => now(), 'current_period_end' => now()->addMonth()]);
+    $subscription = Subscription::create(['subscriber_id' => $user->id, 'plan_id' => $plan->id, 'status' => 'active', 'started_at' => now(), 'current_period_start' => now(), 'current_period_end' => now()->addMonth()]);
+    $token = SubscriptionStateToken::for($subscription); // what every admin saw
 
     try {
         $processes = [];
-        foreach (['suspend', 'activate', 'suspend', 'extend', 'activate', 'suspend'] as $action) {
-            $processes[] = e0Run(['sanad:subscription-transition-probe', (string) $subscription->id, $action]);
+        foreach (['suspend', 'extend', 'suspend', 'extend', 'suspend', 'extend'] as $action) {
+            $processes[] = e0Run(['sanad:subscription-transition-probe', (string) $subscription->id, $action, $token]);
         }
+
+        $outcomes = [];
         foreach ($processes as $p) {
             $p->wait();
             expect($p->getExitCode())->toBe(0, $p->getOutput().$p->getErrorOutput());
+            $outcomes[] = trim($p->getOutput());
         }
 
-        $events = SubscriptionEvent::query()->where('subscription_id', $subscription->id)->orderBy('id')->get();
+        $winners = array_values(array_filter($outcomes, fn ($o) => str_starts_with($o, 'ok:')));
+        $events = SubscriptionEvent::query()->where('subscription_id', $subscription->id)->get();
 
-        expect($events)->toHaveCount(6)
-            ->and($events->first()->from_status->value)->toBe('active');
+        expect($winners)->toHaveCount(1)
+            ->and(count(array_filter($outcomes, fn ($o) => $o === 'stale')))->toBe(5)
+            ->and($events)->toHaveCount(1)
+            ->and($events->first()->from_status->value)->toBe('active')
+            ->and($events->first()->to_status)->toBe($subscription->fresh()->status) // projection = winner
+            ->and('ok:'.$subscription->fresh()->status->value)->toBe($winners[0])
+            ->and(AuditLog::where('subject_type', (new Subscription)->getMorphClass())->where('subject_id', $subscription->id)->count())->toBe(1);
 
-        for ($i = 1; $i < $events->count(); $i++) {
-            expect($events[$i]->from_status)->toBe($events[$i - 1]->to_status);
-        }
-
-        expect($events->last()->to_status)->toBe($subscription->fresh()->status)
-            ->and(AuditLog::where('subject_type', (new Subscription)->getMorphClass())->where('subject_id', $subscription->id)->count())->toBe(6);
+        // A loser that refreshes gets the new token and can act.
+        $retry = e0Run(['sanad:subscription-transition-probe', (string) $subscription->id, 'extend', SubscriptionStateToken::for($subscription->fresh())]);
+        $retry->wait();
+        expect(trim($retry->getOutput()))->toStartWith('ok:')
+            ->and(SubscriptionEvent::query()->where('subscription_id', $subscription->id)->count())->toBe(2);
     } finally {
         e0Cleanup([$plan], [$user]);
     }

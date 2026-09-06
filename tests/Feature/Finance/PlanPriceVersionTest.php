@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Enums\BillingPeriod;
 use App\Enums\PlanPriceVersionSource;
 use App\Exceptions\Billing\PlanPriceOverlapException;
+use App\Exceptions\Billing\StalePlanPriceVersionException;
 use App\Livewire\Dashboard\Plans;
 use App\Models\AuditLog;
 use App\Models\Plan;
@@ -136,4 +137,58 @@ it('blocks deleting a plan that has price history', function () {
     // A savepoint keeps the outer test transaction usable on PostgreSQL (25P02).
     expect(fn () => DB::transaction(fn () => $plan->delete()))->toThrow(QueryException::class)
         ->and(Plan::query()->whereKey($plan->id)->exists())->toBeTrue();
+});
+
+it('refuses a financial edit whose open version is no longer the one the form was loaded from: nothing written', function () {
+    $admin = userWithRole(Role::SuperAdmin);
+    Livewire::actingAs($admin)->test(Plans::class)->call('new')->set(planFormE0())->call('save');
+    $plan = Plan::where('slug', 'plus')->sole();
+    $v1 = PlanPriceVersion::query()->sole();
+
+    // Two admins open the same form (same open version v1).
+    $adminA = Livewire::actingAs($admin)->test(Plans::class)->call('edit', $plan->id);
+    $adminB = Livewire::actingAs($admin)->test(Plans::class)->call('edit', $plan->id);
+    expect($adminA->get('expectedPriceVersionId'))->toBe($v1->id)->and($adminB->get('expectedPriceVersionId'))->toBe($v1->id);
+
+    $this->travel(30)->seconds();
+    $adminA->set('price', '20')->call('save')->assertHasNoErrors();
+    $v2 = PlanPriceVersion::query()->whereNull('effective_until')->sole();
+
+    $this->travel(30)->seconds();
+    $adminB->set('price', '30')->call('save')->assertHasErrors(['price']);
+
+    expect((string) $plan->fresh()->price)->toBe('20.00') // B wrote nothing
+        ->and(PlanPriceVersion::query()->count())->toBe(2)
+        ->and($v2->fresh()->effective_until)->toBeNull() // v2 not closed
+        ->and($v1->fresh()->effective_until->equalTo($v2->effective_from))->toBeTrue() // v1 closed exactly once
+        ->and(AuditLog::where('action', AuditActions::PlanPriceVersioned)->count())->toBe(2)
+        ->and(AuditLog::where('action', AuditActions::PlanFinancialsUpdated)->count())->toBe(1)
+        ->and($adminB->get('expectedPriceVersionId'))->toBe($v2->id); // refreshed: B may retry from the new version
+
+    $this->travel(30)->seconds();
+    $adminB->set('price', '30')->call('save')->assertHasNoErrors();
+    expect((string) $plan->fresh()->price)->toBe('30.00')->and(PlanPriceVersion::query()->count())->toBe(3);
+
+    // Admin A's form is stale again (it still carries price 20 while the plan is at 30):
+    // saving it would silently revert the price, so it is refused — nothing written.
+    $adminA->set('name', 'Renamed')->call('save')->assertHasErrors(['price']);
+    expect($plan->fresh()->name)->not->toBe('Renamed')->and((string) $plan->fresh()->price)->toBe('30.00')->and(PlanPriceVersion::query()->count())->toBe(3);
+
+    // A non-financial edit from a FRESH form saves without touching the versions.
+    Livewire::actingAs($admin)->test(Plans::class)->call('edit', $plan->id)->set('name', 'Renamed')->call('save')->assertHasNoErrors();
+    expect($plan->fresh()->name)->toBe('Renamed')->and(PlanPriceVersion::query()->count())->toBe(3);
+});
+
+it('enforces the expected open version at the service level too', function () {
+    $plan = billingPlan(attrs: ['price' => '10.00']);
+    $book = app(PlanPriceBook::class);
+    $v1 = $book->recordVersion($plan, CarbonImmutable::now()->subDay(), PlanPriceVersionSource::Baseline);
+
+    expect(fn () => $book->recordVersion($plan, CarbonImmutable::now(), PlanPriceVersionSource::Admin, null, null, true))->toThrow(StalePlanPriceVersionException::class)
+        ->and(fn () => $book->recordVersion($plan, CarbonImmutable::now(), PlanPriceVersionSource::Admin, null, $v1->id + 999, true))->toThrow(StalePlanPriceVersionException::class)
+        ->and(PlanPriceVersion::query()->count())->toBe(1)
+        ->and($v1->fresh()->effective_until)->toBeNull();
+
+    $book->recordVersion($plan, CarbonImmutable::now(), PlanPriceVersionSource::Admin, null, $v1->id, true);
+    expect(PlanPriceVersion::query()->count())->toBe(2);
 });

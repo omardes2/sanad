@@ -58,6 +58,7 @@
                         @endforeach
                     </select>
                     <button wire:click="assignPlan" class="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">تعيين وتفعيل</button>
+                @error('state') <p class="mt-1 text-sm font-semibold text-rose-700" data-testid="stale-state">{{ $message }}</p> @enderror
                 </div>
                 @error('planId') <p class="mt-1 text-sm text-rose-600">{{ $message }}</p> @enderror
             </div>
