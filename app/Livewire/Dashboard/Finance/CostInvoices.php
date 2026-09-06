@@ -25,7 +25,7 @@ use Livewire\WithPagination;
  * the route, the mount and every action. Read-only render: allowlisted,
  * bounded, URL-kept filters (component · counterparty key · status · period
  * month window UTC ≤ 13 months · currency as a secondary narrowing · exact
- * invoice_ref), 25 rows per page in a stable indexed order (id desc), and the
+ * invoice_ref), 25 rows per page in a stable indexed order (period_start desc, id desc — served by the (period_start, id) index), and the
  * Record Invoice form with one attempt key per attempt (the service's own
  * idempotency key). Lines, lifecycle and evidence live on the detail page.
  * Counterparties are stable keys — never names. A confirmed invoice is
@@ -142,7 +142,8 @@ class CostInvoices extends Component
             $windowError = $e->getMessage();
         }
 
-        $query = CostInvoice::query()->orderByDesc('id');
+        // Stable order served by cost_invoices_period_start_id_idx (period_start, id): newest period first, id as the tiebreaker — inside one month it is exactly id desc.
+        $query = CostInvoice::query()->orderByDesc('period_start')->orderByDesc('id');
 
         if ($window !== null) {
             $query->where('period_start', '>=', $window[0]->format('Y-m-d H:i:s'))->where('period_start', '<', $window[1]->format('Y-m-d H:i:s'));

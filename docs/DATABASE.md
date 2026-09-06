@@ -127,7 +127,7 @@
 
 ### `cost_invoices` (E2)
 فاتورة مورّد كـ**دليل** لمكوّن تكلفة واحد (`provider/communication/external`)؛ التأكيد لا يجعل الإجمالي تكلفة فعلية.
-- `component` · `counterparty_key` (مفتاح ثابت محدود؛ لمكوّن provider يجب أن يطابق `ai_providers.key`؛ لا أسماء ولا PII) · `invoice_ref?` (فريد مع `counterparty_key` عند وجوده) · `idempotency_key` (إلزامي، فريد) · `issued_at` · `period_start/period_end` (تغطية الفاتورة نفسها) · `currency` · `total_amount` decimal(16,6) موقَّع (كامل المستند بضرائبه وائتمانه) · `evidence_ref?` · `current_status` + `latest_event_id` + `superseded_by_id?` (projection) · `recorded_by_ref`. عدة فواتير لنفس الطرف والفترة مسموحة.
+- `component` · `counterparty_key` (مفتاح ثابت محدود؛ لمكوّن provider يجب أن يطابق `ai_providers.key`؛ لا أسماء ولا PII) · `invoice_ref?` (فريد مع `counterparty_key` عند وجوده) · `idempotency_key` (إلزامي، فريد) · `issued_at` · `period_start/period_end` (تغطية الفاتورة نفسها) · `currency` · `total_amount` decimal(16,6) موقَّع (كامل المستند بضرائبه وائتمانه) · `evidence_ref?` · `current_status` + `latest_event_id` + `superseded_by_id?` (projection) · `recorded_by_ref`. عدة فواتير لنفس الطرف والفترة مسموحة. فهارس: `(component, counterparty_key, period_start)`، `current_status`، unique `(counterparty_key, invoice_ref)`، و(E5.2b) `cost_invoices_period_start_id_idx (period_start, id)` لنافذة الشهر وحدها مع ترتيب id.
 
 ### `cost_invoice_events` (E2، append-only)
 `draft / confirmed / voided / superseded` (enum + CHECK)؛ فهرس جزئي فريد "confirmed واحد لكل فاتورة" على المحرّكين.

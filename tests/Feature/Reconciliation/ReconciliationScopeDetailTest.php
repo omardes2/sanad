@@ -9,6 +9,7 @@ use App\Models\CostInvoiceAllocation;
 use App\Models\CostReconciliation;
 use App\Models\CostReconciliationScope;
 use App\Services\Reconciliation\CostInvoiceService;
+use App\Services\Reconciliation\CostReconciliationService;
 use App\Support\Audit\AuditActions;
 use App\Support\Rbac\Role;
 use Carbon\CarbonImmutable;
@@ -227,6 +228,47 @@ it('Adjust: on the current reconciliation only, signed amount ≠ 0, reason and 
     $page->set('adjustKey', 'ui:'.str()->uuid())->call('openConfirm', 'adjust')->set('adjAmount', '-1')->set('adjReason', 'x')->set('adjEvidence', 'y')->call('adjust')->assertHasErrors(['adjustment.stale']);
     $page->call('adjust')->assertHasNoErrors(); // explicit second decision on the refreshed pointer
     expect(CostAdjustment::query()->orderByDesc('id')->firstOrFail()->cost_reconciliation_id)->toBe($rec2->id)->and(CostAdjustment::count())->toBe(3);
+});
+
+it('historical adjustment replay is safe: an adjustment with key X on v1, then the scope moves to v2 ⇒ the service replay with X returns the v1 adjustment only (no pointer move, nothing on v2, no audit); from the page (current = v2) the same key is an IDEMPOTENCY CONFLICT and never shown as a new adjustment on the current reconciliation', function () {
+    e2Provider();
+    $finance = userWithRole(Role::Finance);
+    $this->actingAs($finance);
+    $invoice = e2ConfirmedInvoice(['service' => '100.000000']);
+    $line = $invoice->lines()->firstOrFail();
+    $v1 = e2Reconcile([[$line->id, '60.000000']]);
+    $scope = CostReconciliationScope::query()->findOrFail($v1->scope_id);
+    $service = app(CostReconciliationService::class);
+    $key = 'ui:'.str()->uuid();
+    $historical = $service->adjust($v1->id, '-5.000000', 'credit_note', 'cn:1', $key);
+    $page = scopePage($finance, $scope); // rendered while v1 is current
+
+    $v2 = e2Reconcile([[$line->id, '40.000000']], ['expectedCurrentReconciliationId' => $v1->id]);
+    $audits = fn () => AuditLog::where('action', AuditActions::CostAdjusted)->where('subject_id', $scope->id)->count();
+    expect($scope->fresh()->current_reconciliation_id)->toBe($v2->id)->and($audits())->toBe(1);
+
+    // service-level replay with X on the historical reconciliation ⇒ the SAME v1 adjustment: no row, no audit, no pointer move
+    $replay = $service->adjust($v1->id, '-5.000000', 'credit_note', 'cn:1', $key);
+    expect($replay->id)->toBe($historical->id)->and($replay->wasRecentlyCreated)->toBeFalse()->and($replay->cost_reconciliation_id)->toBe($v1->id)
+        ->and(CostAdjustment::count())->toBe(1)->and(CostAdjustment::query()->where('cost_reconciliation_id', $v2->id)->count())->toBe(0)
+        ->and($scope->fresh()->current_reconciliation_id)->toBe($v2->id)->and($scope->fresh()->version)->toBe(2)->and($audits())->toBe(1);
+
+    // page path: the rendered token is stale first (pointer moved) — refreshed, nothing re-run
+    $page->set('adjustKey', $key)->call('openConfirm', 'adjust')->set('adjAmount', '-5')->set('adjReason', 'credit_note')->set('adjEvidence', 'cn:1')->call('adjust')->assertHasErrors(['adjustment.stale']);
+    expect($page->get('expectedId'))->toBe((string) $v2->id)->and(CostAdjustment::count())->toBe(1);
+
+    // the user submits again with the SAME key X on the refreshed page (current = v2): different reconciliation ⇒ IDEMPOTENCY CONFLICT, not a new adjustment on v2
+    $page->set('adjustKey', $key)->call('adjust')->assertHasErrors(['adjustment.conflict'])->assertSee('IDEMPOTENCY CONFLICT')->assertDontSee('أُضيف التعديل');
+    expect(CostAdjustment::count())->toBe(1)->and(CostAdjustment::query()->where('cost_reconciliation_id', $v2->id)->count())->toBe(0)
+        ->and($scope->fresh()->current_reconciliation_id)->toBe($v2->id)->and($audits())->toBe(1)->and($page->get('adjustKey'))->toBe($key);
+
+    // the revision history shows X under v1 only; v2 carries no adjustment
+    $html = $this->get(route('dashboard.finance.reconciliation.show', $scope->id))->assertOk()->getContent();
+    $v1Block = substr($html, strpos($html, 'data-testid="revision-'.$v1->id.'"'));
+    $v2Block = substr($html, strpos($html, 'data-testid="revision-'.$v2->id.'"'), strpos($html, 'data-testid="revision-'.$v1->id.'"') - strpos($html, 'data-testid="revision-'.$v2->id.'"'));
+    expect(str_contains($v1Block, 'data-testid="adjustment-'.$historical->id.'"'))->toBeTrue()
+        ->and(str_contains($v2Block, 'data-testid="adjustment-'))->toBeFalse()
+        ->and(str_contains($html, 'rev-adjusted-'.$v2->id.'">0.000000 · 40.000000'))->toBeTrue(); // v2: adjustments 0, adjusted = base
 });
 
 it('audit subjects: reconcile / adjust are recorded under CostReconciliationScope#<scope>; the detail link reaches cost.reconciled (reconciliation id) and cost.adjusted (adjustment id); no subject under CostReconciliation / CostAdjustment', function () {

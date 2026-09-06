@@ -16,7 +16,7 @@ uses(RefreshDatabase::class);
  * columns back-filled by the migration itself (no separate command).
  */
 it('back-fills derived ledger columns for rows that pre-date the ledger and stays reversible', function () {
-    // Undo the E5.2b migration (idempotency_key on cost_adjustments),
+    // Undo the two E5.2b migrations (period_start index on cost_invoices, idempotency_key on cost_adjustments),
     // the E5.2a migration (idempotency_key on payment_allocations / refund_allocations),
     // the three E4 migrations (finance_period_close_inputs, finance_period_closes,
     // finance_period_close_scopes), the six E3 migrations (fx snapshot columns on cost_invoice_allocations,
@@ -31,7 +31,7 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
     // migration (app_settings), the two C0 migrations (audit context, permission
     // tables), the four B2 migrations (pricing refs, model_prices, ai_models,
     // ai_providers) and the two B1 migrations (usage_charges, ledger).
-    Artisan::call('migrate:rollback', ['--step' => 38, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 39, '--force' => true]);
 
     expect(Schema::hasTable('finance_period_close_inputs'))->toBeFalse()
         ->and(Schema::hasTable('finance_period_closes'))->toBeFalse()

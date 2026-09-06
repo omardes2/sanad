@@ -7,8 +7,11 @@ use App\Services\Reconciliation\CostInvoiceService;
 use App\Services\Reconciliation\CostReconciliationService;
 use App\Support\Rbac\Role;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
 
@@ -101,9 +104,103 @@ it('PostgreSQL EXPLAIN: the invoice list uses cost_invoices_scope_idx / status_i
         ->and($plan('SELECT * FROM cost_invoices WHERE counterparty_key = ? AND invoice_ref = ? AND period_start >= ? AND period_start < ? ORDER BY id DESC LIMIT 25', ['groq', 'X-7', '2026-01-01 00:00:00', '2027-01-01 00:00:00']))->toContain('cost_invoices_counterparty_ref_unique')
         ->and($plan('SELECT * FROM cost_reconciliation_scopes WHERE component = ? AND counterparty_key = ? AND period_start >= ? AND period_start < ? ORDER BY id DESC LIMIT 25', ['external', 'z-9', '2026-01-01 00:00:00', '2027-01-01 00:00:00']))->toContain('cost_reconciliation_scopes_scope_unique')
         ->and($plan('SELECT * FROM cost_reconciliation_scopes WHERE period_start >= ? AND period_start < ? AND current_reconciliation_id IS NULL ORDER BY id DESC LIMIT 25', ['2026-08-01 00:00:00', '2026-09-01 00:00:00']))->not->toContain('Bitmap Heap Scan on cost_invoices');
-    // Documented, not asserted: the month window ALONE (no component / counterparty / status / ref) has no index of its own on
-    // cost_invoices (period_start is the third column of cost_invoices_scope_idx) — with LIMIT 25 the planner reads the small
-    // table sequentially. Adding an index is a schema decision that is NOT taken here (E5.2b = one approved migration only).
-    $windowOnly = $plan('SELECT * FROM cost_invoices WHERE period_start >= ? AND period_start < ? ORDER BY id DESC LIMIT 25', ['2026-08-01 00:00:00', '2026-09-01 00:00:00']);
-    expect($windowOnly)->toContain('cost_invoices');
+});
+
+/**
+ * The exact SQL (with bindings) the invoice list issues for a month-window-only page: the paginator's count and the 25-row select.
+ *
+ * @return list<array{sql: string, bindings: array<int, mixed>}>
+ */
+function invoiceListStatements(string $month = '2026-08'): array
+{
+    $captured = [];
+    DB::listen(function (QueryExecuted $q) use (&$captured): void {
+        if (str_contains($q->sql, 'from "cost_invoices"') && str_contains($q->sql, 'period_start')) {
+            $captured[] = ['sql' => $q->sql, 'bindings' => $q->bindings];
+        }
+    });
+    test()->get(route('dashboard.finance.cost_invoices', ['fromMonth' => $month, 'toMonth' => $month]))->assertOk();
+
+    return $captured;
+}
+
+/** 6,000 invoices over 12 months × 3 components × 40 counterparties, inserted in bulk (planner-realistic volume; no service, no audit). */
+function seedInvoiceVolume(): void
+{
+    $components = ['provider', 'communication', 'external'];
+    $rows = [];
+    for ($i = 0; $i < 6000; $i++) {
+        $month = CarbonImmutable::parse('2026-01-01', 'UTC')->addMonths(intdiv($i, 500)); // chronological: ids grow with the months, as real invoices do
+        $rows[] = [
+            'component' => $components[$i % 3], 'counterparty_key' => 'cp-'.($i % 40), 'invoice_ref' => 'V-'.$i, 'idempotency_key' => 'vol-'.$i,
+            'issued_at' => $month->addDays($i % 28)->format('Y-m-d H:i:s'), 'period_start' => $month->format('Y-m-d H:i:s'), 'period_end' => $month->addMonth()->format('Y-m-d H:i:s'),
+            'currency' => 'USD', 'total_amount' => '10.000000', 'current_status' => $i % 5 === 0 ? 'draft' : 'confirmed', 'recorded_by_ref' => 'seed', 'created_at' => now(), 'updated_at' => now(),
+        ];
+        if (count($rows) === 500) {
+            DB::table('cost_invoices')->insert($rows);
+            $rows = [];
+        }
+    }
+}
+
+it('realistic PostgreSQL EXPLAIN on the page\'s own pagination SQL (6,000 invoices): month-window-only ⇒ Seq Scan WITHOUT the (period_start, id) index and an index plan WITH it; currency / issued_at stay unindexed', function () {
+    if (DB::connection()->getDriverName() !== 'pgsql') {
+        $this->markTestSkipped('EXPLAIN check runs on PostgreSQL only.');
+    }
+
+    seedInvoiceVolume();
+    $this->actingAs(userWithRole(Role::Finance));
+    $statements = invoiceListStatements('2026-01'); // the OLDEST month: the worst case for an id-ordered walk that has to skip newer rows
+    expect($statements)->toHaveCount(2)
+        ->and($statements[0]['sql'])->toStartWith('select count(*) as')
+        ->and($statements[1]['sql'])->toContain('order by "period_start" desc, "id" desc limit 25');
+    $plan = fn (array $st) => collect(DB::select('EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) '.$st['sql'], $st['bindings']))->pluck('QUERY PLAN')->implode("\n");
+    $removed = fn (string $plan) => (int) (preg_match('/Rows Removed by Filter: (\d+)/', $plan, $m) === 1 ? $m[1] : 0);
+
+    // BEFORE: without the E5.2b index (rolled back inside this transaction) the count scans the whole table and the page walks the
+    // primary key backwards discarding thousands of newer rows before it finds 25 of the requested month — neither uses an index on the window
+    Artisan::call('migrate:rollback', ['--step' => 1, '--force' => true]);
+    DB::statement('ANALYZE cost_invoices');
+    expect(Schema::hasIndex('cost_invoices', 'cost_invoices_period_start_id_idx'))->toBeFalse();
+    $beforeCount = $plan($statements[0]);
+    $beforePage = $plan($statements[1]);
+    expect($beforeCount)->toContain('Seq Scan on cost_invoices')
+        ->and($beforePage)->toMatch('/Seq Scan on cost_invoices|Index Scan Backward using cost_invoices_pkey/')
+        ->and($removed($beforePage))->toBeGreaterThan(5000, $beforePage) // 6,000 rows, 500 in January: the walk discards the other months first
+        ->and($removed($beforeCount))->toBeGreaterThan(5000, $beforeCount);
+
+    // AFTER: with the index, both statements are index-backed on cost_invoices_period_start_id_idx — no sequential scan, no filter discards
+    Artisan::call('migrate', ['--force' => true]);
+    DB::statement('ANALYZE cost_invoices');
+    $afterCount = $plan($statements[0]);
+    $afterPage = $plan($statements[1]);
+    expect($afterCount)->toContain('cost_invoices_period_start_id_idx')->not->toContain('Seq Scan')
+        ->and($afterPage)->toContain('cost_invoices_period_start_id_idx')->not->toContain('Seq Scan')->not->toContain('Index Scan Backward using cost_invoices_pkey')
+        ->and($afterPage)->toMatch('/(Index Scan|Index Only Scan|Bitmap Index Scan)/')
+        ->and($removed($afterPage))->toBe(0, $afterPage)
+        ->and($removed($afterCount))->toBe(0, $afterCount);
+    fwrite(STDERR, "\n[EXPLAIN before/count]\n{$beforeCount}\n[EXPLAIN before/page]\n{$beforePage}\n[EXPLAIN after/count]\n{$afterCount}\n[EXPLAIN after/page]\n{$afterPage}\n");
+
+    // no index on currency or issued_at (not approved): a currency-only or issued_at-only predicate stays a table scan, and the list never offers them as primary filters
+    $indexes = collect(Schema::getIndexes('cost_invoices'))->pluck('columns')->map(fn ($c) => implode(',', $c))->all();
+    expect($indexes)->not->toContain('currency')->not->toContain('issued_at');
+});
+
+it('SQLite plan: the month-window-only count and page statements use cost_invoices_period_start_id_idx (on PostgreSQL the realistic EXPLAIN above is the proof; the index presence is asserted here)', function () {
+    if (DB::connection()->getDriverName() !== 'sqlite') {
+        expect(Schema::hasIndex('cost_invoices', 'cost_invoices_period_start_id_idx'))->toBeTrue();
+
+        return;
+    }
+
+    e2Provider();
+    for ($i = 0; $i < 30; $i++) {
+        e2Invoice(['invoiceRef' => 'S-'.$i]);
+    }
+    $this->actingAs(userWithRole(Role::Finance));
+    $statements = invoiceListStatements();
+    $plan = fn (array $st) => collect(DB::select('EXPLAIN QUERY PLAN '.$st['sql'], $st['bindings']))->pluck('detail')->implode("\n");
+    expect($statements)->toHaveCount(2)
+        ->and($plan($statements[0]))->toContain('USING COVERING INDEX cost_invoices_period_start_id_idx')
+        ->and($plan($statements[1]))->toContain('USING INDEX cost_invoices_period_start_id_idx')->not->toContain('TEMP B-TREE'); // the index serves the range AND the order
 });
