@@ -147,3 +147,13 @@ it('grants finance.payments.manage (Phase E1) to super_admin and finance only', 
     rbacSync();
     expect(User::factory()->create(['is_admin' => true])->can('finance.payments.manage'))->toBeFalse();
 });
+
+it('grants finance.reconcile (Phase E2) to super_admin and finance only', function () {
+    expect(userWithRole(Role::SuperAdmin)->can('finance.reconcile'))->toBeTrue()
+        ->and(userWithRole(Role::Finance)->can('finance.reconcile'))->toBeTrue()
+        ->and(userWithRole(Role::Operations)->can('finance.reconcile'))->toBeFalse()
+        ->and(userWithRole(Role::Support)->can('finance.reconcile'))->toBeFalse();
+
+    rbacSync();
+    expect(User::factory()->create(['is_admin' => true])->can('finance.reconcile'))->toBeFalse();
+});

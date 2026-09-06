@@ -101,12 +101,42 @@ UI إداري أدنى فقط (E5 للكامل) · `current_status`/`latest_even
 ### ترتيب النشر لـE1 (بعد الدمج وبموافقة صريحة)
 `php artisan migrate --force` (الجداول الخمسة). لا أوامر أخرى؛ لا backfill.
 
-## 5) E2–E5 (مخطَّطة، لا تبدأ قبل الاعتماد)
+## 5) E2 — Provider Invoices & Cost Reconciliation (منفَّذ)
 
-- **E2**: `provider_invoices` + `provider_invoice_events` + `provider_invoice_lines?`؛ `cost_reconciliations` لكل مكوّن (provider/communication/external) بمصدر وattestation للصفر؛ `cost_adjustments` append-only؛ RBAC `finance.reconcile`.
+### القرارات المعتمدة (19 تعديلًا على الخطة)
+scope projection بدل `is_current` (`cost_reconciliation_scopes` = هدف القفل والمؤشر الحالي؛ `cost_reconciliations` append-only بالكامل) · فواتير معمَّمة `cost_invoices` بـ`counterparty_key` ثابت (لا ربط حصري بـ`ai_providers`؛ provider يجب أن يطابق مفتاحًا معروفًا) · فترة التسوية = شهر تقويمي UTC `[أول الشهر, أول الشهر التالي)` فقط، الفاتورة قد تغطي أكثر، والتقسيم تخصيص دليل صريح بلا proration · عدة فواتير لنفس الفترة (unique على `(counterparty_key, invoice_ref)` فقط + idempotency إلزامي) · الفاتورة المؤكَّدة دليل فقط، حقائق وأسطر مجمَّدة، التصحيح replacement/supersede/credit · أسطر موقَّعة `service/tax/other ≥ 0`, `credit ≤ 0`, `Σ = total`، tax/other لا تدخل التكلفة، credit دليل سالب مضبوط بالقيمة المطلقة · `calculated_known_amount` + `calculated_priced_rows` + `unpriced_rows` + `currency_mismatch_rows` + `cost_coverage_status` بدل "calculated" مطلق؛ Variance رقمي فقط عند coverage كاملة · `reconciled_amount` = Σ allocations لا إجمالي فاتورة · Confirmed Zero شهادة مكتوبة `ZERO` + سبب + دليل + فاعل + وقت + audit وتُعرض `CONFIRMED ZERO` · snapshot الدفتر (scope, captured_at, known, priced, unpriced, mismatch, max id, coverage, hash) و`LEDGER MOVED SINCE RECONCILIATION` · guard على `UsageEvent` + اختبار wire-level لغياب UPDATE/DELETE · adjustments append-only مع `Base / Adjustments / Adjusted` و`Adjusted Variance` منفصلة · سباقات PostgreSQL للتخصيص (موجب وسالب) والتسوية (1 ناجح/5 stale) · UI أدنى تحت `finance.reconcile` · RBAC super_admin + finance · لا FX (`FX_REQUIRED`) · عدد migrations من الملفات الفعلية · نطاق E2 فقط.
+
+### الجداول
+`cost_invoices` · `cost_invoice_events` · `cost_invoice_lines` · `cost_reconciliation_scopes` · `cost_reconciliations` · `cost_invoice_allocations` · `cost_adjustments` — التفاصيل في [DATABASE.md](DATABASE.md). سبعة migrations (`2026_09_06_001001…001007`)؛ حدّ rollback في `UsageLedgerMigrationTest` = **27**.
+
+### الخدمات (`App\Services\Reconciliation`)
+- `CostInvoiceService`: `recordDraft` (idempotent بـsavepoint: نفس الحقائق ⇒ نفس الصف، مختلفة أو نفس `(counterparty, invoice_ref)` بمفتاح آخر ⇒ conflict؛ provider ⇒ مفتاح مزوّد معروف؛ `issued_at ≤ now`) · `addLine` (مسودة فقط تحت قفل الفاتورة؛ عقد الإشارة؛ `line_no` فريد؛ `description_code` رمز محدود) · `confirm(invoice, expectedToken)` (قفل → token → سطر واحد على الأقل و`Σ الأسطر الموقَّعة = total` بدقة 6 منازل → حدث → projection → audit) · `void` / `supersede(replacement مؤكَّدة بنفس المكوّن/الطرف/العملة)`.
+- `CostReconciliationService::reconcile(ReconciliationInput)`: find-or-create لصف النطاق (savepoint) → `FOR UPDATE` → `expected_current_reconciliation_id` وإلا `StaleReconciliationException` → snapshot الدفتر تحت القفل (`LedgerSnapshotter`) → المصدر: `invoice` (قفل الفواتير بترتيب id؛ مؤكَّدة؛ نفس المكوّن/الطرف؛ نفس العملة وإلا `FX_REQUIRED`؛ `service/credit` فقط؛ إشارة السطر؛ `|Σ| ≤ |السطر|` عبر كل التسويات؛ المبلغ = Σ) / `manual_evidenced` (مبلغ > 0 + سبب + دليل) / `confirmed_zero` (`ZERO` حرفيًا + سبب + دليل) → إدراج التسوية (`supersedes_id` = المؤشر السابق) + allocations → تحريك المؤشر (`version + 1`) → audit `cost.reconciled` — معاملة واحدة. `adjust(reconciliationId, amount ≠ 0, reason, evidence)` على التسوية الحالية فقط تحت قفل النطاق، audit `cost.adjusted`.
+- `LedgerSnapshotter::capture(component, counterparty, [start, end), currency)`: `occurred_at` في الشهر، `provider = counterparty` لمكوّن provider؛ Known = Σ عمود المكوّن للصفوف المسعَّرة بعملة النطاق (جمع صحيح مقياس 6 داخل SQL)؛ unpriced وmismatch تُعدّ ولا تُجمع؛ coverage: `no_producer` (المكوّن بلا منتِج) / `partial` / `complete`؛ hash قانوني.
+- `ReconciledCostQuery::summarise(fromMonth, toMonth)` (≤ 13 شهرًا): لكل نطاق `NOT RECONCILED / RECONCILED / CONFIRMED ZERO`، Base / Adjustments / Adjusted Reconciled Cost، snapshot المجمَّد، `Variance vs Known Calculated Cost` و`Adjusted Variance…` عند coverage كاملة فقط وإلا `UNKNOWN (NO PRODUCER | PARTIAL CALCULATED COVERAGE)`، `LEDGER MOVED SINCE RECONCILIATION` بمقارنة الـhash الحالي، `EVIDENCE VOIDED/SUPERSEDED`.
+- الموديلات: `CostInvoice` (حقائق immutable، projection عبر الخدمة)، `CostReconciliationScope` (هوية immutable، المؤشر عبر الخدمة)، والباقي `ImmutableFinancialRecord`. `UsageEvent`: `IMMUTABLE_COST_FIELDS` + منع الحذف.
+- Probe للاختبار فقط: `sanad:reconciliation-probe {record-invoice|confirm|reconcile|zero} …`.
+
+### RBAC والصفحة
+`finance.reconcile` (super_admin + finance؛ operations/support/legacy = 403). الصفحة `/dashboard/finance/reconciliation` (`Livewire\Dashboard\Finance\Reconciliation`): السبع عمليات + جدول التكلفة المسوّاة؛ mount وكل action يعيدان الفحص والخدمات تفحص ثالثة. لا PII (الطرف مفتاح فقط).
+
+### الاختبارات
+- `CostInvoiceTest`: idempotency/conflict، مفتاح طرف محدود (لا أسماء/بريد)، مزوّد معروف، عقد الإشارة + CHECK، `Σ = total` بدقة 6 منازل، تجميد بعد التأكيد، token قديم، confirmed واحد (خدمة + فهرس جزئي)، void/supersede، atomic audit.
+- `CostReconciliationTest`: تسوية من فاتورتين (150 = 120 + 30 لا 139.2 ولا 200)، cap عبر الأشهر، tax/other غير قابلة للتخصيص، credit سالب بالقيمة المطلقة بلا clipping، `FX_REQUIRED`، scope_mismatch، مسودة مرفوضة، stale pointer ثم supersede (التاريخ يبقى)، known-vs-unknown (unpriced/mismatch ⇒ UNKNOWN؛ communication NO PRODUCER: فاتورة 100 مقابل 0 ليست +100)، Confirmed Zero (typed/سبب/دليل، تُعرض CONFIRMED ZERO، يدوي بصفر مرفوض)، snapshot + LEDGER MOVED بلا تعديل القديم، adjustments (Base ثابت، variance الأصلي ثابت، Adjusted منفصل، القديمة لا تقبل تعديلات)، evidence superseded flag، atomic (لا صف نطاق يبقى عند فشل audit)، حدود النافذة.
+- `UsageLedgerImmutabilityTest`: guard الموديل على كل حقل تكلفة/تسعير + منع الحذف + بقاء الحقول غير المالية؛ فحص wire-level (`DB::listen`) أن دورة تسوية كاملة لا تصدر UPDATE/DELETE على `usage_events`؛ فحص المصدر.
+- `ReconciliationPageTest`: RBAC (route/nav/mount/action مع سحب الدور بما فيه Confirm Zero)، الدورة الكاملة من الصفحة، ZERO إلزامي، PII مرفوض، لا Revenue/Gross Margin.
+- `SensitiveFieldsTest` (E2): لا أعمدة نص حر/أسماء/عناوين/بطاقات على الجداول السبعة؛ `invoice_ref` nullable + unique مع الطرف؛ idempotency إلزامي؛ المراجع رموز.
+- `DecimalParityTest` (E2): جمع مقياس 6 بلا أخطاء عائمة على المحرّك الجاري.
+- `PostgresReconciliationConcurrencyTest` (عمليات حقيقية): سباق idempotency للفاتورة، سباق التأكيد (1 ok / 5 stale)، سباق تخصيص سطر 100 عبر 6 أشهر × 30 (3/3، لا clipping) والمثل لسطر credit −100، سباق تسوية نطاق واحد (1 ok / 5 stale / مؤشر واحد / audit واحد) ثم supersede من الخاسر. CI يشغّله مع حارس "لا skip".
+
+### ترتيب النشر لـE2 (بعد الدمج وبموافقة صريحة)
+`php artisan migrate --force` (الجداول السبعة). لا أوامر أخرى؛ لا backfill.
+
+## 6) E3–E5 (مخطَّطة، لا تبدأ قبل الاعتماد)
+
 - **E3**: `fx_rates` يدوية + إعداد `finance.reporting_currency`؛ `fx_rate_id` في كل تحويل؛ RBAC `finance.fx.manage`.
 - **E4**: `finance_period_closes` append-only بشروط الإقفال وإعادة الفتح بسجل جديد؛ مقاييس Cash Collected / Refunds / Gateway Fees / Net Cash After Gateway Fees / Reconciled Service Cost / Reconciled Cash Contribution؛ Gross Profit/Margin `NOT AVAILABLE`؛ RBAC `finance.close_period` (super_admin).
 - **E5**: صفحات Payments / Invoices & Reconciliation / FX / Period Close، CSV بعقد `section` + أعلام reconciled، RBAC النهائي.
 
-## 6) مؤجَّل لما بعد E
+## 7) مؤجَّل لما بعد E
 بوابة دفع حية وشحن فعلي، فوترة العملاء الصادرة، الضرائب، dunning، churn/cohorts/LTV، rollups مادية، تسجيل أحداث WhatsApp في الدفتر، جلب فواتير المزوّدين آليًا، سياسة Revenue Recognition.
