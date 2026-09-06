@@ -6,10 +6,12 @@ namespace App\Console\Commands;
 
 use App\Data\Reconciliation\CostInvoiceInput;
 use App\Data\Reconciliation\EvidenceAllocation;
+use App\Data\Reconciliation\InvoiceLineInput;
 use App\Data\Reconciliation\ReconciliationInput;
 use App\Exceptions\Reconciliation\ReconciliationConflictException;
 use App\Exceptions\Reconciliation\ReconciliationRuleException;
 use App\Exceptions\Reconciliation\StaleReconciliationException;
+use App\Models\CostAdjustment;
 use App\Services\Reconciliation\CostInvoiceService;
 use App\Services\Reconciliation\CostReconciliationService;
 use Carbon\CarbonImmutable;
@@ -27,6 +29,10 @@ use Illuminate\Console\Command;
  *      → ok:<reconciliation_id> | stale | rejected:<rule>
  *  zero <component> <counterparty> <YYYY-MM> <currency> <expected|none>
  *      → ok:<reconciliation_id> | stale | rejected:<rule>
+ *  adjust <reconciliation> <amount> <reason> <evidence> <key>          (E5.2b: keyed, durable)
+ *      → ok:<id> | existing:<id> | conflict | stale | rejected:<rule>
+ *  add-line <invoice> <line_no> <kind> <code> <amount>
+ *      → ok:<id> | rejected:<rule>
  */
 class ReconciliationProbe extends Command
 {
@@ -61,6 +67,10 @@ class ReconciliationProbe extends Command
                     expectedCurrentReconciliationId: $a[4] === 'none' ? null : (int) $a[4],
                     source: 'confirmed_zero', reasonCode: 'probe', evidenceRef: 'probe:zero', typedConfirmation: 'ZERO',
                 ))->id,
+                'adjust' => (static function (CostAdjustment $row): string {
+                    return ($row->wasRecentlyCreated ? 'ok:' : 'existing:').$row->id;
+                })($reconciliations->adjust((int) $a[0], $a[1], $a[2], $a[3], $a[4])),
+                'add-line' => 'ok:'.$invoices->addLine(new InvoiceLineInput(costInvoiceId: (int) $a[0], lineNo: (int) $a[1], kind: $a[2], descriptionCode: $a[3], amount: $a[4]))->id,
                 default => throw new \InvalidArgumentException('Unknown op'),
             };
         } catch (ReconciliationRuleException $e) {

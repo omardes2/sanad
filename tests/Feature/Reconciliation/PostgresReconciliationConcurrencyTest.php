@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use App\Models\AiProvider;
 use App\Models\AuditLog;
 use App\Models\CostInvoice;
 use App\Models\CostInvoiceAllocation;
@@ -12,7 +11,6 @@ use App\Models\CostReconciliationScope;
 use App\Services\Reconciliation\CostReconciliationService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
-use Symfony\Component\Process\Process;
 
 /**
  * GENUINE parallel tests for Phase E2 on PostgreSQL (separate PHP processes):
@@ -40,53 +38,6 @@ beforeEach(function () {
         $this->markTestSkipped('PostgreSQL is not reachable.');
     }
 });
-
-function e2Run(array $args): Process
-{
-    $p = new Process(['php', 'artisan', 'sanad:reconciliation-probe', ...$args], base_path());
-    $p->start();
-
-    return $p;
-}
-
-/** @return list<string> */
-function e2Outcomes(array $processes): array
-{
-    $outcomes = [];
-    foreach ($processes as $p) {
-        $p->wait();
-        expect($p->getExitCode())->toBe(0, $p->getOutput().$p->getErrorOutput());
-        $outcomes[] = trim($p->getOutput());
-    }
-
-    return $outcomes;
-}
-
-function e2Counterparty(): string
-{
-    $key = 'pgrace-'.strtolower(str()->random(6));
-    AiProvider::factory()->create(['key' => $key, 'driver' => 'groq', 'priority' => 1]);
-
-    return $key;
-}
-
-function e2Cleanup(string $counterparty): void
-{
-    $invoiceIds = CostInvoice::query()->where('counterparty_key', $counterparty)->pluck('id');
-    $scopeIds = CostReconciliationScope::query()->where('counterparty_key', $counterparty)->pluck('id');
-    $reconciliationIds = CostReconciliation::query()->whereIn('scope_id', $scopeIds)->pluck('id');
-    DB::table('cost_adjustments')->whereIn('cost_reconciliation_id', $reconciliationIds)->delete();
-    DB::table('cost_invoice_allocations')->whereIn('cost_reconciliation_id', $reconciliationIds)->orWhereIn('cost_invoice_id', $invoiceIds)->delete();
-    DB::table('cost_reconciliation_scopes')->whereIn('id', $scopeIds)->update(['current_reconciliation_id' => null]);
-    DB::table('cost_reconciliations')->whereIn('id', $reconciliationIds)->delete();
-    DB::table('cost_reconciliation_scopes')->whereIn('id', $scopeIds)->delete();
-    DB::table('cost_invoice_lines')->whereIn('cost_invoice_id', $invoiceIds)->delete();
-    DB::table('cost_invoice_events')->whereIn('cost_invoice_id', $invoiceIds)->delete();
-    AuditLog::where('subject_type', (new CostInvoice)->getMorphClass())->whereIn('subject_id', $invoiceIds)->delete();
-    AuditLog::where('subject_type', (new CostReconciliationScope)->getMorphClass())->whereIn('subject_id', $scopeIds)->delete();
-    DB::table('cost_invoices')->whereIn('id', $invoiceIds)->delete();
-    DB::table('ai_providers')->where('key', $counterparty)->delete();
-}
 
 it('of 6 concurrent recordings of the same invoice key exactly one creates the invoice; the others receive it; different facts conflict', function () {
     $cp = e2Counterparty();

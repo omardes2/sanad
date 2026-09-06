@@ -150,7 +150,7 @@ it('blocks on cost FX gaps (a reconciliation or adjustment in another currency w
     fxConvert('cost_reconciliation', $rec->id, 'USD', fxRate(['rate' => '3.65', 'rateDate' => '2026-09-01'])->id);
     expect(preflight()->canClose())->toBeTrue()->and(preflight()->metrics['reconciled_service_cost'])->toBe('100.000000');
 
-    $adj = app(CostReconciliationService::class)->adjust($rec->id, '-36.500000', 'credit', 'cn');
+    $adj = app(CostReconciliationService::class)->adjust($rec->id, '-36.500000', 'credit', 'cn', e2Key());
     expect(preflight()->blocking())->toBe(['FX_INCOMPLETE_COST (adjustment:'.$adj->id.')']);
     fxConvert('cost_adjustment', $adj->id, 'USD', FxRate::query()->firstOrFail()->id); // policy date = reconciliation period_end 2026-09-01
     expect(preflight()->canClose())->toBeTrue()->and(preflight()->metrics['reconciled_service_cost'])->toBe('90.000000');
@@ -177,7 +177,7 @@ it('FX completeness matrix: every payment, refund, gateway fee, reconciliation a
     financeRow(['provider' => 'groq', 'provider_cost' => '50.000000', 'total_cost' => '50.000000', 'occurred_at' => CarbonImmutable::parse('2026-08-15 10:00:00', 'UTC')]);
     $invoice = e2ConfirmedInvoice(['service' => '182.500000'], ['currency' => 'ILS']);
     $rec = e2Reconcile([[$invoice->lines()->first()->id, '182.500000']], ['currency' => 'ILS']);
-    $adj = app(CostReconciliationService::class)->adjust($rec->id, '-36.500000', 'credit', 'cn:1');
+    $adj = app(CostReconciliationService::class)->adjust($rec->id, '-36.500000', 'credit', 'cn:1', e2Key());
     $zero = fn (string $component, string $cp) => e2Reconcile([], ['component' => $component, 'counterpartyKey' => $cp, 'source' => 'confirmed_zero', 'reasonCode' => 'none', 'evidenceRef' => 'att', 'typedConfirmation' => 'ZERO']);
     $zero('communication', 'meta-whatsapp');
     $zero('external', 'none');

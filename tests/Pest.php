@@ -564,6 +564,7 @@ use App\Exceptions\Reconciliation\ReconciliationRuleException;
 use App\Models\CostInvoice;
 use App\Models\CostInvoiceLine;
 use App\Models\CostReconciliation;
+use App\Models\CostReconciliationScope;
 use App\Services\Reconciliation\CostInvoiceService;
 use App\Services\Reconciliation\CostReconciliationService;
 use App\Support\Reconciliation\ReconciliationRules;
@@ -652,6 +653,12 @@ function e2Reconcile(array $allocations, array $overrides = []): CostReconciliat
 }
 
 /** The rule name an E2 service refuses with, or "none". */
+/** A fresh opaque idempotency key for one adjustment write (E5.2b: every new adjustment requires one). */
+function e2Key(): string
+{
+    return 'adj:'.str()->random(16);
+}
+
 function e2Rule(callable $fn): string
 {
     try {
@@ -758,7 +765,7 @@ function closableMonth(): array
     financeRow(['provider' => 'groq', 'provider_cost' => '50.000000', 'total_cost' => '50.000000', 'occurred_at' => CarbonImmutable::parse('2026-08-15 10:00:00', 'UTC')]);
     $invoice = e2ConfirmedInvoice(['service' => '60.000000']);
     $reconciliation = e2Reconcile([[$invoice->lines()->first()->id, '60.000000']]);
-    $adjustment = app(CostReconciliationService::class)->adjust($reconciliation->id, '-5.000000', 'credit_note', 'cn:1');
+    $adjustment = app(CostReconciliationService::class)->adjust($reconciliation->id, '-5.000000', 'credit_note', 'cn:1', e2Key());
     $zero = fn (string $component, string $cp) => e2Reconcile([], ['component' => $component, 'counterpartyKey' => $cp, 'source' => 'confirmed_zero', 'reasonCode' => 'none', 'evidenceRef' => 'att:'.$component, 'typedConfirmation' => 'ZERO']);
     $communication = $zero('communication', 'meta-whatsapp');
     $external = $zero('external', 'none-declared');
@@ -856,4 +863,54 @@ function e1PeriodEvent(User $user, Plan $plan): SubscriptionEvent
         'to_period_start' => CarbonImmutable::parse('2026-09-01', 'UTC'), 'to_period_end' => CarbonImmutable::parse('2026-10-01', 'UTC'),
         'effective_at' => now(), 'source' => 'admin', 'actor_ref' => 'console',
     ]);
+}
+
+/*
+ * Phase E2 PostgreSQL race helpers (shared by every reconciliation race file so each runs standalone).
+ */
+function e2Run(array $args): Process
+{
+    $p = new Process(['php', 'artisan', 'sanad:reconciliation-probe', ...$args], base_path());
+    $p->start();
+
+    return $p;
+}
+
+/** @return list<string> */
+function e2Outcomes(array $processes): array
+{
+    $outcomes = [];
+    foreach ($processes as $p) {
+        $p->wait();
+        expect($p->getExitCode())->toBe(0, $p->getOutput().$p->getErrorOutput());
+        $outcomes[] = trim($p->getOutput());
+    }
+
+    return $outcomes;
+}
+
+function e2Counterparty(): string
+{
+    $key = 'pgrace-'.strtolower(str()->random(6));
+    AiProvider::factory()->create(['key' => $key, 'driver' => 'groq', 'priority' => 1]);
+
+    return $key;
+}
+
+function e2Cleanup(string $counterparty): void
+{
+    $invoiceIds = CostInvoice::query()->where('counterparty_key', $counterparty)->pluck('id');
+    $scopeIds = CostReconciliationScope::query()->where('counterparty_key', $counterparty)->pluck('id');
+    $reconciliationIds = CostReconciliation::query()->whereIn('scope_id', $scopeIds)->pluck('id');
+    DB::table('cost_adjustments')->whereIn('cost_reconciliation_id', $reconciliationIds)->delete();
+    DB::table('cost_invoice_allocations')->whereIn('cost_reconciliation_id', $reconciliationIds)->orWhereIn('cost_invoice_id', $invoiceIds)->delete();
+    DB::table('cost_reconciliation_scopes')->whereIn('id', $scopeIds)->update(['current_reconciliation_id' => null]);
+    DB::table('cost_reconciliations')->whereIn('id', $reconciliationIds)->delete();
+    DB::table('cost_reconciliation_scopes')->whereIn('id', $scopeIds)->delete();
+    DB::table('cost_invoice_lines')->whereIn('cost_invoice_id', $invoiceIds)->delete();
+    DB::table('cost_invoice_events')->whereIn('cost_invoice_id', $invoiceIds)->delete();
+    AuditLog::where('subject_type', (new CostInvoice)->getMorphClass())->whereIn('subject_id', $invoiceIds)->delete();
+    AuditLog::where('subject_type', (new CostReconciliationScope)->getMorphClass())->whereIn('subject_id', $scopeIds)->delete();
+    DB::table('cost_invoices')->whereIn('id', $invoiceIds)->delete();
+    DB::table('ai_providers')->where('key', $counterparty)->delete();
 }

@@ -127,7 +127,7 @@
 
 ### `cost_invoices` (E2)
 فاتورة مورّد كـ**دليل** لمكوّن تكلفة واحد (`provider/communication/external`)؛ التأكيد لا يجعل الإجمالي تكلفة فعلية.
-- `component` · `counterparty_key` (مفتاح ثابت محدود؛ لمكوّن provider يجب أن يطابق `ai_providers.key`؛ لا أسماء ولا PII) · `invoice_ref?` (فريد مع `counterparty_key` عند وجوده) · `idempotency_key` (إلزامي، فريد) · `issued_at` · `period_start/period_end` (تغطية الفاتورة نفسها) · `currency` · `total_amount` decimal(16,6) موقَّع (كامل المستند بضرائبه وائتمانه) · `evidence_ref?` · `current_status` + `latest_event_id` + `superseded_by_id?` (projection) · `recorded_by_ref`. عدة فواتير لنفس الطرف والفترة مسموحة.
+- `component` · `counterparty_key` (مفتاح ثابت محدود؛ لمكوّن provider يجب أن يطابق `ai_providers.key`؛ لا أسماء ولا PII) · `invoice_ref?` (فريد مع `counterparty_key` عند وجوده) · `idempotency_key` (إلزامي، فريد) · `issued_at` · `period_start/period_end` (تغطية الفاتورة نفسها) · `currency` · `total_amount` decimal(16,6) موقَّع (كامل المستند بضرائبه وائتمانه) · `evidence_ref?` · `current_status` + `latest_event_id` + `superseded_by_id?` (projection) · `recorded_by_ref`. عدة فواتير لنفس الطرف والفترة مسموحة. فهارس: `(component, counterparty_key, period_start)`، `current_status`، unique `(counterparty_key, invoice_ref)`، و(E5.2b) `cost_invoices_period_start_id_idx (period_start, id)` لنافذة الشهر وحدها مع ترتيب id.
 
 ### `cost_invoice_events` (E2، append-only)
 `draft / confirmed / voided / superseded` (enum + CHECK)؛ فهرس جزئي فريد "confirmed واحد لكل فاتورة" على المحرّكين.
@@ -145,7 +145,7 @@
 علاقة الدليل many-to-many: `cost_invoice_id`, `cost_invoice_line_id`, `cost_reconciliation_id` (كلها **restrictOnDelete**) · `amount` موقَّع بإشارة السطر · `currency` · `actor_ref`. `|Σ| ≤ |السطر|` عبر كل التسويات تحت قفل صف الفاتورة؛ لا proration تلقائي.
 
 ### `cost_adjustments` (E2، append-only)
-`cost_reconciliation_id` (**restrictOnDelete**) · `amount` موقَّع ≠ 0 · `currency` · `reason_code` · `evidence_ref` (إلزاميان) · `actor_ref`. `Adjusted Reconciled Cost = Base + Σ adjustments`؛ الأساس لا يتغيّر.
+`cost_reconciliation_id` (**restrictOnDelete**) · `amount` موقَّع ≠ 0 · `currency` · `reason_code` · `evidence_ref` (إلزاميان) · `actor_ref` · `idempotency_key?` (E5.2b: string(191) **فريد**؛ إلزامي في الخدمة لكل صف جديد، NULL فقط لصفوف ما قبل E5.2b بلا backfill). `Adjusted Reconciled Cost = Base + Σ adjustments`؛ الأساس لا يتغيّر.
 
 ### `fx_pairs` (E3)
 زوج صرف قانوني واحد لكل عملتين: `pair_key = min(ISO):max(ISO)` فريد (قيد CHECK على PostgreSQL) · `base_currency`/`quote_currency` الاتجاه الرسمي (`1 BASE = rate × QUOTE`) ثابت منذ الإنشاء · لا حذف. الزوج المعاكس لا يُنشأ.
