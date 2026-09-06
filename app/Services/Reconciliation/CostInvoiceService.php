@@ -254,11 +254,7 @@ final class CostInvoiceService
             throw ReconciliationRuleException::of('counterparty_key', "مفتاح الطرف [{$counterparty}] لا يطابق مزوّد ذكاء معروفًا.");
         }
 
-        $key = trim($input->idempotencyKey);
-
-        if ($key === '' || mb_strlen($key) > 191) {
-            throw ReconciliationRuleException::of('idempotency_key', 'مفتاح idempotency إلزامي (حتى 191 حرفًا).');
-        }
+        $key = ReconciliationRules::idempotencyKey($input->idempotencyKey);
 
         ReconciliationRules::notInFuture($input->issuedAt, 'issued_at');
 

@@ -145,7 +145,7 @@
 علاقة الدليل many-to-many: `cost_invoice_id`, `cost_invoice_line_id`, `cost_reconciliation_id` (كلها **restrictOnDelete**) · `amount` موقَّع بإشارة السطر · `currency` · `actor_ref`. `|Σ| ≤ |السطر|` عبر كل التسويات تحت قفل صف الفاتورة؛ لا proration تلقائي.
 
 ### `cost_adjustments` (E2، append-only)
-`cost_reconciliation_id` (**restrictOnDelete**) · `amount` موقَّع ≠ 0 · `currency` · `reason_code` · `evidence_ref` (إلزاميان) · `actor_ref`. `Adjusted Reconciled Cost = Base + Σ adjustments`؛ الأساس لا يتغيّر.
+`cost_reconciliation_id` (**restrictOnDelete**) · `amount` موقَّع ≠ 0 · `currency` · `reason_code` · `evidence_ref` (إلزاميان) · `actor_ref` · `idempotency_key?` (E5.2b: string(191) **فريد**؛ إلزامي في الخدمة لكل صف جديد، NULL فقط لصفوف ما قبل E5.2b بلا backfill). `Adjusted Reconciled Cost = Base + Σ adjustments`؛ الأساس لا يتغيّر.
 
 ### `fx_pairs` (E3)
 زوج صرف قانوني واحد لكل عملتين: `pair_key = min(ISO):max(ISO)` فريد (قيد CHECK على PostgreSQL) · `base_currency`/`quote_currency` الاتجاه الرسمي (`1 BASE = rate × QUOTE`) ثابت منذ الإنشاء · لا حذف. الزوج المعاكس لا يُنشأ.

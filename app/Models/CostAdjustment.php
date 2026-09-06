@@ -18,7 +18,7 @@ class CostAdjustment extends Model
     /**
      * @var list<string>
      */
-    protected $fillable = ['cost_reconciliation_id', 'amount', 'currency', 'reason_code', 'evidence_ref', 'actor_ref', 'created_at'];
+    protected $fillable = ['cost_reconciliation_id', 'amount', 'currency', 'reason_code', 'evidence_ref', 'actor_ref', 'idempotency_key', 'created_at'];
 
     /**
      * @return array<string, string>

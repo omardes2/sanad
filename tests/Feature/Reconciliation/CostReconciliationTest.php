@@ -232,13 +232,13 @@ it('appends adjustments to the CURRENT reconciliation only, keeps the base amoun
     $rec = e2Reconcile([[$inv->lines()->first()->id, '100.000000']]);
     $service = app(CostReconciliationService::class);
 
-    expect(e2Rule(fn () => $service->adjust($rec->id, '0', 'x', 'y')))->toBe('amount')
-        ->and(e2Rule(fn () => $service->adjust($rec->id, '-5', '', 'y')))->toBe('reason_code')
-        ->and(e2Rule(fn () => $service->adjust($rec->id, '-5', 'x', '')))->toBe('evidence_ref')
-        ->and(e2Rule(fn () => $service->adjust(999, '-5', 'x', 'y')))->toBe('reconciliation');
+    expect(e2Rule(fn () => $service->adjust($rec->id, '0', 'x', 'y', e2Key())))->toBe('amount')
+        ->and(e2Rule(fn () => $service->adjust($rec->id, '-5', '', 'y', e2Key())))->toBe('reason_code')
+        ->and(e2Rule(fn () => $service->adjust($rec->id, '-5', 'x', '', e2Key())))->toBe('evidence_ref')
+        ->and(e2Rule(fn () => $service->adjust(999, '-5', 'x', 'y', e2Key())))->toBe('reconciliation');
 
-    $a1 = $service->adjust($rec->id, '-7.500000', 'credit_note', 'cn:1');
-    $a2 = $service->adjust($rec->id, '2.000000', 'late_fee', 'stmt:2');
+    $a1 = $service->adjust($rec->id, '-7.500000', 'credit_note', 'cn:1', e2Key());
+    $a2 = $service->adjust($rec->id, '2.000000', 'late_fee', 'stmt:2', e2Key());
     $row = e2Summary()[0];
 
     expect((string) $a1->amount)->toBe('-7.500000')->and($a1->currency)->toBe('USD')
@@ -252,7 +252,7 @@ it('appends adjustments to the CURRENT reconciliation only, keeps the base amoun
 
     // After a superseding reconciliation the old one accepts no adjustments.
     $newer = e2Reconcile([], ['expectedCurrentReconciliationId' => $rec->id, 'source' => 'manual_evidenced', 'reconciledAmount' => '95.000000', 'reasonCode' => 'restated', 'evidenceRef' => 'stmt']);
-    expect(fn () => $service->adjust($rec->id, '1', 'x', 'y'))->toThrow(StaleReconciliationException::class)
+    expect(fn () => $service->adjust($rec->id, '1', 'x', 'y', e2Key()))->toThrow(StaleReconciliationException::class)
         ->and(CostAdjustment::count())->toBe(2)
         ->and(e2Summary()[0]->adjustments)->toBe('0.000000') // adjustments belong to the superseded row, not carried over
         ->and(e2Summary()[0]->baseReconciledAmount)->toBe('95.000000');
@@ -284,7 +284,7 @@ it('is atomic: a failing audit store leaves no reconciliation, allocation or sco
     });
 
     expect(fn () => e2Reconcile([[$line->id, '20.000000']], ['expectedCurrentReconciliationId' => $first->id]))->toThrow(RuntimeException::class);
-    expect(fn () => app(CostReconciliationService::class)->adjust($first->id, '1', 'x', 'y'))->toThrow(RuntimeException::class);
+    expect(fn () => app(CostReconciliationService::class)->adjust($first->id, '1', 'x', 'y', e2Key()))->toThrow(RuntimeException::class);
     expect(fn () => e2Reconcile([[$line->id, '5.000000']], ['month' => '2026-09']))->toThrow(RuntimeException::class);
 
     expect(CostReconciliation::count())->toBe(1)->and(CostInvoiceAllocation::count())->toBe(1)->and(CostAdjustment::count())->toBe(0)

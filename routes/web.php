@@ -20,11 +20,14 @@ use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Finance;
 use App\Livewire\Dashboard\Finance\CloseDetail as FinanceCloseDetail;
+use App\Livewire\Dashboard\Finance\CostInvoiceDetail as FinanceCostInvoiceDetail;
+use App\Livewire\Dashboard\Finance\CostInvoices as FinanceCostInvoices;
 use App\Livewire\Dashboard\Finance\Fx as FinanceFx;
 use App\Livewire\Dashboard\Finance\PaymentDetail as FinancePaymentDetail;
 use App\Livewire\Dashboard\Finance\Payments as FinancePayments;
 use App\Livewire\Dashboard\Finance\PeriodClose as FinancePeriodClose;
 use App\Livewire\Dashboard\Finance\Reconciliation as FinanceReconciliation;
+use App\Livewire\Dashboard\Finance\ReconciliationScopeDetail as FinanceReconciliationScopeDetail;
 use App\Livewire\Dashboard\Finance\RefundDetail as FinanceRefundDetail;
 use App\Livewire\Dashboard\Finance\Refunds as FinanceRefunds;
 use App\Livewire\Dashboard\Messages;
@@ -111,8 +114,12 @@ Route::middleware(['auth', 'admin'])
         Route::get('/finance/payments/{payment}', FinancePaymentDetail::class)->middleware('permission:finance.payments.manage')->whereNumber('payment')->name('dashboard.finance.payments.show');
         Route::get('/finance/refunds', FinanceRefunds::class)->middleware('permission:finance.payments.manage')->name('dashboard.finance.refunds');
         Route::get('/finance/refunds/{refund}', FinanceRefundDetail::class)->middleware('permission:finance.payments.manage')->whereNumber('refund')->name('dashboard.finance.refunds.show');
-        // Phase E2 — supplier invoices (evidence) + cost reconciliation (finance.reconcile): every write re-authorizes server-side.
+        // Phase E2 → E5.2b — cost invoices (evidence) + reconciliation scopes (finance.reconcile): every write re-authorizes server-side.
+        Route::get('/finance/cost-invoices', FinanceCostInvoices::class)->middleware('permission:finance.reconcile')->name('dashboard.finance.cost_invoices');
+        Route::get('/finance/cost-invoices/{invoice}', FinanceCostInvoiceDetail::class)->middleware('permission:finance.reconcile')->whereNumber('invoice')->name('dashboard.finance.cost_invoices.show');
         Route::get('/finance/reconciliation', FinanceReconciliation::class)->middleware('permission:finance.reconcile')->name('dashboard.finance.reconciliation');
+        Route::get('/finance/reconciliation/new', FinanceReconciliationScopeDetail::class)->middleware('permission:finance.reconcile')->name('dashboard.finance.reconciliation.new');
+        Route::get('/finance/reconciliation/{scope}', FinanceReconciliationScopeDetail::class)->middleware('permission:finance.reconcile')->whereNumber('scope')->name('dashboard.finance.reconciliation.show');
         // Phase E3 — manual FX quotes, frozen reporting conversions, reporting currency (finance.fx.manage).
         Route::get('/finance/fx', FinanceFx::class)->middleware('permission:finance.fx.manage')->name('dashboard.finance.fx');
         // Phase E4 — period close: finance.view reads preflight/history; close/reopen re-check finance.close_period (super_admin only).

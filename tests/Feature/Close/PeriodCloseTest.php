@@ -140,7 +140,7 @@ it('refuses a blocked month, a wrong typed confirmation, a stale pointer, a seco
     // Same key + DIFFERENT canonical inputs ⇒ conflict (never a silent replay of the old row); same key + same inputs ⇒ the same row.
     $reopened = reopen($close);
     expect($service->close('2026-08', $reopened->id, 'k1', 'CLOSE 2026-08')->id)->toBe($close->id); // inputs unchanged ⇒ same row, still no second close
-    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2', e2Key());
     expect(closeRule(fn () => $service->close('2026-08', $reopened->id, 'k1', 'CLOSE 2026-08')))->toBe('idempotency_conflict')
         ->and(FinancePeriodClose::query()->where('status', 'closed')->count())->toBe(1)->and(AuditLog::where('action', AuditActions::FinancePeriodClosed)->count())->toBe(1)
         ->and(FinancePeriodCloseScope::query()->firstOrFail()->current_close_id)->toBe($reopened->id);
@@ -172,7 +172,7 @@ it('reopens with a new record (reason + evidence + typed), leaves the old close 
         ->and(closeRule(fn () => reopen($first, $reopen->id)))->toBe('NOT_CLOSED'); // already reopened
 
     // Live data may change (a late adjustment); the next close is revision 2 with new figures; revision 1 stays.
-    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2', e2Key());
     $second = closeMonth('2026-08', $reopen->id, 'k2');
     expect($second->revision)->toBe(2)->and($second->previous_close_id)->toBe($first->id)->and((string) $second->reconciled_cash_contribution)->toBe('132.000000')
         ->and($second->input_hash)->not->toBe($first->input_hash)
@@ -193,7 +193,7 @@ it('flags DRIFT SINCE CLOSE when live data changes after a close, without mutati
     $close = closeMonth();
     expect($service->drift($close))->toBeFalse();
 
-    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2', e2Key());
     expect($service->drift($close->fresh()))->toBeTrue()->and($close->fresh()->input_hash)->toBe($close->input_hash)->and((string) $close->fresh()->reconciled_cash_contribution)->toBe('131.000000');
 
     app(ReportingCurrencyService::class)->change('ILS', 'ILS');

@@ -11,6 +11,7 @@ use App\Enums\CostInvoiceEventType;
 use App\Enums\ReconciliationSource;
 use App\Exceptions\Fx\FxRuleException;
 use App\Exceptions\Fx\StaleFxException;
+use App\Exceptions\Reconciliation\ReconciliationConflictException;
 use App\Exceptions\Reconciliation\ReconciliationRuleException;
 use App\Exceptions\Reconciliation\StaleReconciliationException;
 use App\Models\CostAdjustment;
@@ -248,35 +249,90 @@ final class CostReconciliationService
         });
     }
 
-    /** Append a signed correction to the scope's CURRENT reconciliation. */
-    public function adjust(int $reconciliationId, string $amount, string $reasonCode, string $evidenceRef): CostAdjustment
+    /**
+     * Append a signed correction to the scope's CURRENT reconciliation.
+     *
+     * Idempotency (E5.2b, durable): every NEW adjustment requires a caller-
+     * owned opaque key (the column is nullable only for rows written before
+     * E5.2b). Same key + same canonical facts (reconciliation, amount,
+     * currency, reason, evidence) ⇒ the existing adjustment, no new row, no
+     * new audit, the base never touched; any different fact ⇒
+     * ReconciliationConflictException, nothing written. The unique index is
+     * the authority: the insert runs in a savepoint, a unique violation is
+     * caught, the existing row is fetched by key and compared.
+     *
+     * @throws ReconciliationRuleException|StaleReconciliationException|ReconciliationConflictException
+     */
+    public function adjust(int $reconciliationId, string $amount, string $reasonCode, string $evidenceRef, string $idempotencyKey): CostAdjustment
     {
         FinanceAuthorization::assertCan(Permission::FinanceReconcile);
         $scaled = ReconciliationRules::signedAmount($amount, 'amount');
         $reason = ReconciliationRules::requiredRef($reasonCode, 32, 'reason_code');
         $evidence = ReconciliationRules::requiredRef($evidenceRef, 191, 'evidence_ref');
+        $key = ReconciliationRules::idempotencyKey($idempotencyKey);
 
-        return DB::transaction(function () use ($reconciliationId, $scaled, $reason, $evidence): CostAdjustment {
+        return DB::transaction(function () use ($reconciliationId, $scaled, $reason, $evidence, $key): CostAdjustment {
             $reconciliation = CostReconciliation::query()->whereKey($reconciliationId)->first()
                 ?? throw ReconciliationRuleException::of('reconciliation', 'التسوية غير موجودة.');
             $scope = CostReconciliationScope::query()->whereKey($reconciliation->scope_id)->lockForUpdate()->firstOrFail();
+
+            $facts = [
+                'cost_reconciliation_id' => $reconciliation->id, 'amount' => ReconciliationRules::format($scaled), 'currency' => $reconciliation->currency,
+                'reason_code' => $reason, 'evidence_ref' => $evidence, 'idempotency_key' => $key,
+            ];
+
+            // Replay / conflict seen under the scope lock (a committed same-key row); the unique index below is the authority.
+            $existing = CostAdjustment::query()->where('idempotency_key', $key)->first();
+
+            if ($existing !== null) {
+                return self::sameAdjustment($existing, $facts) ? $existing : throw self::adjustmentConflict($key, $existing->id);
+            }
 
             if ($scope->current_reconciliation_id !== $reconciliation->id) {
                 throw new StaleReconciliationException("التسوية #{$reconciliation->id} لم تعد التسوية الحالية لهذا النطاق (الحالية #{$scope->current_reconciliation_id}). لم يُكتب شيء.");
             }
 
             $now = CarbonImmutable::now();
-            $adjustment = CostAdjustment::query()->create([
-                'cost_reconciliation_id' => $reconciliation->id, 'amount' => ReconciliationRules::format($scaled), 'currency' => $reconciliation->currency,
-                'reason_code' => $reason, 'evidence_ref' => $evidence, 'actor_ref' => FinanceAuthorization::actorRef(), 'created_at' => $now,
-            ]);
 
-            $this->audit->record(AuditActions::CostAdjusted, $scope, [
-                'adjustment' => ['from' => null, 'to' => ['id' => $adjustment->id, 'amount' => (string) $adjustment->amount, 'currency' => $adjustment->currency]],
-            ], ['reconciliation_id' => $reconciliation->id, 'base_reconciled_amount' => (string) $reconciliation->reconciled_amount, 'reason_code' => $reason, 'evidence_ref' => $evidence]);
+            try {
+                return DB::transaction(function () use ($facts, $scope, $reconciliation, $reason, $evidence, $now): CostAdjustment { // savepoint: row + its audit, or neither
+                    $adjustment = CostAdjustment::query()->create($facts + ['actor_ref' => FinanceAuthorization::actorRef(), 'created_at' => $now]);
 
-            return $adjustment;
+                    $this->audit->record(AuditActions::CostAdjusted, $scope, [
+                        'adjustment' => ['from' => null, 'to' => ['id' => $adjustment->id, 'amount' => (string) $adjustment->amount, 'currency' => $adjustment->currency]],
+                    ], ['reconciliation_id' => $reconciliation->id, 'base_reconciled_amount' => (string) $reconciliation->reconciled_amount, 'reason_code' => $reason, 'evidence_ref' => $evidence, 'idempotency_key' => $adjustment->idempotency_key]);
+
+                    return $adjustment;
+                });
+            } catch (UniqueConstraintViolationException) {
+                $existing = CostAdjustment::query()->where('idempotency_key', $key)->first();
+
+                if ($existing === null || ! self::sameAdjustment($existing, $facts)) {
+                    throw self::adjustmentConflict($key, $existing?->id);
+                }
+
+                return $existing;
+            }
         });
+    }
+
+    /**
+     * Canonical facts of an adjustment: the reconciliation it corrects, signed amount, currency, reason, evidence.
+     *
+     * @param  array<string, mixed>  $facts
+     */
+    private static function sameAdjustment(CostAdjustment $existing, array $facts): bool
+    {
+        return $existing->cost_reconciliation_id === $facts['cost_reconciliation_id']
+            && (string) $existing->amount === $facts['amount']
+            && $existing->currency === $facts['currency']
+            && $existing->reason_code === $facts['reason_code']
+            && $existing->evidence_ref === $facts['evidence_ref'];
+    }
+
+    private static function adjustmentConflict(string $key, ?int $existingId): ReconciliationConflictException
+    {
+        return new ReconciliationConflictException("مفتاح idempotency [{$key}] مستخدم لتعديل بحقائق مختلفة".($existingId === null ? '' : " (#{$existingId})").'. لم يُكتب شيء.');
     }
 
     /**

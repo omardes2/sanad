@@ -67,7 +67,7 @@ it('drives close → drift → reopen → second close from the page for super_a
 
     $page->set('closeTyped', 'CLOSE 2026-08')->call('close')->assertHasErrors(['close']); // ALREADY_CLOSED
 
-    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2', e2Key());
     $this->actingAs($admin)->get(route('dashboard.finance.close', ['month' => '2026-08']))->assertOk()->assertSee('DRIFT SINCE CLOSE')->assertSee('CLOSED');
 
     $page->set('reopenCloseId', (string) $close->id)->set('reopenTyped', 'REOPEN 2026-08')->set('reopenReason', 'restatement')->set('reopenEvidence', 'memo:1')

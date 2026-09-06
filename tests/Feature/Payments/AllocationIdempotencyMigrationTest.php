@@ -17,8 +17,8 @@ uses(RefreshDatabase::class);
  */
 it('adds and removes the allocation idempotency columns and unique indexes reversibly on both tables, without touching existing rows', function () {
     $files = glob(database_path('migrations/*.php'));
-    expect($files)->toHaveCount(57)
-        ->and(basename(end($files)))->toBe('2026_09_06_001301_add_idempotency_key_to_allocation_tables.php')
+    expect($files)->toHaveCount(58) // E5.2a (allocations) + E5.2b (cost_adjustments) — counted from the actual files
+        ->and(basename($files[count($files) - 2]))->toBe('2026_09_06_001301_add_idempotency_key_to_allocation_tables.php')
         ->and(Schema::hasColumn('payment_allocations', 'idempotency_key'))->toBeTrue()
         ->and(Schema::hasColumn('refund_allocations', 'idempotency_key'))->toBeTrue()
         ->and(Schema::hasIndex('payment_allocations', 'payment_allocations_idempotency_key_unique'))->toBeTrue()
@@ -26,7 +26,7 @@ it('adds and removes the allocation idempotency columns and unique indexes rever
         ->and(collect(Schema::getColumns('payment_allocations'))->firstWhere('name', 'idempotency_key')['nullable'])->toBeTrue()
         ->and(collect(Schema::getColumns('refund_allocations'))->firstWhere('name', 'idempotency_key')['nullable'])->toBeTrue();
 
-    Artisan::call('migrate:rollback', ['--step' => 1, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 2, '--force' => true]); // the E5.2b migration sits on top of this one
 
     expect(Schema::hasTable('payment_allocations'))->toBeTrue()
         ->and(Schema::hasTable('refund_allocations'))->toBeTrue()
@@ -43,5 +43,5 @@ it('adds and removes the allocation idempotency columns and unique indexes rever
         ->and(Schema::hasColumn('refund_allocations', 'idempotency_key'))->toBeTrue()
         ->and(Schema::hasIndex('payment_allocations', 'payment_allocations_idempotency_key_unique'))->toBeTrue()
         ->and(Schema::hasIndex('refund_allocations', 'refund_allocations_idempotency_key_unique'))->toBeTrue()
-        ->and(DB::table('migrations')->count())->toBe(57);
+        ->and(DB::table('migrations')->count())->toBe(58);
 });
