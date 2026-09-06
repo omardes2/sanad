@@ -34,6 +34,7 @@ php artisan sanad:make-admin --name="اسم المدير" --email="admin@example
 | `/dashboard/reminders` | التذكيرات: الموعد/القناة/الحالة/المحاولات |
 | `/dashboard/expenses` | المصروفات: المبلغ/الفئة/المتجر/التاريخ |
 | `/dashboard/whatsapp` | حالة تكامل واتساب (أدناه) |
+| `/dashboard/finance` (D2، `finance.view`) | المالية **المحسوبة**: Current MRR/ARR/ARPU لكل عملة (as-of now)، تكلفة معروفة/غير مسعَّرة/coverage لنافذة UTC، breakdowns، أعلى المشتركين (معرّف داخلي)، MRR Snapshot History (run-rate لا إيراد)، `Gross Margin: NOT AVAILABLE — Phase E`. تصدير CSV بـ`finance.export` على `/dashboard/finance/export` |
 
 جميع القوائم مرقّمة الصفحات (pagination) وتعيد استخدام النماذج القائمة مباشرةً.
 

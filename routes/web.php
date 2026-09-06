@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Auth\LogoutController;
+use App\Http\Controllers\Dashboard\FinanceExportController;
 use App\Http\Controllers\Dashboard\ProviderCredentialController;
 use App\Http\Controllers\Dashboard\UsageExportController;
 use App\Http\Middleware\EnsureDevEnvironment;
@@ -16,6 +17,7 @@ use App\Livewire\Dashboard\Ai\Routing as AiRouting;
 use App\Livewire\Dashboard\AuditLogs;
 use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
+use App\Livewire\Dashboard\Finance;
 use App\Livewire\Dashboard\Messages;
 use App\Livewire\Dashboard\Overview;
 use App\Livewire\Dashboard\Persona;
@@ -90,6 +92,10 @@ Route::middleware(['auth', 'admin'])
 
         Route::get('/usage', Usage::class)->middleware('permission:usage.view')->name('dashboard.usage');
         Route::get('/usage/export', UsageExportController::class)->middleware('permission:usage.export')->name('dashboard.usage.export');
+
+        // Phase D2 — calculated financials (finance.view) + CSV (finance.export).
+        Route::get('/finance', Finance::class)->middleware('permission:finance.view')->name('dashboard.finance');
+        Route::get('/finance/export', FinanceExportController::class)->middleware('permission:finance.export')->name('dashboard.finance.export');
     });
 
 // Local chat simulator — 404 outside local/testing (see EnsureDevEnvironment).
