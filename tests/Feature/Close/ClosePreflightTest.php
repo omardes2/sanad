@@ -5,10 +5,15 @@ declare(strict_types=1);
 use App\Data\Close\CloseEvaluation;
 use App\Enums\CustomerPaymentEventType;
 use App\Enums\PaymentSource;
+use App\Exceptions\Close\CloseBlockedException;
 use App\Models\CustomerPayment;
+use App\Models\FinancePeriodClose;
+use App\Models\FinancePeriodCloseInput;
+use App\Models\FinancePeriodCloseScope;
 use App\Models\FxConversion;
 use App\Models\FxRate;
 use App\Services\Close\ClosePreflight;
+use App\Services\Close\PeriodCloseService;
 use App\Services\Fx\ReportingCurrencyService;
 use App\Services\Payments\CustomerPaymentService;
 use App\Services\Reconciliation\CostInvoiceService;
@@ -162,4 +167,83 @@ it('reflects the current reporting currency: switching it changes statuses, neve
         ->and(array_column($e->conditions, 'code'))->toContain('FX_INCOMPLETE_CASH')
         ->and(collect($e->snapshot['payments'])->firstWhere('currency', 'ILS')['status'])->toBe('NATIVE')
         ->and(FxConversion::count())->toBe(1);
+});
+
+it('FX completeness matrix: every payment, refund, gateway fee, reconciliation and adjustment must be NATIVE or carry a current frozen conversion to the reporting currency; any NOT CONVERTED item blocks, no partial total is ever closed, and a later rate correction never touches a frozen conversion', function () {
+    config(['billing.cost_currency' => 'USD']);
+    $subscriber = billingSubscriber();
+    $payment = e1Payment($subscriber, ['amount' => '365.00', 'currency' => 'ILS', 'receivedAt' => CarbonImmutable::parse('2026-08-10 09:00:00', 'UTC'), 'gatewayFeeAmount' => '3.65', 'feeCurrency' => 'ILS']);
+    $refund = e1Refund($payment, ['amount' => '36.50', 'refundedAt' => CarbonImmutable::parse('2026-08-12 10:00:00', 'UTC')]);
+    financeRow(['provider' => 'groq', 'provider_cost' => '50.000000', 'total_cost' => '50.000000', 'occurred_at' => CarbonImmutable::parse('2026-08-15 10:00:00', 'UTC')]);
+    $invoice = e2ConfirmedInvoice(['service' => '182.500000'], ['currency' => 'ILS']);
+    $rec = e2Reconcile([[$invoice->lines()->first()->id, '182.500000']], ['currency' => 'ILS']);
+    $adj = app(CostReconciliationService::class)->adjust($rec->id, '-36.500000', 'credit', 'cn:1');
+    $zero = fn (string $component, string $cp) => e2Reconcile([], ['component' => $component, 'counterpartyKey' => $cp, 'source' => 'confirmed_zero', 'reasonCode' => 'none', 'evidenceRef' => 'att', 'typedConfirmation' => 'ZERO']);
+    $zero('communication', 'meta-whatsapp');
+    $zero('external', 'none');
+
+    $statuses = fn (CloseEvaluation $e): array => [
+        'payment' => collect($e->snapshot['payments'])->firstWhere('id', $payment->id)['status'],
+        'refund' => collect($e->snapshot['refunds'])->firstWhere('id', $refund->id)['status'],
+        'gateway_fee' => collect($e->snapshot['gateway_fees'])->firstWhere('payment_id', $payment->id)['status'],
+        'reconciliation' => collect($e->snapshot['reconciliations'])->firstWhere('id', $rec->id)['status'],
+        'adjustment' => collect($e->snapshot['adjustments'])->firstWhere('id', $adj->id)['status'],
+    ];
+    $allNull = ['gross_cash_collected' => null, 'refunds' => null, 'net_cash' => null, 'gateway_fees' => null, 'net_cash_after_gateway_fees' => null, 'reconciled_service_cost' => null, 'reconciled_cash_contribution' => null];
+
+    // 0. nothing converted ⇒ every item NOT CONVERTED, both FX blockers, every figure NOT AVAILABLE, close refused, nothing written
+    $e = preflight();
+    expect($statuses($e))->toBe(['payment' => 'NOT CONVERTED', 'refund' => 'NOT CONVERTED', 'gateway_fee' => 'NOT CONVERTED', 'reconciliation' => 'NOT CONVERTED', 'adjustment' => 'NOT CONVERTED'])
+        ->and($e->blocking())->toBe(['FX_INCOMPLETE_CASH (payment:'.$payment->id.',refund:'.$refund->id.')', 'FX_INCOMPLETE_COST (reconciliation:'.$rec->id.',adjustment:'.$adj->id.')'])
+        ->and($e->metrics)->toBe($allNull)
+        ->and(fn () => closeMonth('2026-08', null, 'k-fx'))->toThrow(CloseBlockedException::class, 'FX_INCOMPLETE')
+        ->and(FinancePeriodClose::count())->toBe(0)->and(FinancePeriodCloseScope::count())->toBe(0);
+
+    // 1. payment converted ⇒ its gateway fee follows the SAME conversion (same fx_rate_id / snapshot / direction); refund still blocks; net figures still NOT AVAILABLE
+    $r0810 = fxRate(['rate' => '3.65', 'rateDate' => '2026-08-10']);
+    $conversion = fxConvert('customer_payment', $payment->id, 'USD', $r0810->id);
+    $e = preflight();
+    $fee = collect($e->snapshot['gateway_fees'])->firstWhere('payment_id', $payment->id);
+    expect($statuses($e))->toBe(['payment' => 'CONVERTED', 'refund' => 'NOT CONVERTED', 'gateway_fee' => 'CONVERTED', 'reconciliation' => 'NOT CONVERTED', 'adjustment' => 'NOT CONVERTED'])
+        ->and($fee['fx_conversion_id'])->toBe($conversion->id)->and($fee['fx_rate_id'])->toBe($r0810->id)->and($fee['fx_rate_snapshot'])->toBe('3.650000000000')->and($fee['fx_direction'])->toBe('inverse')->and($fee['reporting_amount'])->toBe('1.00')
+        ->and($e->blocking())->toBe(['FX_INCOMPLETE_CASH (refund:'.$refund->id.')', 'FX_INCOMPLETE_COST (reconciliation:'.$rec->id.',adjustment:'.$adj->id.')'])
+        ->and($e->metrics['gross_cash_collected'])->toBe('100.00')->and($e->metrics['gateway_fees'])->toBe('1.00')
+        ->and($e->metrics['refunds'])->toBeNull()->and($e->metrics['net_cash'])->toBeNull()->and($e->metrics['net_cash_after_gateway_fees'])->toBeNull()->and($e->metrics['reconciled_cash_contribution'])->toBeNull();
+
+    // 2. refund converted (policy date = refunded_at) ⇒ cash complete; cost still blocks
+    $r0812 = fxRate(['rate' => '3.65', 'rateDate' => '2026-08-12']);
+    fxConvert('customer_refund', $refund->id, 'USD', $r0812->id);
+    $e = preflight();
+    expect($e->blocking())->toBe(['FX_INCOMPLETE_COST (reconciliation:'.$rec->id.',adjustment:'.$adj->id.')'])
+        ->and($e->metrics['net_cash'])->toBe('90.00')->and($e->metrics['net_cash_after_gateway_fees'])->toBe('89.00')
+        ->and($e->metrics['reconciled_service_cost'])->toBeNull()->and($e->metrics['reconciled_cash_contribution'])->toBeNull();
+
+    // 3. reconciliation converted (policy date = period_end) ⇒ the adjustment alone still blocks: no partial cost total
+    $r0901 = fxRate(['rate' => '3.65', 'rateDate' => '2026-09-01']);
+    fxConvert('cost_reconciliation', $rec->id, 'USD', $r0901->id);
+    $e = preflight();
+    expect($statuses($e)['adjustment'])->toBe('NOT CONVERTED')->and($e->blocking())->toBe(['FX_INCOMPLETE_COST (adjustment:'.$adj->id.')'])
+        ->and($e->metrics['reconciled_service_cost'])->toBeNull()->and($e->metrics['reconciled_cash_contribution'])->toBeNull();
+
+    // 4. adjustment converted ⇒ complete: 100 − 10 − 1 = 89.00 cash; cost 50 − 10 = 40; contribution 49
+    fxConvert('cost_adjustment', $adj->id, 'USD', $r0901->id);
+    $e = preflight();
+    expect(array_values($statuses($e)))->toBe(['CONVERTED', 'CONVERTED', 'CONVERTED', 'CONVERTED', 'CONVERTED'])->and($e->canClose())->toBeTrue()
+        ->and($e->metrics)->toBe(['gross_cash_collected' => '100.00', 'refunds' => '10.00', 'net_cash' => '90.00', 'gateway_fees' => '1.00', 'net_cash_after_gateway_fees' => '89.00', 'reconciled_service_cost' => '40.000000', 'reconciled_cash_contribution' => '49.000000']);
+    $hashBefore = $e->inputHash;
+
+    // 5. a later rate correction (new revision of the 2026-08-10 quote) never touches the frozen conversions: same fx_rate_id, same snapshot, same figures, same hash
+    $corrected = fxRate(['rate' => '3.70', 'rateDate' => '2026-08-10', 'expectedCurrentRateId' => $r0810->id, 'reasonCode' => 'correction', 'evidenceRef' => 'boi:2026-08-10-rev2']);
+    $e = preflight();
+    $line = collect($e->snapshot['payments'])->firstWhere('id', $payment->id);
+    expect($corrected->id)->not->toBe($r0810->id)
+        ->and($line['fx_rate_id'])->toBe($r0810->id)->and($line['fx_rate_snapshot'])->toBe('3.650000000000')->and($line['reporting_amount'])->toBe('100.00')
+        ->and(collect($e->snapshot['gateway_fees'])->firstWhere('payment_id', $payment->id)['fx_rate_id'])->toBe($r0810->id)
+        ->and($e->inputHash)->toBe($hashBefore)->and(FxConversion::count())->toBe(4)->and((string) $conversion->fresh()->rate_snapshot)->toBe('3.650000000000');
+
+    // 6. closed on the frozen conversions; another correction afterwards is not even drift
+    $close = closeMonth('2026-08', null, 'k-fx-ok');
+    fxRate(['rate' => '3.80', 'rateDate' => '2026-09-01', 'expectedCurrentRateId' => $r0901->id, 'reasonCode' => 'correction', 'evidenceRef' => 'boi:2026-09-01-rev2']);
+    expect((string) $close->reconciled_cash_contribution)->toBe('49.000000')->and(app(PeriodCloseService::class)->drift($close->fresh()))->toBeFalse()
+        ->and(FinancePeriodCloseInput::query()->where('close_id', $close->id)->where('status', '<>', 'CONVERTED')->count())->toBe(2); // only the two CONFIRMED ZERO (USD, NATIVE) lines
 });

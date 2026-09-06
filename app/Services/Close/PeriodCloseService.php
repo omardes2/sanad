@@ -37,8 +37,15 @@ use Illuminate\Support\Facades\DB;
  *  `reopened` record (reason + evidence mandatory) that references it → state
  *  `open` → audit. The old close and its inputs are never touched; the next
  *  close is a new revision chained through previous_close_id.
- *  Idempotency: the same key returns the same close; a different key on an
- *  already-closed scope is ALREADY_CLOSED. Nothing here writes to any other
+ *  Idempotency: the same key with the SAME canonical inputs (live input_hash
+ *  = the close's input_hash) returns the same close — no second close, no
+ *  second audit; the same key with different inputs, another month or another
+ *  reporting currency is idempotency_conflict (never a silent replay). The key
+ *  is checked again under the scope lock so a replay that waited for a
+ *  concurrent close still returns that close. A different key on an
+ *  already-closed scope is ALREADY_CLOSED. previous_close_id of a close is the
+ *  closed revision it supersedes (v2 → v1); the reopened record between them
+ *  is chained through reopened_close_id. Nothing here writes to any other
  *  finance table, and nothing ever recomputes a historical close.
  */
 final class PeriodCloseService
@@ -63,17 +70,15 @@ final class PeriodCloseService
         $target = $this->reporting->current();
 
         return DB::transaction(function () use ($start, $end, $monthKey, $key, $target, $expectedCurrentCloseId, $typedConfirmation): FinancePeriodClose {
-            $existing = FinancePeriodClose::query()->where('idempotency_key', $key)->first();
-
-            if ($existing !== null) {
-                if ($existing->status !== PeriodCloseStatus::Closed || $existing->month() !== $monthKey || $existing->reporting_currency !== $target) {
-                    throw CloseRuleException::of('idempotency_conflict', "مفتاح idempotency [{$key}] مستخدم لسجل إقفال مختلف (#{$existing->id}).");
-                }
-
-                return $existing; // same request replayed
+            if (($replay = $this->replay($key, $monthKey, $target)) !== null) {
+                return $replay; // same request replayed (same key, same canonical inputs)
             }
 
             $scope = $this->lockScope($start, $end, $target);
+
+            if (($replay = $this->replay($key, $monthKey, $target)) !== null) {
+                return $replay; // committed by a concurrent request while we waited for the lock
+            }
 
             if ($scope->current_close_id !== $expectedCurrentCloseId) {
                 throw new StaleCloseException('حالة إقفال هذا الشهر تغيّرت (المتوقع '.($expectedCurrentCloseId ?? 'none').'، الحالي '.($scope->current_close_id ?? 'none').'). حدّث وأعد المحاولة. لم يُكتب شيء.');
@@ -89,8 +94,10 @@ final class PeriodCloseService
                 throw new CloseBlockedException($evaluation->blocking());
             }
 
-            $previous = $scope->current_close_id;
-            $revision = (int) FinancePeriodClose::query()->where('scope_id', $scope->id)->where('status', PeriodCloseStatus::Closed->value)->max('revision') + 1;
+            $pointerFrom = $scope->current_close_id;
+            $superseded = FinancePeriodClose::query()->where('scope_id', $scope->id)->where('status', PeriodCloseStatus::Closed->value)->orderByDesc('revision')->first();
+            $previous = $superseded?->id; // the closed revision this one supersedes (null for revision 1)
+            $revision = ($superseded?->revision ?? 0) + 1;
             $now = CarbonImmutable::now();
 
             $close = FinancePeriodClose::query()->create([
@@ -110,10 +117,10 @@ final class PeriodCloseService
             $scope->forceFill(['state' => 'closed', 'current_close_id' => $close->id, 'version' => $scope->version + 1, 'updated_by_ref' => FinanceAuthorization::actorRef()])->save();
 
             $this->audit->record(AuditActions::FinancePeriodClosed, $scope, [
-                'current_close_id' => ['from' => $previous, 'to' => $close->id],
+                'current_close_id' => ['from' => $pointerFrom, 'to' => $close->id],
                 'state' => ['from' => 'open', 'to' => 'closed'],
             ], [
-                'month' => $monthKey, 'reporting_currency' => $target, 'revision' => $revision, 'input_hash' => $evaluation->inputHash,
+                'month' => $monthKey, 'reporting_currency' => $target, 'revision' => $revision, 'previous_close_id' => $previous, 'input_hash' => $evaluation->inputHash,
                 'typed_confirmation' => $typedConfirmation, 'metrics' => $evaluation->metrics,
                 'informational_conditions' => array_values(array_map(static fn (array $c): string => $c['code'].' ('.$c['detail'].')', array_filter($evaluation->conditions, static fn (array $c): bool => ! $c['blocking']))),
             ]);
@@ -210,6 +217,33 @@ final class PeriodCloseService
         }
 
         return ! hash_equals((string) $close->input_hash, $this->preflight->evaluate($close->month(), $close->reporting_currency)->inputHash);
+    }
+
+    /**
+     * The close already recorded under this idempotency key, when it is the SAME
+     * request: same month, same reporting currency and the same canonical inputs
+     * (live input_hash equals the frozen one). Anything else under the same key is
+     * a conflict — never a silent replay of a close computed from other inputs.
+     */
+    private function replay(string $key, string $monthKey, string $target): ?FinancePeriodClose
+    {
+        $existing = FinancePeriodClose::query()->where('idempotency_key', $key)->first();
+
+        if ($existing === null) {
+            return null;
+        }
+
+        if ($existing->status !== PeriodCloseStatus::Closed || $existing->month() !== $monthKey || $existing->reporting_currency !== $target) {
+            throw CloseRuleException::of('idempotency_conflict', "مفتاح idempotency [{$key}] مستخدم لسجل إقفال مختلف (#{$existing->id}).");
+        }
+
+        $liveHash = $this->preflight->evaluate($monthKey, $target)->inputHash;
+
+        if (! hash_equals((string) $existing->input_hash, $liveHash)) {
+            throw CloseRuleException::of('idempotency_conflict', "مفتاح idempotency [{$key}] سبق استخدامه للإقفال #{$existing->id} بمدخلات مختلفة (input_hash مختلف)؛ لا إعادة صامتة — استخدم مفتاحًا جديدًا.");
+        }
+
+        return $existing;
     }
 
     private function lockScope(CarbonImmutable $start, CarbonImmutable $end, string $target): FinancePeriodCloseScope

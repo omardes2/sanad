@@ -16,7 +16,8 @@ use Symfony\Component\Process\Process;
  * GENUINE parallel tests for Phase E4 on PostgreSQL (separate PHP processes):
  *  - 6 concurrent closes of one month from the same pointer ⇒ one close,
  *    five stale, one pointer move, one audit, one set of input rows;
- *  - 6 concurrent replays of the same idempotency key ⇒ one close;
+ *  - 6 concurrent replays of the same idempotency key ⇒ one close, and every
+ *    replay returns that same close (key re-checked under the scope lock);
  *  - 6 concurrent reopens of the current close ⇒ one reopen, five stale.
  * Runs only on a reachable pgsql connection; cleans only its own rows.
  * The month is chosen in a year no other test uses so the shared database
@@ -101,6 +102,7 @@ it('of 6 concurrent closes from the same pointer exactly one closes the month; f
         $outcomes = closeOutcomes($processes);
         $scope = FinancePeriodCloseScope::query()->where('period_start', '2024-03-01 00:00:00')->firstOrFail();
         $winners = array_values(array_filter($outcomes, fn ($o) => str_starts_with($o, 'ok:')));
+        $winnerId = (int) explode(':', $winners[0] ?? 'ok:0')[1];
 
         expect($winners)->toHaveCount(1)
             ->and(array_filter($outcomes, fn ($o) => $o === 'stale'))->toHaveCount(5)
@@ -122,11 +124,12 @@ it('of 6 concurrent closes from the same pointer exactly one closes the month; f
             $processes[] = closeRun(['close', $month, (string) $scope->current_close_id, $key]);
         }
         $outcomes = closeOutcomes($processes);
-        $ids = array_unique(array_map(fn ($o) => explode(':', $o)[1] ?? $o, array_filter($outcomes, fn ($o) => str_starts_with($o, 'ok:'))));
-        expect(count(array_filter($outcomes, fn ($o) => str_starts_with($o, 'ok:') || $o === 'stale')))->toBe(6)
-            ->and($ids)->toHaveCount(1)
+        $v2 = FinancePeriodClose::query()->where('idempotency_key', $key)->firstOrFail();
+        expect(array_values(array_unique($outcomes)))->toBe(['ok:'.$v2->id]) // every replay returns the SAME close: the key is re-checked under the scope lock
             ->and(FinancePeriodClose::query()->where('scope_id', $scope->id)->where('status', 'closed')->count())->toBe(2) // revision 1 + revision 2
-            ->and(FinancePeriodClose::query()->where('idempotency_key', $key)->count())->toBe(1);
+            ->and($v2->revision)->toBe(2)->and($v2->previous_close_id)->toBe($winnerId)
+            ->and($scope->fresh()->current_close_id)->toBe($v2->id)->and($scope->fresh()->state)->toBe('closed')
+            ->and(AuditLog::where('action', 'finance.period_closed')->where('subject_id', $scope->id)->count())->toBe(2);
     } finally {
         closeCleanup($month, $cps);
     }
