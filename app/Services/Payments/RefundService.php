@@ -41,11 +41,7 @@ final class RefundService
 
         $amount = MoneyRules::positiveAmount($input->amount, 'amount');
         MoneyRules::notInFuture($input->refundedAt, 'refunded_at');
-        $key = trim($input->idempotencyKey);
-
-        if ($key === '' || mb_strlen($key) > 191) {
-            throw PaymentRuleException::of('idempotency_key', 'مفتاح idempotency إلزامي (حتى 191 حرفًا).');
-        }
+        $key = MoneyRules::idempotencyKey($input->idempotencyKey);
 
         $reason = MoneyRules::boundedRef($input->reasonCode, 32, 'reason_code');
 

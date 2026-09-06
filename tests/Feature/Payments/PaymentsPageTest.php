@@ -4,11 +4,6 @@ declare(strict_types=1);
 
 use App\Livewire\Dashboard\Finance\Payments;
 use App\Models\CustomerPayment;
-use App\Models\CustomerRefund;
-use App\Models\PaymentAllocation;
-use App\Models\RefundAllocation;
-use App\Models\Subscription;
-use App\Models\SubscriptionEvent;
 use App\Models\User;
 use App\Support\Rbac\Role;
 use Carbon\CarbonImmutable;
@@ -19,10 +14,16 @@ use Spatie\Permission\PermissionRegistrar;
 uses(RefreshDatabase::class);
 
 /**
- * Phase E1 — /dashboard/finance/payments: strict RBAC on the route, the
- * mount and EVERY action; the four write operations through the services;
- * idempotent double submit; no PII; no revenue / gross profit figure.
+ * Phase E1 → E5.2a — /dashboard/finance/payments: strict RBAC on the route,
+ * the mount and every action; Record Manual Payment through the service with
+ * one attempt key per attempt (idempotent double submit); allowlisted,
+ * bounded, URL-kept filters; 25-row pagination in id-desc order; no PII;
+ * no revenue / gross profit figure.
  */
+beforeEach(function () {
+    $this->travelTo(CarbonImmutable::parse('2026-09-06 12:00:00', 'UTC'));
+});
+
 it('is reachable only with finance.payments.manage: super_admin and finance 200, operations/support/legacy admin 403, guests redirected', function () {
     rbacSync();
 
@@ -34,9 +35,9 @@ it('is reachable only with finance.payments.manage: super_admin and finance 200,
     $this->actingAs(userWithRole(Role::SuperAdmin))->get(route('dashboard.finance.payments'))->assertOk();
 });
 
-it('shows the payments nav link only to accounts holding finance.payments.manage', function () {
-    $this->actingAs(userWithRole(Role::Finance))->get(route('dashboard'))->assertOk()->assertSee(route('dashboard.finance.payments'));
-    $this->actingAs(userWithRole(Role::Operations))->get(route('dashboard'))->assertOk()->assertDontSee(route('dashboard.finance.payments'));
+it('shows the payments and refunds nav links only to accounts holding finance.payments.manage', function () {
+    $this->actingAs(userWithRole(Role::Finance))->get(route('dashboard'))->assertOk()->assertSee(route('dashboard.finance.payments'))->assertSee(route('dashboard.finance.refunds'));
+    $this->actingAs(userWithRole(Role::Operations))->get(route('dashboard'))->assertOk()->assertDontSee(route('dashboard.finance.payments'))->assertDontSee(route('dashboard.finance.refunds'));
     $this->actingAs(userWithRole(Role::Support))->get(route('dashboard'))->assertOk()->assertDontSee(route('dashboard.finance.payments'));
 });
 
@@ -44,102 +45,94 @@ it('refuses every action for an account without the permission, even after the p
     $finance = userWithRole(Role::Finance);
     $subscriber = billingSubscriber();
     $component = Livewire::actingAs($finance)->test(Payments::class)->assertOk()
-        ->set('subscriberId', (string) $subscriber->id)->set('amount', '10.00')->set('currency', 'USD');
+        ->set('subscriberId', (string) $subscriber->id)->set('amount', '10.00')->set('paymentCurrency', 'USD');
 
-    // The role is withdrawn while the page is open: the next write is refused before any service runs.
     $finance->removeRole(Role::Finance->value);
     app(PermissionRegistrar::class)->forgetCachedPermissions();
 
     $component->call('recordPayment')->assertForbidden();
-
     expect(CustomerPayment::count())->toBe(0);
 });
 
-it('records a manual payment from the form, is idempotent on a double submit, shows FEES UNKNOWN and no PII', function () {
+it('records a manual payment from the form with one attempt key: a failed attempt keeps the key, a double submit with the same key is idempotent, success rotates the key; FEES UNKNOWN and no PII', function () {
     $finance = userWithRole(Role::Finance);
     $subscriber = billingSubscriber();
-
-    $component = Livewire::actingAs($finance)->test(Payments::class)
-        ->set('subscriberId', (string) $subscriber->id)
-        ->set('amount', '49.90')->set('currency', 'usd')
-        ->set('receivedAt', CarbonImmutable::now('UTC')->subHour()->format('Y-m-d\TH:i'))
-        ->set('reference', 'BANK-1');
+    $component = Livewire::actingAs($finance)->test(Payments::class)->assertOk();
     $key = $component->get('idempotencyKey');
+    expect($key)->toStartWith('ui:');
 
-    $component->call('recordPayment')->assertHasNoErrors()->assertSee('سُجِّلت الدفعة');
+    // 1. a refused attempt (bad amount) keeps the SAME attempt key — the user fixes the payload and resubmits the same attempt.
+    $component->set('subscriberId', (string) $subscriber->id)->set('amount', 'abc')->set('paymentCurrency', 'USD')
+        ->call('recordPayment')->assertHasErrors(['payment.rule'])->assertSee('REFUSED BY SERVICE');
+    expect($component->get('idempotencyKey'))->toBe($key)->and(CustomerPayment::count())->toBe(0);
 
+    // 2. success ⇒ one payment; the key rotates only now.
+    $component->set('amount', '10.00')->call('recordPayment')->assertHasNoErrors()->assertSee('سُجِّلت الدفعة');
     $payment = CustomerPayment::query()->firstOrFail();
-    expect($payment->idempotency_key)->toBe($key)->and($payment->recorded_by_ref)->toBe('user:'.$finance->id)
-        ->and($payment->user_id)->toBe($subscriber->id)->and((string) $payment->amount)->toBe('49.90')->and($payment->currency)->toBe('USD')
-        ->and($component->get('idempotencyKey'))->not->toBe($key); // a fresh key for the next form
+    $newKey = $component->get('idempotencyKey');
+    expect($payment->idempotency_key)->toBe($key)->and($newKey)->not->toBe($key)->and($payment->gateway_fee_amount)->toBeNull()->and($payment->recorded_by_ref)->toBe('user:'.$finance->id);
 
-    // A double submit (same key, same facts) records nothing new.
-    $component->set('idempotencyKey', $key)->set('subscriberId', (string) $subscriber->id)->set('amount', '49.90')->set('currency', 'USD')
-        ->set('receivedAt', $payment->received_at->format('Y-m-d\TH:i'))->set('reference', 'BANK-1')
+    // 3. the same key + the same facts replayed through the service ⇒ the same row, nothing new (what a double click produces).
+    $component->set('idempotencyKey', $key)->set('subscriberId', (string) $subscriber->id)->set('amount', '10.00')->set('paymentCurrency', 'USD')->set('receivedAt', $payment->received_at->utc()->format('Y-m-d\TH:i'))
         ->call('recordPayment')->assertHasNoErrors()->assertSee('مسجَّلة مسبقًا');
     expect(CustomerPayment::count())->toBe(1);
 
-    $html = $this->actingAs($finance)->get(route('dashboard.finance.payments'))->assertOk();
-    $html->assertSee('FEES UNKNOWN')->assertSee('#'.$subscriber->id)->assertSee('49.90 USD')
-        ->assertSee('Revenue Recognition: <strong>NOT AVAILABLE</strong>', false)
-        ->assertSee('Gross Profit: <strong>NOT AVAILABLE</strong>', false)
-        ->assertDontSee($subscriber->email)->assertDontSee($subscriber->name)
-        ->assertDontSee('Revenue:')->assertDontSee('Gross Margin:');
+    // 4. the same key + different facts ⇒ IDEMPOTENCY CONFLICT, shown as such; the UI never mints a new key by itself.
+    $component->set('idempotencyKey', $key)->set('subscriberId', (string) $subscriber->id)->set('amount', '11.00')->set('paymentCurrency', 'USD')
+        ->call('recordPayment')->assertHasErrors(['payment.conflict'])->assertSee('IDEMPOTENCY CONFLICT');
+    expect(CustomerPayment::count())->toBe(1)->and($component->get('idempotencyKey'))->toBe($key);
+
+    $html = $this->actingAs($finance)->get(route('dashboard.finance.payments', ['from' => '2026-09-01', 'to' => '2026-09-06']))->assertOk()
+        ->assertSee('FEES UNKNOWN')->assertSee('#'.$subscriber->id)->assertSee(route('dashboard.finance.payments.show', $payment->id))
+        ->assertSee('Received (UTC)')->assertSee('timezone')
+        ->assertDontSee($subscriber->email)->assertDontSee($subscriber->name)->assertDontSee('Revenue:')->assertDontSee('Gross Profit:')->assertDontSee('Margin:')
+        ->getContent();
+    expect(substr_count($html, 'data-testid="payment-'))->toBe(1);
 });
 
-it('surfaces domain refusals as form errors without writing anything', function () {
+it('separates error kinds: validation (UI parsing) and REFUSED BY SERVICE with the rule name, writing nothing', function () {
     $finance = userWithRole(Role::Finance);
     $subscriber = billingSubscriber();
-    $payment = e1Payment($subscriber, ['amount' => '20.00']);
+    $component = Livewire::actingAs($finance)->test(Payments::class);
 
-    Livewire::actingAs($finance)->test(Payments::class)
-        ->set('subscriberId', (string) $subscriber->id)->set('amount', '0')->set('currency', 'USD')
-        ->call('recordPayment')->assertHasErrors(['payment'])
-        ->set('amount', '10.00')->set('currency', 'USD')->set('gatewayFeeAmount', '1.00')->set('feeCurrency', 'EUR')
-        ->call('recordPayment')->assertHasErrors(['payment'])
-        ->set('subscriberId', 'abc')->set('gatewayFeeAmount', '')->set('feeCurrency', '')
-        ->call('recordPayment')->assertHasErrors(['payment'])
-        ->set('refundPaymentId', (string) $payment->id)->set('refundAmount', '20.01')->set('refundReasonCode', 'x')
-        ->call('recordRefund')->assertHasErrors(['refund'])
-        ->set('allocPaymentId', (string) $payment->id)->set('allocEventId', '999')->set('allocAmount', '5.00')
-        ->call('allocatePayment')->assertHasErrors(['allocation'])
-        ->set('rallocRefundId', '1')->set('rallocAllocationId', '1')->set('rallocAmount', '1.00')
-        ->call('allocateRefund')->assertHasErrors(['refund_allocation'])
-        ->set('from', 'bad')->assertSee('صيغة التاريخ غير صالحة');
-
-    expect(CustomerPayment::count())->toBe(1)->and(CustomerRefund::count())->toBe(0)->and(PaymentAllocation::count())->toBe(0)->and(RefundAllocation::count())->toBe(0);
+    $component->set('subscriberId', 'x')->set('amount', '10.00')->set('paymentCurrency', 'USD')->call('recordPayment')->assertHasErrors(['payment.validation'])->assertHasNoErrors(['payment.rule']);
+    $component->set('subscriberId', (string) $subscriber->id)->set('amount', '10.00')->set('paymentCurrency', 'USD')->set('receivedAt', '2026-09-07T10:00')->call('recordPayment')->assertHasErrors(['payment.rule'])->assertSee('received_at —');
+    $component->set('receivedAt', '2026-09-06T10:00')->set('feeCurrency', 'ILS')->set('gatewayFeeAmount', '1.00')->call('recordPayment')->assertHasErrors(['payment.rule']);
+    expect(CustomerPayment::count())->toBe(0);
 });
 
-it('records a refund, allocates a payment to a subscription-event period and attributes the refund, all from the page', function () {
+it('filters are allowlisted, bounded and kept in the URL; a filter change resets the page; 25 rows per page in id-desc order', function () {
     $finance = userWithRole(Role::Finance);
-    $subscriber = billingSubscriber();
-    $payment = e1Payment($subscriber, ['amount' => '100.00', 'receivedAt' => CarbonImmutable::now('UTC')->subDay()]);
-    $subscription = Subscription::create(['subscriber_id' => $subscriber->id, 'plan_id' => billingPlan()->id, 'status' => 'active', 'started_at' => now()]);
-    $event = SubscriptionEvent::query()->create(['subscription_id' => $subscription->id, 'subscriber_id' => $subscriber->id, 'event_type' => 'extended', 'from_status' => 'active', 'to_status' => 'active', 'to_period_start' => CarbonImmutable::parse('2026-09-01', 'UTC'), 'to_period_end' => CarbonImmutable::parse('2026-10-01', 'UTC'), 'effective_at' => now(), 'source' => 'admin', 'actor_ref' => 'console']);
-    $noPeriod = SubscriptionEvent::query()->create(['subscription_id' => $subscription->id, 'subscriber_id' => $subscriber->id, 'event_type' => 'baseline', 'to_status' => 'active', 'effective_at' => now(), 'source' => 'baseline', 'actor_ref' => 'console']);
+    $a = billingSubscriber();
+    $b = billingSubscriber();
+    for ($i = 0; $i < 30; $i++) {
+        e1Payment($a, ['amount' => '1.00', 'currency' => 'USD', 'receivedAt' => CarbonImmutable::parse('2026-08-10', 'UTC')->addMinutes($i)]);
+    }
+    $ils = e1Payment($b, ['amount' => '365.00', 'currency' => 'ILS', 'receivedAt' => CarbonImmutable::parse('2026-08-20', 'UTC'), 'gatewayFeeAmount' => '3.65', 'feeCurrency' => 'ILS']);
+    e1Payment($b, ['amount' => '5.00', 'currency' => 'USD', 'receivedAt' => CarbonImmutable::parse('2026-07-01', 'UTC')]); // outside the window
 
-    $component = Livewire::actingAs($finance)->test(Payments::class)
-        ->set('allocPaymentId', (string) $payment->id)
-        ->assertSee('#'.$event->id.' · extended')
-        ->assertDontSee('#'.$noPeriod->id.' · baseline') // only events with a valid period are offered
-        ->set('allocEventId', (string) $event->id)->set('allocAmount', '100.00')
-        ->call('allocatePayment')->assertHasNoErrors()->assertSee('خُصِّص')
-        ->set('refundPaymentId', (string) $payment->id)->set('refundAmount', '25.00')->set('refundReasonCode', 'goodwill')
-        ->set('refundedAt', CarbonImmutable::now('UTC')->format('Y-m-d\TH:i'))
-        ->call('recordRefund')->assertHasNoErrors()->assertSee('سُجِّل الاسترداد');
+    $page = Livewire::actingAs($finance)->test(Payments::class, ['from' => '2026-08-01', 'to' => '2026-08-31']);
+    $html = $page->html();
+    expect(substr_count($html, 'data-testid="payment-'))->toBe(25)->and($html)->toContain('31 rows · page 1 of 2')
+        ->and(strpos($html, 'data-testid="payment-'.$ils->id.'"'))->toBeLessThan((int) strpos($html, 'data-testid="payment-'.($ils->id - 1).'"')); // id desc
 
-    $allocation = PaymentAllocation::query()->firstOrFail();
-    $refund = CustomerRefund::query()->firstOrFail();
-    expect($allocation->period_start->toDateString())->toBe('2026-09-01')->and($allocation->subscription_event_id)->toBe($event->id)
-        ->and($refund->recorded_by_ref)->toBe('user:'.$finance->id)->and($refund->reason_code)->toBe('goodwill');
+    $page->call('gotoPage', 2)->assertSee('page 2 of 2');
+    expect(substr_count($page->html(), 'data-testid="payment-'))->toBe(6);
 
-    $component->set('rallocRefundId', (string) $refund->id)->set('rallocAllocationId', (string) $allocation->id)->set('rallocAmount', '25.00')
-        ->call('allocateRefund')->assertHasNoErrors()->assertSee('نُسب الاسترداد');
+    // a filter change resets to page 1
+    $page->set('currency', 'ILS')->assertSee('1 rows · page 1 of 1')->assertSee('data-testid="payment-'.$ils->id.'"', false);
+    $page->set('currency', '')->set('fee', 'known')->assertSee('1 rows · page 1 of 1');
+    $page->set('fee', 'unknown')->assertSee('30 rows · page 1 of 2');
+    $page->set('fee', '')->set('subscriber', (string) $b->id)->assertSee('1 rows · page 1 of 1');
+    $page->set('subscriber', '')->set('status', 'succeeded')->assertSee('31 rows');
+    $page->set('status', 'weird')->assertSee('31 rows'); // outside the allowlist ⇒ ignored
+    $page->set('gateway', 'manual')->assertSee('31 rows');
+    $page->set('gateway', 'DROP TABLE')->assertSee('31 rows'); // ignored
+    $page->set('gateway', '')->set('subscriber', 'abc')->assertSee('31 rows'); // ignored
 
-    expect(RefundAllocation::count())->toBe(1)->and((string) $allocation->fresh()->amount)->toBe('100.00');
+    // bounded window
+    $page->set('subscriber', '')->set('from', '2025-01-01')->set('to', '2026-08-31')->assertSee('النطاق الأقصى')->assertSee('0 rows');
 
-    // The window summary shows cash and attribution apart, per currency.
-    $component->set('from', CarbonImmutable::now('UTC')->subDays(2)->toDateString())->set('to', CarbonImmutable::now('UTC')->toDateString())
-        ->assertSee('Gross Cash Collected')->assertSee('Allocated Collected Amount')->assertSee('FEES UNKNOWN')
-        ->assertSeeInOrder(['USD', '100.00', '25.00', '75.00']);
+    // URL persistence
+    $this->actingAs($finance)->get(route('dashboard.finance.payments', ['from' => '2026-08-01', 'to' => '2026-08-31', 'currency' => 'ILS', 'fee' => 'known']))->assertOk()->assertSee('1 rows · page 1 of 1');
 });

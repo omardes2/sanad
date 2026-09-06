@@ -9,13 +9,9 @@ use App\Models\CustomerRefund;
 use App\Models\PaymentAllocation;
 use App\Models\Plan;
 use App\Models\RefundAllocation;
-use App\Models\Subscription;
-use App\Models\SubscriptionEvent;
 use App\Models\User;
 use App\Services\Payments\AllocationService;
-use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
-use Symfony\Component\Process\Process;
 
 /**
  * GENUINE parallel tests for Phase E1 on PostgreSQL (separate PHP processes,
@@ -44,54 +40,6 @@ beforeEach(function () {
         $this->markTestSkipped('PostgreSQL is not reachable.');
     }
 });
-
-function e1Run(array $args): Process
-{
-    $p = new Process(['php', 'artisan', 'sanad:payment-probe', ...$args], base_path());
-    $p->start();
-
-    return $p;
-}
-
-/** @return list<string> */
-function e1Outcomes(array $processes): array
-{
-    $outcomes = [];
-    foreach ($processes as $p) {
-        $p->wait();
-        expect($p->getExitCode())->toBe(0, $p->getOutput().$p->getErrorOutput());
-        $outcomes[] = trim($p->getOutput());
-    }
-
-    return $outcomes;
-}
-
-function e1Cleanup(User $user, ?Plan $plan = null): void
-{
-    $paymentIds = CustomerPayment::query()->where('subscriber_id', $user->id)->pluck('id');
-    $refundIds = CustomerRefund::query()->whereIn('customer_payment_id', $paymentIds)->pluck('id');
-    DB::table('refund_allocations')->whereIn('customer_refund_id', $refundIds)->delete();
-    DB::table('payment_allocations')->whereIn('customer_payment_id', $paymentIds)->delete();
-    DB::table('customer_refunds')->whereIn('id', $refundIds)->delete();
-    DB::table('customer_payment_events')->whereIn('customer_payment_id', $paymentIds)->delete();
-    AuditLog::where('subject_type', (new CustomerPayment)->getMorphClass())->whereIn('subject_id', $paymentIds)->delete();
-    DB::table('customer_payments')->whereIn('id', $paymentIds)->delete();
-    DB::table('subscription_events')->where('subscriber_id', $user->id)->delete();
-    Subscription::query()->where('subscriber_id', $user->id)->delete();
-    $user->delete();
-    $plan?->delete();
-}
-
-function e1PeriodEvent(User $user, Plan $plan): SubscriptionEvent
-{
-    $subscription = Subscription::create(['subscriber_id' => $user->id, 'plan_id' => $plan->id, 'status' => 'active', 'started_at' => now()]);
-
-    return SubscriptionEvent::query()->create([
-        'subscription_id' => $subscription->id, 'subscriber_id' => $user->id, 'event_type' => 'extended', 'from_status' => 'active', 'to_status' => 'active',
-        'to_period_start' => CarbonImmutable::parse('2026-09-01', 'UTC'), 'to_period_end' => CarbonImmutable::parse('2026-10-01', 'UTC'),
-        'effective_at' => now(), 'source' => 'admin', 'actor_ref' => 'console',
-    ]);
-}
 
 it('of 6 concurrent recordings of the same idempotency key exactly one creates the payment; the others receive the same row; different facts conflict', function () {
     $user = User::factory()->create(['is_admin' => false]);
@@ -163,7 +111,7 @@ it('of 6 concurrent allocations of 30.00 from a 100.00 payment exactly three suc
     try {
         $processes = [];
         for ($i = 0; $i < 6; $i++) {
-            $processes[] = e1Run(['allocate', (string) $payment->id, (string) $event->id, '30.00']);
+            $processes[] = e1Run(['allocate', (string) $payment->id, (string) $event->id, '30.00', 'cap-'.$i.'-'.$payment->id]);
         }
         $outcomes = e1Outcomes($processes);
         $counts = array_count_values(array_map(fn ($o) => explode(':', $o)[0], $outcomes));
@@ -187,15 +135,15 @@ it('concurrent refund allocations never exceed the refund nor the allocation the
     $event = e1PeriodEvent($user, $plan);
     $payment = e1Payment($user, ['amount' => '100.00']);
     $service = app(AllocationService::class);
-    $big = $service->allocatePayment($payment->id, $event->id, '70.00');
-    $small = $service->allocatePayment($payment->id, $event->id, '30.00');
+    $big = $service->allocatePayment($payment->id, $event->id, '70.00', e1Key());
+    $small = $service->allocatePayment($payment->id, $event->id, '30.00', e1Key());
     $refund = e1Refund($payment, ['amount' => '50.00']);
 
     try {
         // (a) Bound by the REFUND: 6 × 20.00 against a 50.00 refund on a 70.00 allocation ⇒ exactly 2 succeed (40.00).
         $processes = [];
         for ($i = 0; $i < 6; $i++) {
-            $processes[] = e1Run(['allocate-refund', (string) $refund->id, (string) $big->id, '20.00']);
+            $processes[] = e1Run(['allocate-refund', (string) $refund->id, (string) $big->id, '20.00', 'rcap-'.$i.'-'.$refund->id]);
         }
         $outcomes = e1Outcomes($processes);
         $counts = array_count_values(array_map(fn ($o) => explode(':', $o)[0], $outcomes));
@@ -210,7 +158,7 @@ it('concurrent refund allocations never exceed the refund nor the allocation the
         $refund2 = e1Refund($payment, ['amount' => '50.00']);
         $processes = [];
         for ($i = 0; $i < 6; $i++) {
-            $processes[] = e1Run(['allocate-refund', (string) $refund2->id, (string) $small->id, '20.00']);
+            $processes[] = e1Run(['allocate-refund', (string) $refund2->id, (string) $small->id, '20.00', 'rcap-'.$i.'-'.$refund2->id]);
         }
         $outcomes = e1Outcomes($processes);
         $counts = array_count_values(array_map(fn ($o) => explode(':', $o)[0], $outcomes));

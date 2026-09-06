@@ -180,11 +180,7 @@ final class CustomerPaymentService
         $currency = MoneyRules::currency($input->currency, 'currency');
         MoneyRules::notInFuture($input->receivedAt, 'received_at');
 
-        $key = trim($input->idempotencyKey);
-
-        if ($key === '' || mb_strlen($key) > 191) {
-            throw PaymentRuleException::of('idempotency_key', 'مفتاح idempotency إلزامي (حتى 191 حرفًا).');
-        }
+        $key = MoneyRules::idempotencyKey($input->idempotencyKey);
 
         $fee = null;
         $feeCurrency = null;

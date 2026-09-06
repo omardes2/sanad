@@ -72,15 +72,15 @@ it('requires strictly positive amounts for payments, refunds, allocations and re
     $subscription = Subscription::create(['subscriber_id' => $subscriber->id, 'plan_id' => billingPlan()->id, 'status' => 'active', 'started_at' => now()]);
     $event = SubscriptionEvent::query()->create(['subscription_id' => $subscription->id, 'subscriber_id' => $subscriber->id, 'event_type' => 'extended', 'from_status' => 'active', 'to_status' => 'active', 'to_period_start' => CarbonImmutable::parse('2026-09-01', 'UTC'), 'to_period_end' => CarbonImmutable::parse('2026-10-01', 'UTC'), 'effective_at' => now(), 'source' => 'admin', 'actor_ref' => 'console']);
     $payment = e1Payment($subscriber, ['amount' => '10.00']);
-    $allocation = app(AllocationService::class)->allocatePayment($payment->id, $event->id, '5.00');
+    $allocation = app(AllocationService::class)->allocatePayment($payment->id, $event->id, '5.00', e1Key());
     $refund = e1Refund($payment, ['amount' => '5.00']);
     $a = app(AllocationService::class);
 
     foreach (['0', '0.00', '-1', '-0.01', 'abc', ''] as $bad) {
         expect(e1Rule(fn () => e1Payment($subscriber, ['amount' => $bad])))->toBe('amount', "payment {$bad}")
             ->and(e1Rule(fn () => e1Refund($payment, ['amount' => $bad])))->toBe('amount', "refund {$bad}")
-            ->and(e1Rule(fn () => $a->allocatePayment($payment->id, $event->id, $bad)))->toBe('amount', "allocation {$bad}")
-            ->and(e1Rule(fn () => $a->allocateRefund($refund->id, $allocation->id, $bad)))->toBe('amount', "refund allocation {$bad}");
+            ->and(e1Rule(fn () => $a->allocatePayment($payment->id, $event->id, $bad, e1Key())))->toBe('amount', "allocation {$bad}")
+            ->and(e1Rule(fn () => $a->allocateRefund($refund->id, $allocation->id, $bad, e1Key())))->toBe('amount', "refund allocation {$bad}");
     }
 
     expect(e1Rule(fn () => e1Payment($subscriber, ['amount' => '0.01'])))->toBe('none')
@@ -102,8 +102,8 @@ it('generates allocation timestamps on the server: callers cannot pass one, and 
     }
 
     $frozen = CarbonImmutable::parse(E1_NOW, 'UTC');
-    $allocation = app(AllocationService::class)->allocatePayment($payment->id, $event->id, '5.00');
-    $reversal = app(AllocationService::class)->allocateRefund($refund->id, $allocation->id, '5.00');
+    $allocation = app(AllocationService::class)->allocatePayment($payment->id, $event->id, '5.00', e1Key());
+    $reversal = app(AllocationService::class)->allocateRefund($refund->id, $allocation->id, '5.00', e1Key());
 
     expect($allocation->allocated_at->equalTo($frozen))->toBeTrue()
         ->and($allocation->created_at->equalTo($frozen))->toBeTrue()

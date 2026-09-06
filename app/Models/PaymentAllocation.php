@@ -23,7 +23,7 @@ class PaymentAllocation extends Model
     /**
      * @var list<string>
      */
-    protected $fillable = ['customer_payment_id', 'subscription_event_id', 'subscription_id', 'subscriber_id', 'period_start', 'period_end', 'amount', 'currency', 'allocated_at', 'actor_ref', 'reason_code', 'created_at'];
+    protected $fillable = ['customer_payment_id', 'subscription_event_id', 'subscription_id', 'subscriber_id', 'period_start', 'period_end', 'amount', 'currency', 'allocated_at', 'actor_ref', 'reason_code', 'idempotency_key', 'created_at'];
 
     /**
      * @return array<string, string>

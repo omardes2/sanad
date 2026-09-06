@@ -205,3 +205,25 @@ it('Phase E5.1 read-only reporting routes: overview and close detail need financ
 
     expect(userWithRole(Role::Finance)->can('finance.close_period'))->toBeFalse(); // E5.1 adds no permission and moves no action
 });
+
+it('Phase E5.2a payment routes reuse finance.payments.manage: finance and super_admin 200, operations/support/legacy admin/no-role 403, guests redirected', function () {
+    rbacSync();
+    $fx = closableMonth();
+    $urls = [
+        route('dashboard.finance.payments.show', $fx['usd']->id),
+        route('dashboard.finance.refunds', ['from' => '2026-08-01', 'to' => '2026-08-31']),
+        route('dashboard.finance.refunds.show', $fx['refund']->id),
+    ];
+
+    foreach ($urls as $url) {
+        $this->get($url)->assertRedirect(route('login'));
+    }
+    foreach ($urls as $url) {
+        $this->actingAs(User::factory()->create(['is_admin' => true]))->get($url)->assertForbidden();
+        $this->actingAs(User::factory()->create(['is_admin' => false]))->get($url)->assertForbidden();
+        $this->actingAs(userWithRole(Role::Operations))->get($url)->assertForbidden();
+        $this->actingAs(userWithRole(Role::Support))->get($url)->assertForbidden();
+        $this->actingAs(userWithRole(Role::Finance))->get($url)->assertOk();
+        $this->actingAs(userWithRole(Role::SuperAdmin))->get($url)->assertOk();
+    }
+});
