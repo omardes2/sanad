@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Models\AuditLog;
 use App\Models\FinancePeriodClose;
 use App\Services\Close\ClosePreflight;
 use App\Services\Close\PeriodCloseService;
@@ -131,6 +132,15 @@ it('audit subject filter uses the (subject_type, subject_id) morph index on Post
         $this->markTestSkipped('EXPLAIN check runs on PostgreSQL only.');
     }
 
-    $plan = collect(DB::select('EXPLAIN SELECT * FROM audit_logs WHERE subject_type = ? AND subject_id = ? ORDER BY id DESC LIMIT 25', ['App\\Models\\FinancePeriodCloseScope', 1]))->pluck('QUERY PLAN')->implode("\n");
+    // The index exists (created by nullableMorphs('subject') in the C0 migration) …
+    $indexes = collect(DB::select("SELECT indexname FROM pg_indexes WHERE tablename = 'audit_logs'"))->pluck('indexname')->all();
+    expect($indexes)->toContain('audit_logs_subject_type_subject_id_index');
+
+    // … and the planner uses it for the page's exact query once the table has data (an empty table legitimately prefers the pkey scan).
+    $target = 'App\\Models\\FinancePeriodCloseScope';
+    AuditLog::factory()->count(300)->create(['subject_type' => 'App\\Models\\CustomerPayment', 'subject_id' => 7]);
+    AuditLog::factory()->count(3)->create(['subject_type' => $target, 'subject_id' => 1]);
+    DB::statement('ANALYZE audit_logs');
+    $plan = collect(DB::select('EXPLAIN SELECT * FROM audit_logs WHERE subject_type = ? AND subject_id = ? ORDER BY id DESC LIMIT 25', [$target, 1]))->pluck('QUERY PLAN')->implode("\n");
     expect($plan)->toContain('audit_logs_subject_type_subject_id_index');
 });
