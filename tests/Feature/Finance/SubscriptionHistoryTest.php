@@ -132,7 +132,8 @@ it('is atomic: when the audit entry cannot be written, neither the state nor the
     expect(fn () => app(SubscriptionService::class)->suspend($subscription, $token))->toThrow(RuntimeException::class);
 
     expect($subscription->fresh()->status)->toBe(SubscriptionStatus::Active)
-        ->and(SubscriptionEvent::query()->count())->toBe(0);
+        ->and(SubscriptionEvent::query()->count())->toBe(0)
+        ->and(AuditLog::where('action', AuditActions::SubscriptionTransitioned)->count())->toBe(0); // no audit row survives the rollback
 });
 
 it('never updates an event row (append-only model)', function () {
@@ -212,7 +213,8 @@ it('snapshots the service period on extend (old/new period end) and leaves no ev
     $token = e0Token($subscription);
     expect(fn () => app(SubscriptionService::class)->extend($subscription->fresh(), 30, $token))->toThrow(RuntimeException::class)
         ->and($subscription->fresh()->current_period_end->equalTo($end->addDays(10)))->toBeTrue()
-        ->and(SubscriptionEvent::query()->count())->toBe(1);
+        ->and(SubscriptionEvent::query()->count())->toBe(1)
+        ->and(AuditLog::where('action', AuditActions::SubscriptionTransitioned)->count())->toBe(1); // only the first extend's audit row remains
 });
 
 it('records an explicit, enum-constrained event type rather than inferring it from from/to', function () {

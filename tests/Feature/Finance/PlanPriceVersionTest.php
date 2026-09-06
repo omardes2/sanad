@@ -127,7 +127,8 @@ it('is atomic with the plan save: a version failure rolls the financial change b
 
     expect((string) $plan->fresh()->price)->toBe('10.00')
         ->and(PlanPriceVersion::query()->count())->toBe(1)
-        ->and(AuditLog::where('action', AuditActions::PlanFinancialsUpdated)->count())->toBe(0);
+        ->and(AuditLog::where('action', AuditActions::PlanFinancialsUpdated)->count())->toBe(0)
+        ->and(AuditLog::where('action', AuditActions::PlanPriceVersioned)->count())->toBe(1); // only the pre-existing version's audit row
 });
 
 it('blocks deleting a plan that has price history', function () {
