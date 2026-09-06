@@ -89,6 +89,16 @@ final class ReportingView
     }
 
     /**
+     * The reporting status of ONE subject (E5.2a detail pages) — the same
+     * projection rule as the window views: NATIVE / CONVERTED (current frozen
+     * conversion, exact fx_rate_id) / NOT CONVERTED. Reads only.
+     */
+    public function line(FxSubjectType $type, Model $subject): ReportingLine
+    {
+        return $this->lines($type, collect([$subject]), $this->reporting->current())[0];
+    }
+
+    /**
      * @param  Collection<int, Model>  $subjects
      * @return list<ReportingLine>
      */

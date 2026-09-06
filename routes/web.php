@@ -21,9 +21,12 @@ use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Finance;
 use App\Livewire\Dashboard\Finance\CloseDetail as FinanceCloseDetail;
 use App\Livewire\Dashboard\Finance\Fx as FinanceFx;
+use App\Livewire\Dashboard\Finance\PaymentDetail as FinancePaymentDetail;
 use App\Livewire\Dashboard\Finance\Payments as FinancePayments;
 use App\Livewire\Dashboard\Finance\PeriodClose as FinancePeriodClose;
 use App\Livewire\Dashboard\Finance\Reconciliation as FinanceReconciliation;
+use App\Livewire\Dashboard\Finance\RefundDetail as FinanceRefundDetail;
+use App\Livewire\Dashboard\Finance\Refunds as FinanceRefunds;
 use App\Livewire\Dashboard\Messages;
 use App\Livewire\Dashboard\Overview;
 use App\Livewire\Dashboard\Persona;
@@ -104,6 +107,10 @@ Route::middleware(['auth', 'admin'])
         Route::get('/finance/export', FinanceExportController::class)->middleware('permission:finance.export')->name('dashboard.finance.export');
         // Phase E1 — manual payments / refunds / allocation (finance.payments.manage): every write re-authorizes server-side.
         Route::get('/finance/payments', FinancePayments::class)->middleware('permission:finance.payments.manage')->name('dashboard.finance.payments');
+        // Phase E5.2a — operational UI: payment / refund detail pages and the refunds list reuse the module permission; every write re-authorizes and goes through the E1 services.
+        Route::get('/finance/payments/{payment}', FinancePaymentDetail::class)->middleware('permission:finance.payments.manage')->whereNumber('payment')->name('dashboard.finance.payments.show');
+        Route::get('/finance/refunds', FinanceRefunds::class)->middleware('permission:finance.payments.manage')->name('dashboard.finance.refunds');
+        Route::get('/finance/refunds/{refund}', FinanceRefundDetail::class)->middleware('permission:finance.payments.manage')->whereNumber('refund')->name('dashboard.finance.refunds.show');
         // Phase E2 — supplier invoices (evidence) + cost reconciliation (finance.reconcile): every write re-authorizes server-side.
         Route::get('/finance/reconciliation', FinanceReconciliation::class)->middleware('permission:finance.reconcile')->name('dashboard.finance.reconciliation');
         // Phase E3 — manual FX quotes, frozen reporting conversions, reporting currency (finance.fx.manage).

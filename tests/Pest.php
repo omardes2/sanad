@@ -55,6 +55,7 @@ use App\Jobs\ProcessWhatsAppWebhook;
 use App\Models\ChannelAccount;
 use App\Models\Plan;
 use App\Models\Subscription;
+use App\Models\SubscriptionEvent;
 use App\Models\UsageEvent;
 use App\Models\User;
 use App\Models\WebhookEvent;
@@ -783,4 +784,17 @@ function closeRule(callable $fn): string
     }
 
     return 'none';
+}
+
+// ---- Payments operational UI (Phase E5.2a) ---------------------------------------------
+
+/** A subscription event of this subscriber carrying a valid service period (the subscriber's subscription is reused). */
+function periodEvent(User $user, string $start = '2026-09-01', string $end = '2026-10-01'): SubscriptionEvent
+{
+    $subscription = Subscription::query()->firstOrCreate(['subscriber_id' => $user->id], ['plan_id' => (Plan::query()->first() ?? billingPlan())->id, 'status' => 'active', 'started_at' => now()]);
+
+    return SubscriptionEvent::query()->create([
+        'subscription_id' => $subscription->id, 'subscriber_id' => $user->id, 'event_type' => 'extended', 'from_status' => 'active', 'to_status' => 'active',
+        'to_period_start' => CarbonImmutable::parse($start, 'UTC'), 'to_period_end' => CarbonImmutable::parse($end, 'UTC'), 'effective_at' => now(), 'source' => 'admin', 'actor_ref' => 'console',
+    ]);
 }

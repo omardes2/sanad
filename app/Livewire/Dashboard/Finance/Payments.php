@@ -6,57 +6,71 @@ namespace App\Livewire\Dashboard\Finance;
 
 use App\Data\Payments\CashSummary;
 use App\Data\Payments\ManualPaymentInput;
-use App\Data\Payments\RefundInput;
-use App\Exceptions\Payments\PaymentConflictException;
-use App\Exceptions\Payments\PaymentRuleException;
-use App\Exceptions\Payments\StalePaymentStateException;
+use App\Enums\CustomerPaymentEventType;
+use App\Livewire\Dashboard\Finance\Concerns\HandlesPaymentActions;
 use App\Models\CustomerPayment;
-use App\Models\CustomerRefund;
-use App\Models\PaymentAllocation;
-use App\Models\SubscriptionEvent;
-use App\Services\Payments\AllocationService;
 use App\Services\Payments\CashCollectedQuery;
 use App\Services\Payments\CustomerPaymentService;
-use App\Services\Payments\MoneyFormat;
-use App\Services\Payments\RefundService;
-use App\Support\Billing\DecimalMath;
-use App\Support\Rbac\Permission;
+use App\Services\Payments\PaymentLedgerView;
 use Carbon\CarbonImmutable;
-use Illuminate\Auth\Access\AuthorizationException;
-use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Attributes\Url;
 use Livewire\Component;
+use Livewire\WithPagination;
 
 /**
- * Minimal admin page for Phase E1 (the full finance UI is Phase E5): four
- * write operations — Record Manual Payment, Record Refund, Allocate Payment,
- * Allocate Refund — plus a plain per-currency Cash Collected summary for a
- * UTC window. Strict RBAC: `finance.payments.manage` opens the page (route
- * middleware AND mount) and EVERY action re-checks it server-side before the
- * service, which checks again. No dashboard, no charts, no Revenue, no Gross
- * Profit. No PII: subscribers appear as internal ids only. No free text —
- * bounded reference / reason / evidence fields only.
- *
- * Idempotency: each form carries a generated key from the moment it is
- * shown, so a double submit or a retry after a timeout records ONE payment.
+ * Payments list (Phase E1 → E5.2a operational UI). `finance.payments.manage`
+ * on the route, the mount and every action. Read-only render: filters
+ * (allowlisted, bounded, kept in the URL, page reset on change), 25 rows per
+ * page in a stable indexed order (id desc), the window cash summary from
+ * CashCollectedQuery, and the Record Manual Payment form with one attempt
+ * key per attempt. Refunds, allocations and lifecycle actions live on the
+ * detail pages. No names, e-mails or phones — ids only. Every figure is Cash
+ * Collected, never revenue or profit.
  */
 #[Title('المدفوعات | سَنَد')]
 #[Layout('components.layouts.dashboard')]
 class Payments extends Component
 {
-    private const DATETIME = 'Y-m-d\TH:i';
+    use HandlesPaymentActions;
+    use WithPagination;
 
-    // ---- Record manual payment ----
+    public const PER_PAGE = 25;
+
+    public const CURRENCIES = ['USD', 'ILS', 'EUR', 'GBP', 'JOD', 'SAR', 'AED'];
+
+    // ---- filters (URL) ---------------------------------------------------------------
+    #[Url]
+    public string $from = '';
+
+    #[Url]
+    public string $to = '';
+
+    #[Url]
+    public string $currency = '';
+
+    #[Url]
+    public string $status = '';
+
+    #[Url]
+    public string $subscriber = '';
+
+    #[Url]
+    public string $gateway = '';
+
+    #[Url]
+    public string $fee = '';
+
+    // ---- record manual payment ---------------------------------------------------------
     public string $subscriberId = '';
 
     public string $idempotencyKey = '';
 
     public string $amount = '';
 
-    public string $currency = '';
+    public string $paymentCurrency = '';
 
     public string $receivedAt = '';
 
@@ -72,46 +86,6 @@ class Payments extends Component
 
     public string $evidenceRef = '';
 
-    // ---- Record refund ----
-    public string $refundPaymentId = '';
-
-    public string $refundKey = '';
-
-    public string $refundAmount = '';
-
-    public string $refundedAt = '';
-
-    public string $refundReasonCode = '';
-
-    public string $refundGatewayRef = '';
-
-    public string $refundEvidenceRef = '';
-
-    // ---- Allocate payment ----
-    public string $allocPaymentId = '';
-
-    public string $allocEventId = '';
-
-    public string $allocAmount = '';
-
-    public string $allocReasonCode = '';
-
-    // ---- Allocate refund ----
-    public string $rallocRefundId = '';
-
-    public string $rallocAllocationId = '';
-
-    public string $rallocAmount = '';
-
-    public string $rallocReasonCode = '';
-
-    // ---- Cash window (UTC) ----
-    #[Url]
-    public string $from = '';
-
-    #[Url]
-    public string $to = '';
-
     public ?string $notice = null;
 
     public function mount(): void
@@ -119,10 +93,8 @@ class Payments extends Component
         $this->authorizeManage();
 
         $now = CarbonImmutable::now('UTC');
-        $this->idempotencyKey = self::freshKey();
-        $this->refundKey = self::freshKey();
+        $this->idempotencyKey = self::freshKey(); // one attempt key; rotates only after success
         $this->receivedAt = $now->format(self::DATETIME);
-        $this->refundedAt = $now->format(self::DATETIME);
 
         if ($this->from === '' || $this->to === '') {
             $this->to = $now->format('Y-m-d');
@@ -130,18 +102,21 @@ class Payments extends Component
         }
     }
 
+    public function updated(string $property): void
+    {
+        if (in_array($property, ['from', 'to', 'currency', 'status', 'subscriber', 'gateway', 'fee'], true)) {
+            $this->resetPage();
+        }
+    }
+
     public function recordPayment(CustomerPaymentService $service): void
     {
-        $this->authorizeManage();
-        $this->resetErrorBag('payment');
-        $this->notice = null;
-
-        try {
+        $ok = $this->attempt('payment', $this->idempotencyKey, function () use ($service): void {
             $payment = $service->recordManual(new ManualPaymentInput(
                 subscriberId: $this->positiveInt($this->subscriberId, 'معرّف المشترك'),
                 idempotencyKey: $this->idempotencyKey,
                 amount: $this->amount,
-                currency: $this->currency,
+                currency: $this->paymentCurrency,
                 receivedAt: $this->utc($this->receivedAt, 'تاريخ الاستلام'),
                 gatewayPaymentRef: self::optional($this->gatewayPaymentRef),
                 gatewayFeeAmount: self::optional($this->gatewayFeeAmount),
@@ -150,138 +125,100 @@ class Payments extends Component
                 reasonCode: self::optional($this->reasonCode),
                 evidenceRef: self::optional($this->evidenceRef),
             ));
-        } catch (PaymentRuleException|PaymentConflictException|InvalidArgumentException $e) {
-            $this->addError('payment', $e->getMessage());
 
-            return;
+            $this->notice = $payment->wasRecentlyCreated
+                ? "سُجِّلت الدفعة #{$payment->id} (succeeded) — {$payment->amount} {$payment->currency}."
+                : "الدفعة #{$payment->id} مسجَّلة مسبقًا بنفس المفتاح والحقائق؛ لم يُكتب شيء جديد.";
+        });
+
+        if ($ok) {
+            $this->reset('subscriberId', 'amount', 'paymentCurrency', 'gatewayPaymentRef', 'gatewayFeeAmount', 'feeCurrency', 'reference', 'reasonCode', 'evidenceRef');
+            $this->idempotencyKey = self::freshKey(); // success ⇒ the next attempt gets its own key
+            $this->receivedAt = CarbonImmutable::now('UTC')->format(self::DATETIME);
         }
-
-        $this->notice = $payment->wasRecentlyCreated
-            ? "سُجِّلت الدفعة #{$payment->id} (succeeded) — {$payment->amount} {$payment->currency}."
-            : "الدفعة #{$payment->id} مسجَّلة مسبقًا بنفس المفتاح والحقائق؛ لم يُكتب شيء جديد.";
-        $this->reset('subscriberId', 'amount', 'currency', 'gatewayPaymentRef', 'gatewayFeeAmount', 'feeCurrency', 'reference', 'reasonCode', 'evidenceRef');
-        $this->idempotencyKey = self::freshKey();
-        $this->receivedAt = CarbonImmutable::now('UTC')->format(self::DATETIME);
     }
 
-    public function recordRefund(RefundService $service): void
-    {
-        $this->authorizeManage();
-        $this->resetErrorBag('refund');
-        $this->notice = null;
-
-        try {
-            $refund = $service->record(new RefundInput(
-                customerPaymentId: $this->positiveInt($this->refundPaymentId, 'معرّف الدفعة'),
-                idempotencyKey: $this->refundKey,
-                amount: $this->refundAmount,
-                refundedAt: $this->utc($this->refundedAt, 'تاريخ الاسترداد'),
-                reasonCode: $this->refundReasonCode,
-                gatewayRefundRef: self::optional($this->refundGatewayRef),
-                evidenceRef: self::optional($this->refundEvidenceRef),
-            ));
-        } catch (PaymentRuleException|PaymentConflictException|InvalidArgumentException $e) {
-            $this->addError('refund', $e->getMessage());
-
-            return;
-        }
-
-        $this->notice = $refund->wasRecentlyCreated
-            ? "سُجِّل الاسترداد #{$refund->id} — {$refund->amount} {$refund->currency} على الدفعة #{$refund->customer_payment_id}."
-            : "الاسترداد #{$refund->id} مسجَّل مسبقًا بنفس المفتاح والحقائق؛ لم يُكتب شيء جديد.";
-        $this->reset('refundPaymentId', 'refundAmount', 'refundReasonCode', 'refundGatewayRef', 'refundEvidenceRef');
-        $this->refundKey = self::freshKey();
-        $this->refundedAt = CarbonImmutable::now('UTC')->format(self::DATETIME);
-    }
-
-    public function allocatePayment(AllocationService $service): void
-    {
-        $this->authorizeManage();
-        $this->resetErrorBag('allocation');
-        $this->notice = null;
-
-        try {
-            $allocation = $service->allocatePayment(
-                $this->positiveInt($this->allocPaymentId, 'معرّف الدفعة'),
-                $this->positiveInt($this->allocEventId, 'معرّف حدث الاشتراك'),
-                $this->allocAmount,
-                self::optional($this->allocReasonCode),
-            );
-        } catch (PaymentRuleException|InvalidArgumentException $e) {
-            $this->addError('allocation', $e->getMessage());
-
-            return;
-        }
-
-        $this->notice = "خُصِّص #{$allocation->id}: {$allocation->amount} {$allocation->currency} من الدفعة #{$allocation->customer_payment_id} لفترة ".$allocation->period_start->toDateString().' → '.$allocation->period_end->toDateString().' (الاشتراك #'.$allocation->subscription_id.').';
-        $this->reset('allocEventId', 'allocAmount', 'allocReasonCode');
-    }
-
-    public function allocateRefund(AllocationService $service): void
-    {
-        $this->authorizeManage();
-        $this->resetErrorBag('refund_allocation');
-        $this->notice = null;
-
-        try {
-            $row = $service->allocateRefund(
-                $this->positiveInt($this->rallocRefundId, 'معرّف الاسترداد'),
-                $this->positiveInt($this->rallocAllocationId, 'معرّف التخصيص'),
-                $this->rallocAmount,
-                self::optional($this->rallocReasonCode),
-            );
-        } catch (PaymentRuleException|InvalidArgumentException $e) {
-            $this->addError('refund_allocation', $e->getMessage());
-
-            return;
-        }
-
-        $this->notice = "نُسب الاسترداد #{$row->customer_refund_id} إلى التخصيص #{$row->payment_allocation_id} بمبلغ {$row->amount} {$row->currency} (سجل #{$row->id}).";
-        $this->reset('rallocRefundId', 'rallocAllocationId', 'rallocAmount', 'rallocReasonCode');
-    }
-
-    public function render(CashCollectedQuery $cash)
+    public function render(CashCollectedQuery $cash, PaymentLedgerView $ledger)
     {
         $this->authorizeManage();
 
-        $payments = CustomerPayment::query()->orderByDesc('id')->limit(25)->get();
-        $ids = $payments->pluck('id')->all();
-
-        $refunded = self::centsBy(CustomerRefund::query()->whereIn('customer_payment_id', $ids)->toBase()->selectRaw('customer_payment_id AS k, COALESCE(SUM(ROUND(amount * 100)), 0) AS s')->groupBy('customer_payment_id')->get());
-        $allocated = self::centsBy(PaymentAllocation::query()->whereIn('customer_payment_id', $ids)->toBase()->selectRaw('customer_payment_id AS k, COALESCE(SUM(ROUND(amount * 100)), 0) AS s')->groupBy('customer_payment_id')->get());
-
-        $allocPayment = ctype_digit($this->allocPaymentId) ? CustomerPayment::query()->find((int) $this->allocPaymentId) : null;
-        $events = $allocPayment === null ? collect() : SubscriptionEvent::query()
-            ->where('subscriber_id', $allocPayment->subscriber_id)
-            ->whereNotNull('to_period_start')->whereNotNull('to_period_end')
-            ->orderByDesc('id')->limit(25)->get();
-
+        $filters = $this->filters();
         $summary = null;
         $windowError = null;
+        $window = null;
 
         try {
-            [$from, $to] = self::window($this->from, $this->to);
-            $summary = $cash->summarise($from, $to);
+            $window = self::window($this->from, $this->to);
+            $summary = $cash->summarise($window[0], $window[1]);
         } catch (InvalidArgumentException $e) {
             $windowError = $e->getMessage();
         }
 
+        $query = CustomerPayment::query()->orderByDesc('id');
+
+        if ($window !== null) {
+            $query->where('received_at', '>=', $window[0]->format(CustomerPayment::TIMESTAMP_FORMAT))->where('received_at', '<', $window[1]->format(CustomerPayment::TIMESTAMP_FORMAT));
+        } else {
+            $query->whereRaw('1 = 0'); // an invalid window lists nothing — never "everything"
+        }
+        if ($filters['currency'] !== null) {
+            $query->where('currency', $filters['currency']);
+        }
+        if ($filters['status'] !== null) {
+            $query->where('current_status', $filters['status']);
+        }
+        if ($filters['subscriber'] !== null) {
+            $query->where('subscriber_id', $filters['subscriber']);
+        }
+        if ($filters['gateway'] !== null) {
+            $query->where('gateway', $filters['gateway']);
+        }
+        if ($filters['fee'] === 'known') {
+            $query->whereNotNull('gateway_fee_amount');
+        } elseif ($filters['fee'] === 'unknown') {
+            $query->whereNull('gateway_fee_amount');
+        }
+
+        $payments = $query->paginate(self::PER_PAGE);
+        $sums = $ledger->paymentSums($payments->getCollection()->pluck('id')->all());
+
         return view('livewire.dashboard.finance.payments', [
             'payments' => $payments,
-            'refundedCents' => $refunded,
-            'allocatedCents' => $allocated,
-            'refunds' => CustomerRefund::query()->orderByDesc('id')->limit(25)->get(),
-            'allocations' => PaymentAllocation::query()->orderByDesc('id')->limit(25)->get(),
-            'events' => $events,
-            'allocPayment' => $allocPayment,
+            'refundedCents' => $sums['refunded'],
+            'allocatedCents' => $sums['allocated'],
             'summary' => $summary,
             'windowError' => $windowError,
+            'filters' => $filters,
+            'statuses' => array_map(static fn (CustomerPaymentEventType $t): string => $t->value, CustomerPaymentEventType::cases()),
+            'currencies' => self::CURRENCIES,
             'maxDays' => CashCollectedQuery::MAX_DAYS,
         ]);
     }
 
     /**
-     * @return array{0: CarbonImmutable, 1: CarbonImmutable} [from 00:00, to + 1 day 00:00) UTC
+     * Allowlisted, normalised filters; anything outside the allowlist is ignored (null).
+     *
+     * @return array{currency: ?string, status: ?string, subscriber: ?int, gateway: ?string, fee: ?string}
+     */
+    public function filters(): array
+    {
+        $currency = strtoupper(trim($this->currency));
+        $status = trim($this->status);
+        $subscriber = trim($this->subscriber);
+        $gateway = strtolower(trim($this->gateway));
+        $fee = strtolower(trim($this->fee));
+
+        return [
+            'currency' => preg_match('/^[A-Z]{3}$/', $currency) === 1 ? $currency : null,
+            'status' => CustomerPaymentEventType::tryFrom($status)?->value,
+            'subscriber' => preg_match('/^\d{1,19}$/', $subscriber) === 1 ? (int) $subscriber : null,
+            'gateway' => preg_match('/^[a-z0-9_-]{1,32}$/', $gateway) === 1 ? $gateway : null,
+            'fee' => in_array($fee, ['known', 'unknown'], true) ? $fee : null,
+        ];
+    }
+
+    /**
+     * @return array{0: CarbonImmutable, 1: CarbonImmutable} [from 00:00, to + 1 day 00:00) UTC, bounded to CashCollectedQuery::MAX_DAYS
      */
     public static function window(string $from, string $to): array
     {
@@ -300,68 +237,16 @@ class Payments extends Component
             throw new InvalidArgumentException('تاريخ النهاية قبل البداية.');
         }
 
+        if ($start->diffInDays($end->addDay()) > CashCollectedQuery::MAX_DAYS) {
+            throw new InvalidArgumentException('النطاق الأقصى '.CashCollectedQuery::MAX_DAYS.' يومًا.');
+        }
+
         return [$start, $end->addDay()];
     }
 
     public static function money(int $cents): string
     {
-        return MoneyFormat::of($cents);
-    }
-
-    /**
-     * @param  iterable<object{k: mixed, s: mixed}>  $rows
-     * @return array<int, int>
-     */
-    private static function centsBy(iterable $rows): array
-    {
-        $out = [];
-
-        foreach ($rows as $row) {
-            $out[(int) $row->k] = DecimalMath::intFromDb($row->s);
-        }
-
-        return $out;
-    }
-
-    private function authorizeManage(): void
-    {
-        abort_unless(auth()->user()?->can(Permission::FinancePaymentsManage->value) ?? false, 403);
-    }
-
-    private static function freshKey(): string
-    {
-        return 'ui:'.Str::uuid()->toString();
-    }
-
-    private static function optional(string $value): ?string
-    {
-        return trim($value) === '' ? null : trim($value);
-    }
-
-    private function positiveInt(string $value, string $label): int
-    {
-        $value = trim($value);
-
-        if (! ctype_digit($value) || (int) $value <= 0) {
-            throw new InvalidArgumentException("{$label} يجب أن يكون رقمًا صحيحًا موجبًا.");
-        }
-
-        return (int) $value;
-    }
-
-    private function utc(string $value, string $label): CarbonImmutable
-    {
-        try {
-            $at = CarbonImmutable::createFromFormat(self::DATETIME, trim($value), 'UTC');
-        } catch (\Throwable) {
-            $at = false;
-        }
-
-        if ($at === false) {
-            throw new InvalidArgumentException("{$label} بصيغة غير صالحة (YYYY-MM-DDTHH:MM، UTC).");
-        }
-
-        return $at;
+        return PaymentLedgerView::money($cents);
     }
 
     /** @param array<string, CashSummary> $summary */
@@ -370,20 +255,8 @@ class Payments extends Component
         return $summary !== null && $summary !== [];
     }
 
-    /**
-     * Thrown by the services when the lifecycle moved under a concurrent
-     * actor — surfaced, never retried silently. Kept for completeness: the
-     * E1 UI has no transition action, so it is unreachable from this page.
-     */
-    public function exception(\Throwable $e, callable $stopPropagation): void
+    protected function refreshRecord(): void
     {
-        if ($e instanceof StalePaymentStateException) {
-            $this->addError('payment', $e->getMessage());
-            $stopPropagation();
-        }
-
-        if ($e instanceof AuthorizationException) {
-            abort(403);
-        }
+        // The list has no record-bound action; the attempt key is the only state.
     }
 }

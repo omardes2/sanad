@@ -6,11 +6,16 @@ namespace App\Console\Commands;
 
 use App\Data\Payments\ManualPaymentInput;
 use App\Data\Payments\RefundInput;
+use App\Enums\CustomerPaymentEventType;
+use App\Enums\PaymentSource;
 use App\Exceptions\Payments\PaymentConflictException;
 use App\Exceptions\Payments\PaymentRuleException;
+use App\Exceptions\Payments\StalePaymentStateException;
+use App\Models\CustomerPayment;
 use App\Services\Payments\AllocationService;
 use App\Services\Payments\CustomerPaymentService;
 use App\Services\Payments\RefundService;
+use App\Support\Payments\SubmitAttempt;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 
@@ -48,12 +53,18 @@ class PaymentProbe extends Command
                 'refund' => $this->refund($refunds, $args),
                 'allocate' => 'ok:'.$allocations->allocatePayment((int) $args[0], (int) $args[1], $args[2])->id,
                 'allocate-refund' => 'ok:'.$allocations->allocateRefund((int) $args[0], (int) $args[1], $args[2])->id,
+                // E5.2a: lifecycle transitions with the caller's state token (stale ⇒ refused, never retried), and the UI submit-attempt claim.
+                'dispute' => 'ok:'.$payments->transition(CustomerPayment::query()->findOrFail((int) $args[0]), CustomerPaymentEventType::Disputed, $args[1], PaymentSource::Manual, 'probe')->latest_event_id,
+                'resolve' => 'ok:'.$payments->transition(CustomerPayment::query()->findOrFail((int) $args[0]), CustomerPaymentEventType::DisputeResolved, $args[1], PaymentSource::Manual, 'probe')->latest_event_id,
+                'claim' => SubmitAttempt::claim('probe', $args[0]) ? 'ok:claimed' : 'duplicate',
                 default => throw new \InvalidArgumentException('Unknown op'),
             };
         } catch (PaymentRuleException $e) {
             $line = 'rejected:'.$e->rule;
         } catch (PaymentConflictException) {
             $line = 'conflict';
+        } catch (StalePaymentStateException) {
+            $line = 'stale';
         }
 
         $this->line($line);
@@ -87,7 +98,7 @@ class PaymentProbe extends Command
             customerPaymentId: (int) $args[0],
             idempotencyKey: $args[1],
             amount: $args[2],
-            refundedAt: CarbonImmutable::now()->subSecond(),
+            refundedAt: isset($args[3]) ? CarbonImmutable::parse($args[3], 'UTC') : CarbonImmutable::now()->subSecond(), // a fixed value = the same payload replayed
             reasonCode: 'probe',
         ));
 
