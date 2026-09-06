@@ -96,7 +96,8 @@ final class ReportingView
     {
         $ids = $subjects->pluck('id')->all();
         $current = FxConversionScope::query()->where('subject_type', $type->value)->whereIn('subject_id', $ids)->where('purpose', 'reporting')->where('target_currency', $target)->whereNotNull('current_conversion_id')->pluck('current_conversion_id', 'subject_id');
-        $conversions = FxConversion::query()->whereIn('id', $current->values())->get()->keyBy('id');
+        // Only the ids the projection points at are ever requested — nothing else on fx_conversions.
+        $conversions = $current->isEmpty() ? collect() : FxConversion::query()->whereIn('id', $current->values())->get()->keyBy('id');
         $out = [];
 
         foreach ($subjects as $subject) {

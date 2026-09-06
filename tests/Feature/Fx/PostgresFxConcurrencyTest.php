@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Enums\FxSubjectType;
 use App\Models\AiProvider;
 use App\Models\AuditLog;
 use App\Models\CostInvoice;
@@ -15,6 +16,7 @@ use App\Models\FxPair;
 use App\Models\FxRate;
 use App\Models\FxRateScope;
 use App\Models\User;
+use App\Services\Fx\ReportingConversionService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\Process\Process;
@@ -164,6 +166,42 @@ it('of 6 concurrent reporting conversions of one subject from the same expectati
             ->and(FxConversion::query()->where('scope_id', $scope->id)->count())->toBe(1)
             ->and(FxConversion::query()->find($scope->current_conversion_id)->targetAmountAtScale())->toBe('200.00')
             ->and(AuditLog::where('action', 'fx.converted')->where('subject_id', $payment->id)->count())->toBe(1);
+    } finally {
+        fxCleanup([$a, $b], $user);
+    }
+});
+
+it('of 6 concurrent conversion CORRECTIONS from the same current revision exactly one wins; five are stale; one pointer; the reporting total counts the current revision once', function () {
+    [$a, $b] = fxCodes();
+    $user = User::factory()->create(['is_admin' => false]);
+    $payment = e1Payment($user, ['amount' => '100.00', 'currency' => $a, 'receivedAt' => CarbonImmutable::parse('2026-08-10 09:00:00', 'UTC')]);
+    $x = fxRate(['baseCurrency' => $a, 'quoteCurrency' => $b, 'rate' => '3.65', 'rateDate' => '2026-08-10']);
+    $v1 = fxConvert('customer_payment', $payment->id, $b, $x->id);
+    $y = fxRate(['baseCurrency' => $a, 'quoteCurrency' => $b, 'rate' => '3.70', 'rateDate' => '2026-08-10', 'expectedCurrentRateId' => $x->id]);
+
+    try {
+        // The rate correction alone changed nothing.
+        expect(FxConversion::query()->where('scope_id', $v1->scope_id)->count())->toBe(1)->and($v1->fresh()->targetAmountAtScale())->toBe('365.00');
+
+        $processes = [];
+        for ($i = 0; $i < 6; $i++) {
+            $processes[] = fxRun(['convert', 'customer_payment', (string) $payment->id, $b, (string) $y->id, (string) $v1->id]);
+        }
+        $outcomes = fxOutcomes($processes);
+        $scope = FxConversionScope::query()->whereKey($v1->scope_id)->firstOrFail();
+        $winner = array_values(array_filter($outcomes, fn ($o) => str_starts_with($o, 'ok:')));
+
+        expect($winner)->toHaveCount(1)
+            ->and(array_filter($outcomes, fn ($o) => $o === 'stale'))->toHaveCount(5)
+            ->and(FxConversion::query()->where('scope_id', $scope->id)->count())->toBe(2) // v1 + the one winner
+            ->and('ok:'.$scope->current_conversion_id)->toBe($winner[0])
+            ->and($scope->version)->toBe(2)
+            ->and(FxConversion::query()->find($scope->current_conversion_id)->targetAmountAtScale())->toBe('370.00')
+            ->and($v1->fresh()->targetAmountAtScale())->toBe('365.00'); // history intact
+
+        // One scope, one pointer: the projection the reporting view reads can only yield the current revision once.
+        expect(FxConversionScope::query()->where('subject_type', 'customer_payment')->where('subject_id', $payment->id)->count())->toBe(1)
+            ->and(ReportingConversionService::currentFor(FxSubjectType::CustomerPayment, $payment->id, $b)?->targetAmountAtScale())->toBe('370.00');
     } finally {
         fxCleanup([$a, $b], $user);
     }

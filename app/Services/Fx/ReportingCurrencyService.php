@@ -44,8 +44,9 @@ final class ReportingCurrencyService
             throw FxRuleException::of('unchanged', "عملة التقرير هي {$code} بالفعل.");
         }
 
-        DB::transaction(function () use ($code, $before, $reason): void {
-            $this->settings->setManaged(SettingsRegistry::REPORTING_CURRENCY, $code, $reason);
+        DB::transaction(function () use ($code, $before, $reason, $typedConfirmation): void {
+            // The repository re-checks the typed confirmation itself (no bypass through any other writer).
+            $this->settings->setManaged(SettingsRegistry::REPORTING_CURRENCY, $code, $reason, $typedConfirmation);
             $this->audit->record(AuditActions::FinanceReportingCurrencyChanged, null, ['reporting_currency' => ['from' => $before, 'to' => $code]], ['typed_confirmation' => $code, 'reason_code' => $reason, 'conversions_recomputed' => 0]);
         });
 

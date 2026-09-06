@@ -408,6 +408,7 @@ final class SettingsRegistry
                 defaultConfigPath: 'billing.cost_currency',
                 rules: ['required', 'string', 'size:3', 'regex:/^[A-Z]{3}$/'],
                 managed: true,
+                requiresTypedConfirmation: true,
             ),
         ];
     }

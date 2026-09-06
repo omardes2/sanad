@@ -56,6 +56,12 @@ final readonly class SettingDefinition
          * editor shows it read-only; SettingsRepository refuses a direct write.
          */
         public bool $managed = false,
+        /**
+         * Phase E3: the repository itself refuses ANY write (generic or
+         * managed) unless the caller types the new value verbatim, so no
+         * settings path can change the key without the confirmation.
+         */
+        public bool $requiresTypedConfirmation = false,
     ) {
         if ($this->precedence === SettingPrecedence::Emergency && $this->overrideConfigPath === null) {
             throw new InvalidArgumentException("Emergency setting [{$this->key}] needs an override config path.");
