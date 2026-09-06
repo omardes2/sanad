@@ -16,15 +16,22 @@ uses(RefreshDatabase::class);
  * columns back-filled by the migration itself (no separate command).
  */
 it('back-fills derived ledger columns for rows that pre-date the ledger and stays reversible', function () {
-    // Undo the two E0 migrations (plan_price_versions, subscription_events), the
+    // Undo the five E1 migrations (refund_allocations, payment_allocations,
+    // customer_refunds, customer_payment_events, customer_payments), the
+    // two E0 migrations (plan_price_versions, subscription_events), the
     // two D1 migrations (finance_mrr_snapshots, finance indexes), the
     // two C3 migrations (provider_health_checks, provider_credentials), the C1
     // migration (app_settings), the two C0 migrations (audit context, permission
     // tables), the four B2 migrations (pricing refs, model_prices, ai_models,
     // ai_providers) and the two B1 migrations (usage_charges, ledger).
-    Artisan::call('migrate:rollback', ['--step' => 15, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 20, '--force' => true]);
 
-    expect(Schema::hasTable('plan_price_versions'))->toBeFalse()
+    expect(Schema::hasTable('refund_allocations'))->toBeFalse()
+        ->and(Schema::hasTable('payment_allocations'))->toBeFalse()
+        ->and(Schema::hasTable('customer_refunds'))->toBeFalse()
+        ->and(Schema::hasTable('customer_payment_events'))->toBeFalse()
+        ->and(Schema::hasTable('customer_payments'))->toBeFalse()
+        ->and(Schema::hasTable('plan_price_versions'))->toBeFalse()
         ->and(Schema::hasTable('subscription_events'))->toBeFalse()
         ->and(Schema::hasTable('finance_mrr_snapshots'))->toBeFalse()
         ->and(Schema::hasIndex('usage_events', 'usage_events_occurred_idx'))->toBeFalse()
@@ -87,6 +94,11 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
         ->and(Schema::hasTable('finance_mrr_snapshots'))->toBeTrue()
         ->and(Schema::hasTable('subscription_events'))->toBeTrue()
         ->and(Schema::hasTable('plan_price_versions'))->toBeTrue()
+        ->and(Schema::hasTable('customer_payments'))->toBeTrue()
+        ->and(Schema::hasTable('customer_payment_events'))->toBeTrue()
+        ->and(Schema::hasTable('customer_refunds'))->toBeTrue()
+        ->and(Schema::hasTable('payment_allocations'))->toBeTrue()
+        ->and(Schema::hasTable('refund_allocations'))->toBeTrue()
         ->and(Schema::hasIndex('usage_events', 'usage_events_occurred_idx'))->toBeTrue()
         ->and(Schema::hasIndex('usage_events', 'usage_events_plan_occurred_idx'))->toBeTrue()
         ->and(Schema::hasIndex('usage_events', 'usage_events_provider_model_occurred_idx'))->toBeTrue();

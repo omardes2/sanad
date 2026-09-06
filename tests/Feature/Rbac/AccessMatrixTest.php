@@ -137,3 +137,13 @@ it('grants the Phase D1 finance permissions to super_admin and finance only', fu
 
     expect($legacy->can('finance.view'))->toBeFalse()->and($legacy->can('finance.export'))->toBeFalse();
 });
+
+it('grants finance.payments.manage (Phase E1) to super_admin and finance only', function () {
+    expect(userWithRole(Role::SuperAdmin)->can('finance.payments.manage'))->toBeTrue()
+        ->and(userWithRole(Role::Finance)->can('finance.payments.manage'))->toBeTrue()
+        ->and(userWithRole(Role::Operations)->can('finance.payments.manage'))->toBeFalse()
+        ->and(userWithRole(Role::Support)->can('finance.payments.manage'))->toBeFalse();
+
+    rbacSync();
+    expect(User::factory()->create(['is_admin' => true])->can('finance.payments.manage'))->toBeFalse();
+});

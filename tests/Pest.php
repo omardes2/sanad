@@ -510,3 +510,45 @@ function financeRow(array $attrs): UsageEvent
         'occurred_at' => CarbonImmutable::parse('2026-09-10 12:00:00', 'UTC'),
     ], $attrs));
 }
+
+// ---- Customer payments (Phase E1) -----------------------------------------------
+
+use App\Data\Payments\ManualPaymentInput;
+use App\Data\Payments\RefundInput;
+use App\Models\CustomerPayment;
+use App\Models\CustomerRefund;
+use App\Services\Payments\CustomerPaymentService;
+use App\Services\Payments\RefundService;
+
+/**
+ * Record a manual payment through the service (console actor unless a user is
+ * authenticated). Defaults: 100.00 USD received one hour ago, fee UNKNOWN.
+ *
+ * @param  array<string, mixed>  $overrides  ManualPaymentInput constructor arguments
+ */
+function e1Payment(User $subscriber, array $overrides = []): CustomerPayment
+{
+    return app(CustomerPaymentService::class)->recordManual(new ManualPaymentInput(...array_merge([
+        'subscriberId' => $subscriber->id,
+        'idempotencyKey' => 'test:'.str()->random(12),
+        'amount' => '100.00',
+        'currency' => 'USD',
+        'receivedAt' => CarbonImmutable::now('UTC')->subHour(),
+    ], $overrides)));
+}
+
+/**
+ * Record a refund through the service. Defaults: 10.00, refunded now, reason `test`.
+ *
+ * @param  array<string, mixed>  $overrides  RefundInput constructor arguments
+ */
+function e1Refund(CustomerPayment $payment, array $overrides = []): CustomerRefund
+{
+    return app(RefundService::class)->record(new RefundInput(...array_merge([
+        'customerPaymentId' => $payment->id,
+        'idempotencyKey' => 'refund:'.str()->random(12),
+        'amount' => '10.00',
+        'refundedAt' => CarbonImmutable::now('UTC'),
+        'reasonCode' => 'test',
+    ], $overrides)));
+}

@@ -16,6 +16,7 @@
         ['route' => 'dashboard.persona', 'label' => 'شخصية سَنَد', 'icon' => '🎭', 'can' => 'persona.manage'],
         ['route' => 'dashboard.usage', 'label' => 'الاستخدام', 'icon' => '📊', 'can' => 'usage.view'],
         ['route' => 'dashboard.finance', 'label' => 'المالية', 'icon' => '📈', 'can' => 'finance.view'],
+        ['route' => 'dashboard.finance.payments', 'label' => 'المدفوعات', 'icon' => '💳', 'can' => 'finance.payments.manage'],
         ['route' => 'dashboard.ai.providers', 'label' => 'مزوّدو الذكاء', 'icon' => '🤖', 'can' => 'ai.providers.view'],
         ['route' => 'dashboard.ai.models', 'label' => 'النماذج', 'icon' => '🧠', 'can' => 'ai.models.manage'],
         ['route' => 'dashboard.ai.pricing', 'label' => 'الأسعار', 'icon' => '💵', 'can' => 'ai.pricing.view'],

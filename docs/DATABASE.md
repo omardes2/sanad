@@ -103,6 +103,27 @@
 - `plan_id` → `plans` (**restrictOnDelete**) · `price` · `currency` · `billing_period` · `effective_from` · `effective_until?` · `source` (`baseline/admin`) · `created_by?`.
 - فهرس جزئي فريد: نسخة مفتوحة واحدة لكل باقة؛ على PostgreSQL قيود الفترة وعدم السلبية.
 
+### `customer_payments` (E1)
+هوية الدفعة وحقائقها الثابتة؛ الحالة الحالية **projection** يحدّثها `CustomerPaymentService` فقط تحت `FOR UPDATE`.
+- `subscriber_id` (مرجع تاريخي **بلا FK**) · `user_id?` → `users` (**nullOnDelete**) · `gateway` (`manual` الآن) · `gateway_payment_ref?` (فريد مع `gateway` عند وجوده؛ لا يُخترع) · `idempotency_key` (إلزامي، فريد) · `amount` decimal(12,2) · `currency` · `gateway_fee_amount?` (**NULL = FEES UNKNOWN لا صفر**) · `fee_currency?` (= `currency` أو NULL) · `received_at` timestamp(6) (لحظة التحصيل) · `reference?`(64) · `reason_code?`(32) · `evidence_ref?`(191) — لا نص حر · `current_status` · `latest_event_id?` (state token) · `recorded_by_ref` · timestamps.
+- الحقائق (المبلغ/العملة/التاريخ/المراجع/المفتاح) لا تتغيّر بعد الإنشاء (الموديل يرفض) ولا يُحذف الصف؛ على PostgreSQL قيود `amount > 0` واتساق الرسوم/عملتها.
+
+### `customer_payment_events` (E1، append-only)
+دورة حياة الدفعة الرسمية: `created / succeeded / failed / disputed / dispute_resolved` (enum + قيد CHECK على PostgreSQL).
+- `customer_payment_id` → `customer_payments` (**restrictOnDelete**) · `event_type` · `occurred_at`(6) · `source` (`manual/gateway/system`) · `actor_ref` · `reason_code?` · `evidence_ref?` · `metadata?` · `created_at` فقط. لا update ولا delete.
+
+### `customer_refunds` (E1، append-only)
+استرداد جزئي/كلي ضدّ دفعة **نجحت فعليًا**؛ `Σ ≤ amount` الدفعة تحت قفل صفها، نفس العملة، `refunded_at ≥ received_at`.
+- `customer_payment_id` (**restrictOnDelete**) · `gateway` · `gateway_refund_ref?` (فريد مع `gateway`) · `idempotency_key` (فريد) · `amount` · `currency` · `refunded_at`(6) · `reason_code` (إلزامي) · `evidence_ref?` · `recorded_by_ref` · `created_at` فقط.
+
+### `payment_allocations` (E1، append-only)
+إسناد النقد المحصَّل إلى فترة خدمة حدث اشتراك واحد (E0) — **attribution لا إيراد**؛ لا يُعدَّل عند الاسترداد.
+- `customer_payment_id` (**restrictOnDelete**) · `subscription_event_id` → `subscription_events` (**restrictOnDelete**) · `subscription_id` · `subscriber_id` · `period_start` / `period_end` (snapshot من `to_period_*` للحدث؛ لا تُكتب يدويًا) · `amount` · `currency` · `allocated_at`(6) · `actor_ref` · `reason_code?` · `created_at` فقط. على PostgreSQL `amount > 0` و`period_end > period_start`.
+
+### `refund_allocations` (E1، append-only)
+إسناد استرداد إلى التخصيص الذي يعكسه: `Σ` لكل استرداد ≤ الاسترداد و`Σ` على كل تخصيص ≤ التخصيص.
+- `customer_refund_id` (**restrictOnDelete**) · `payment_allocation_id` (**restrictOnDelete**) · `amount` · `currency` · `allocated_at`(6) · `actor_ref` · `reason_code?` · `created_at` فقط.
+
 ### `audit_logs`
 سجل تدقيق **append-only**.
 - `user_id?` → `users` (**nullOnDelete**)

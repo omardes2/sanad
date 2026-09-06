@@ -25,7 +25,12 @@ final class SecretRedactor
 {
     public const PLACEHOLDER = '[REDACTED]';
 
-    private const KEY_PATTERN = '/(api[_-]?key|secret|token|passw(or)?d|credential|authorization|private[_-]?key|bearer|client[_-]?secret|signing[_-]?key)/i';
+    /**
+     * Key names that always mask their value. Payment-card / bank identifiers
+     * (Phase E1) are matched as whole segments so a harmless `card_brand`
+     * stays readable while `pan`, `card_number`, `cvv`, `iban`… never leak.
+     */
+    private const KEY_PATTERN = '/(api[_-]?key|secret|token|passw(or)?d|credential|authorization|private[_-]?key|bearer|client[_-]?secret|signing[_-]?key|(^|[_\-.])pan([_\-.]|$)|card[_-]?number|(^|[_\-.])cvv([_\-.]|$)|(^|[_\-.])cvc([_\-.]|$)|(^|[_\-.])iban([_\-.]|$)|account[_-]?number)/i';
 
     private const VALUE_PATTERN = '/^(sk-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9_-]{8,}|EAA[A-Za-z0-9]{16,}|Bearer\s+\S{8,}|xox[abp]-\S{8,}|AIza[0-9A-Za-z_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/';
 

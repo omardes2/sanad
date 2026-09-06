@@ -49,6 +49,8 @@ enum Permission: string
     case FinanceView = 'finance.view';
     /** CSV export of the calculated financial aggregates (super_admin + finance). */
     case FinanceExport = 'finance.export';
+    /** Record manual payments / refunds and allocate them (super_admin + finance). Write-side only; finance.view never grants it. */
+    case FinancePaymentsManage = 'finance.payments.manage';
 
     case PlansManage = 'plans.manage';
     case SubscribersView = 'subscribers.view';
@@ -80,6 +82,7 @@ enum Permission: string
             self::AuditView => 'عرض سجل التدقيق',
             self::FinanceView => 'عرض المالية (محسوبة)',
             self::FinanceExport => 'تصدير المالية (CSV)',
+            self::FinancePaymentsManage => 'تسجيل المدفوعات والاستردادات وتخصيصها',
             self::PlansManage => 'إدارة الباقات',
             self::SubscribersView => 'عرض المشتركين',
             self::SubscribersManage => 'إدارة المشتركين',

@@ -53,6 +53,7 @@ final class RoleMatrix
                 Permission::UsageExport,
                 Permission::FinanceView,
                 Permission::FinanceExport,
+                Permission::FinancePaymentsManage,
                 Permission::AuditView,
                 Permission::SubscribersView,
             ],

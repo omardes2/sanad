@@ -74,4 +74,19 @@ final class AuditActions
 
     /** Console entry: the financial history baseline was captured (counts only). */
     public const FinanceHistoryBaselineApplied = 'finance.history_baseline_applied';
+
+    /** A manual customer payment was recorded (created → succeeded) — atomic with the rows. */
+    public const PaymentRecorded = 'payment.recorded';
+
+    /** A payment lifecycle event was appended and the projection updated. */
+    public const PaymentTransitioned = 'payment.transitioned';
+
+    /** A (partial) refund was recorded against a succeeded payment. */
+    public const PaymentRefunded = 'payment.refunded';
+
+    /** Collected cash was attributed to a subscription service period. */
+    public const PaymentAllocated = 'payment.allocated';
+
+    /** A refund was attributed to a payment allocation. */
+    public const RefundAllocated = 'refund.allocated';
 }

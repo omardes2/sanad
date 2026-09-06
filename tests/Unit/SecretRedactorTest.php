@@ -69,3 +69,26 @@ it('lets the explicit registry grow at runtime', function () {
 
     expect($r->redact(['wa_phone_pin' => '123456'])['wa_phone_pin'])->toStartWith('[REDACTED:');
 });
+
+it('masks payment-card and bank identifiers by key (Phase E1) while harmless payment fields stay readable', function () {
+    $out = redactor()->redact([
+        'pan' => '4111111111111111', 'card_number' => '4111 1111 1111 1111', 'cardNumber' => '4111', 'cvv' => '123', 'cvc' => '456',
+        'iban' => 'PS92PALS000000000400123456702', 'account_number' => '0012345', 'bank.iban' => 'x', 'customer_pan' => 'y',
+        'card_brand' => 'visa', 'reference' => 'BANK-2026-09-05', 'gateway_payment_ref' => 'EXT-777', 'reason_code' => 'bank_transfer',
+        'amount' => '49.90', 'currency' => 'USD', 'company' => 'Sanad', 'span' => 'keep', 'expand' => 'keep',
+    ]);
+
+    foreach (['pan', 'card_number', 'cardNumber', 'cvv', 'cvc', 'iban', 'account_number', 'bank.iban', 'customer_pan'] as $key) {
+        expect($out[$key])->toStartWith('[REDACTED:', $key);
+    }
+
+    expect($out['card_brand'])->toBe('visa')
+        ->and($out['reference'])->toBe('BANK-2026-09-05')
+        ->and($out['gateway_payment_ref'])->toBe('EXT-777')
+        ->and($out['reason_code'])->toBe('bank_transfer')
+        ->and($out['amount'])->toBe('49.90')
+        ->and($out['currency'])->toBe('USD')
+        ->and($out['company'])->toBe('Sanad') // "pan" inside "company" is not a segment
+        ->and($out['span'])->toBe('keep')
+        ->and($out['expand'])->toBe('keep');
+});
