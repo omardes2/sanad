@@ -12,6 +12,7 @@ use App\Models\UsageEvent;
 use App\Models\User;
 use App\Services\Billing\SubscriptionService;
 use App\Services\Billing\UsageRecorder;
+use App\Support\Billing\SubscriptionStateToken;
 use App\Support\Billing\UsageKeys;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -102,7 +103,7 @@ it('snapshots the subscription and plan in force at record time — history surv
     $onPlus = recorder()->record(usageRecord(['subscriber' => $subscriber, 'idempotencyKey' => 'h#1']))->event;
 
     // Upgrade mutates plan_id on the SAME subscription row.
-    app(SubscriptionService::class)->activate($subscriber->subscription, $pro);
+    app(SubscriptionService::class)->activate($subscriber->subscription, SubscriptionStateToken::for($subscriber->subscription), $pro);
     $onPro = recorder()->record(usageRecord(['subscriber' => $subscriber->fresh(), 'idempotencyKey' => 'h#2']))->event;
 
     expect($onPlus->subscription_id)->toBe($subscriptionId)

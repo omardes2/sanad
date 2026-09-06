@@ -94,6 +94,15 @@
 - `snapshot_date` · `captured_at` · `currency` · `plan_id?` (مرجع تاريخي **بلا FK**) · `plan_key` (`plan:<id>` هوية ثابتة لا تعتمد على slug، أو `none` كـmarker) · `plan_slug?` · `plan_price?` · `billing_period?` · `active_count` · `trialing_count` · `past_due_count` · `mrr_normalized` decimal(12,6) · `calculation_version`.
 - فريد `(snapshot_date, currency, plan_key)`؛ الاشتراكات بلا باقة بعملة `XXX`.
 
+### `subscription_events` (E0، append-only)
+تاريخ حالات الاشتراك؛ يكتبه `SubscriptionHistory` داخل معاملة التغيير مع audit.
+- `subscription_id` · `subscriber_id` (مرجعان تاريخيان **بلا FK**) · `event_type` (`baseline/activated/suspended/cancelled/extended/plan_changed/status_changed`) · `from_status?` · `to_status` · `from_plan_id?` · `to_plan_id?` · `effective_at` (UTC) · `source` · `actor_ref` · `reason?` · `correlation_id?` · `metadata?` · `baseline_key?` (فريد) · `created_at` فقط.
+
+### `plan_price_versions` (E0)
+نسخ الشروط المالية للباقة على فترات `[effective_from, effective_until)`؛ يكتبها `PlanPriceBook` تحت قفل صف الباقة.
+- `plan_id` → `plans` (**restrictOnDelete**) · `price` · `currency` · `billing_period` · `effective_from` · `effective_until?` · `source` (`baseline/admin`) · `created_by?`.
+- فهرس جزئي فريد: نسخة مفتوحة واحدة لكل باقة؛ على PostgreSQL قيود الفترة وعدم السلبية.
+
 ### `audit_logs`
 سجل تدقيق **append-only**.
 - `user_id?` → `users` (**nullOnDelete**)
