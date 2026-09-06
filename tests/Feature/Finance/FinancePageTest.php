@@ -96,11 +96,12 @@ it('renders the three sections with calculated-only wording, UTC labels, current
         ->assertDontSee($alice->name);
 });
 
-it('never renders a gross profit figure: the margin card carries a status and reasons only', function () {
+it('never renders a gross profit figure: the profitability status card carries a status and reasons only (no financial metric name)', function () {
     financePageFixture();
 
     $html = $this->actingAs(userWithRole(Role::SuperAdmin))->get(route('dashboard.finance'))->getContent();
-    $card = substr($html, strpos($html, 'data-testid="gross-margin"'), 1200);
+    $card = substr($html, strpos($html, 'data-testid="profitability-status"'), 1200);
+    expect($card)->not->toContain('Gross Margin')->not->toContain('Gross Profit');
 
     expect($card)->toContain('NOT AVAILABLE — Phase E')
         ->and($card)->toContain('revenue_history_unavailable')

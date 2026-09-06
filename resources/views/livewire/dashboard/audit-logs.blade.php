@@ -27,6 +27,17 @@
             <span class="text-slate-600">إلى تاريخ</span>
             <input type="date" wire:model.live="to" class="mt-1 w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500">
         </label>
+        <label class="block text-sm">
+            <span class="text-slate-600">نوع الموضوع</span>
+            <select wire:model.live="subject_type" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500" data-testid="subject-type">
+                <option value="">الكل</option>
+                @foreach ($subjectTypes as $type)<option value="{{ $type }}">{{ $type }}</option>@endforeach
+            </select>
+        </label>
+        <label class="block text-sm">
+            <span class="text-slate-600">معرّف الموضوع</span>
+            <input type="text" wire:model.live.debounce.400ms="subject_id" dir="ltr" inputmode="numeric" placeholder="id" class="mt-1 w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500" data-testid="subject-id">
+        </label>
     </div>
 
     <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -34,7 +45,7 @@
             <table class="w-full min-w-[840px] text-right text-sm">
                 <thead class="bg-slate-50 text-xs uppercase text-slate-500">
                     <tr>
-                        <th class="px-4 py-3 font-medium">الوقت</th>
+                        <th class="px-4 py-3 font-medium">الوقت (UTC)</th>
                         <th class="px-4 py-3 font-medium">الإجراء</th>
                         <th class="px-4 py-3 font-medium">الفاعل</th>
                         <th class="px-4 py-3 font-medium">الموضوع</th>
@@ -56,7 +67,11 @@
                                 @endif
                             </td>
                             <td class="px-4 py-3 font-mono text-xs text-slate-500" dir="ltr">
-                                {{ $log->subject_type ? class_basename($log->subject_type).'#'.$log->subject_id : '—' }}
+                                @if ($log->subject_type)
+                                    <a class="hover:underline" href="{{ route('dashboard.audit', ['subject_type' => class_basename($log->subject_type), 'subject_id' => $log->subject_id]) }}">{{ class_basename($log->subject_type) }}#{{ $log->subject_id }}</a>
+                                @else
+                                    —
+                                @endif
                             </td>
                             <td class="px-4 py-3">
                                 @php $changes = $log->changes(); $context = $log->context(); @endphp

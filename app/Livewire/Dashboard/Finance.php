@@ -12,6 +12,10 @@ use App\Models\UsageEvent;
 use App\Services\Finance\FinanceQuery;
 use App\Services\Finance\MrrCalculator;
 use App\Services\Finance\MrrSnapshotHistory;
+use App\Services\Fx\ReportingView;
+use App\Services\Payments\CashCollectedQuery;
+use App\Services\Reporting\FrozenCloseReader;
+use App\Services\Reporting\ReconciledMonthSeries;
 use App\Services\Usage\UsageQuery;
 use App\Support\Billing\DecimalMath;
 use App\Support\Rbac\Permission;
@@ -23,18 +27,25 @@ use Livewire\Attributes\Url;
 use Livewire\Component;
 
 /**
- * Finance page (Phase D2) — CALCULATED figures only, never Collected / Actual /
- * Reconciled. Strict RBAC: `finance.view` opens the page (route middleware AND
- * mount); the CSV link needs `finance.export`; a link to a subscriber's detail
- * page appears only with `subscribers.view`. No PII: subscribers are shown as
- * their internal id.
+ * Finance overview (Phase D2 + E5.1). Strict RBAC: `finance.view` opens the
+ * page (route middleware AND mount); CSV links need `finance.export`; a link
+ * to a subscriber's detail page appears only with `subscribers.view`. No PII:
+ * subscribers are shown as their internal id. Read-only: nothing here writes.
  *
- * Three sections that must never be read as one:
+ * Bands that must never be read as one — three financial vocabularies stay
+ * visibly separate and no card or total mixes them:
  *  1. Current Subscription Run-rate — as of now (MRR/ARR/ARPU per currency;
  *     the date window does NOT apply to it);
- *  2. Usage & Cost Analysis — the selected UTC window (known cost, unpriced,
- *     coverage, breakdowns); gross margin is NOT AVAILABLE (Phase E);
- *  3. MRR Snapshot History — the run-rate frozen day by day; not revenue.
+ *  2. CALCULATED — Usage & Cost Analysis for the selected UTC window (known
+ *     cost, unpriced/unknown, coverage, breakdowns); gross margin NOT AVAILABLE;
+ *  3. CASH — the selected UTC window, LIVE / CURRENT: Gross Cash Collected,
+ *     Refunds, Net Cash, Gateway Fees or FEES UNKNOWN per native currency, and
+ *     reporting-currency totals only when every line is NATIVE or CONVERTED;
+ *  4. RECONCILED — one row per calendar month UTC overlapping the window in the
+ *     current reporting currency: FROZEN CLOSE REVISION n (from the close row)
+ *     or LIVE / CURRENT (preflight, with its blockers); never summed across
+ *     months, currencies or revisions;
+ *  5. MRR Snapshot History — the run-rate frozen day by day; not revenue.
  */
 #[Title('المالية | سَنَد')]
 #[Layout('components.layouts.dashboard')]
@@ -100,7 +111,7 @@ class Finance extends Component
         ];
     }
 
-    public function render(FinanceQuery $finance, MrrCalculator $mrr, MrrSnapshotHistory $history)
+    public function render(FinanceQuery $finance, MrrCalculator $mrr, MrrSnapshotHistory $history, CashCollectedQuery $cash, ReportingView $reporting, ReconciledMonthSeries $months)
     {
         $user = auth()->user();
         abort_unless($user?->can(Permission::FinanceView->value) ?? false, 403);
@@ -136,6 +147,12 @@ class Finance extends Component
                 'trendBars' => self::costBars($trend),
                 'history' => $series = $history->series($from, $to->subDay()),
                 'historyBars' => self::historyBars($series),
+                // CASH — live, event-based, per native currency + reporting-currency totals (complete or INCOMPLETE / NOT AVAILABLE).
+                'cash' => $cash->summarise($from, $to),
+                'reportingCash' => $reporting->cash($from, $to),
+                // RECONCILED — per calendar month, one basis each; never a total.
+                'months' => $months->forWindow($from, $to),
+                'monthKeys' => FrozenCloseReader::monthsCovering($from, $to),
             ];
         } catch (InvalidArgumentException $e) {
             $error = $e->getMessage();
@@ -154,6 +171,11 @@ class Finance extends Component
             'providers' => UsageEvent::query()->whereNotNull('provider')->distinct()->orderBy('provider')->pluck('provider')->all(),
             'plans' => Plan::query()->orderBy('sort_order')->orderBy('id')->get(['id', 'slug']),
             'exportUrl' => $canExport ? route('dashboard.finance.export', array_filter(['from' => $this->from, 'to' => $this->to, 'granularity' => $granularity, 'top' => $top] + $this->filters(), static fn ($v) => $v !== '' && $v !== null)) : null,
+            'exports' => $canExport && $window !== null ? [
+                'cash' => route('dashboard.finance.cash.export', ['from' => $window['from'], 'to' => $window['to']]),
+                'cost' => route('dashboard.finance.cost.export', ['from' => $window['monthKeys'][0], 'to' => $window['monthKeys'][count($window['monthKeys']) - 1]]),
+                'fx' => route('dashboard.finance.fx.export', ['from' => $window['from'], 'to' => $window['to']]),
+            ] : [],
             'maxDays' => FinanceQuery::MAX_DAYS,
         ]);
     }

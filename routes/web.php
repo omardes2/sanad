@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Auth\LogoutController;
 use App\Http\Controllers\Dashboard\FinanceExportController;
+use App\Http\Controllers\Dashboard\FinanceReportExportController;
 use App\Http\Controllers\Dashboard\ProviderCredentialController;
 use App\Http\Controllers\Dashboard\UsageExportController;
 use App\Http\Middleware\EnsureDevEnvironment;
@@ -18,6 +19,7 @@ use App\Livewire\Dashboard\AuditLogs;
 use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Finance;
+use App\Livewire\Dashboard\Finance\CloseDetail as FinanceCloseDetail;
 use App\Livewire\Dashboard\Finance\Fx as FinanceFx;
 use App\Livewire\Dashboard\Finance\Payments as FinancePayments;
 use App\Livewire\Dashboard\Finance\PeriodClose as FinancePeriodClose;
@@ -108,6 +110,12 @@ Route::middleware(['auth', 'admin'])
         Route::get('/finance/fx', FinanceFx::class)->middleware('permission:finance.fx.manage')->name('dashboard.finance.fx');
         // Phase E4 — period close: finance.view reads preflight/history; close/reopen re-check finance.close_period (super_admin only).
         Route::get('/finance/close', FinancePeriodClose::class)->middleware('permission:finance.view')->name('dashboard.finance.close');
+        // Phase E5.1 — read-only reporting: frozen close detail (finance.view) and CSV exports (finance.export; re-checked in the controller).
+        Route::get('/finance/close/{close}', FinanceCloseDetail::class)->middleware('permission:finance.view')->whereNumber('close')->name('dashboard.finance.close.show');
+        Route::get('/finance/close/{close}/export', [FinanceReportExportController::class, 'close'])->middleware('permission:finance.export')->whereNumber('close')->name('dashboard.finance.close.export');
+        Route::get('/finance/cash/export', [FinanceReportExportController::class, 'cash'])->middleware('permission:finance.export')->name('dashboard.finance.cash.export');
+        Route::get('/finance/cost/export', [FinanceReportExportController::class, 'cost'])->middleware('permission:finance.export')->name('dashboard.finance.cost.export');
+        Route::get('/finance/fx/export', [FinanceReportExportController::class, 'fx'])->middleware('permission:finance.export')->name('dashboard.finance.fx.export');
     });
 
 // Local chat simulator — 404 outside local/testing (see EnsureDevEnvironment).
