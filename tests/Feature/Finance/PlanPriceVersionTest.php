@@ -193,3 +193,42 @@ it('enforces the expected open version at the service level too', function () {
     $book->recordVersion($plan, CarbonImmutable::now(), PlanPriceVersionSource::Admin, null, $v1->id, true);
     expect(PlanPriceVersion::query()->count())->toBe(2);
 });
+
+it('lets the stale admin retry IMMEDIATELY after a refresh (no sleep): three contiguous, strictly increasing periods', function () {
+    $admin = userWithRole(Role::SuperAdmin);
+    Livewire::actingAs($admin)->test(Plans::class)->call('new')->set(planFormE0())->call('save')->assertHasNoErrors();
+    $plan = Plan::where('slug', 'plus')->sole();
+    $v1 = PlanPriceVersion::query()->sole();
+
+    // 1–2. Both admins open the same form; A saves; B (old preview) is refused as stale.
+    $adminA = Livewire::actingAs($admin)->test(Plans::class)->call('edit', $plan->id);
+    $adminB = Livewire::actingAs($admin)->test(Plans::class)->call('edit', $plan->id);
+    $adminA->set('price', '20')->call('save')->assertHasNoErrors();
+    $adminB->set('price', '30')->call('save')->assertHasErrors(['price']);
+
+    // 3. B refreshes the form and gets the new expected version.
+    $v2 = PlanPriceVersion::query()->whereNull('effective_until')->sole();
+    $adminB->call('edit', $plan->id);
+    expect($adminB->get('expectedPriceVersionId'))->toBe($v2->id);
+
+    // 4–5. B retries at once — no sleep, no travel — and succeeds.
+    $adminB->set('price', '30')->call('save')->assertHasNoErrors();
+
+    // 6. Three periods: ordered, contiguous, no overlap, no zero-length interval.
+    $versions = PlanPriceVersion::query()->where('plan_id', $plan->id)->orderBy('effective_from')->orderBy('id')->get();
+
+    expect($versions->pluck('id')->all())->toBe([$v1->id, $v2->id, $versions[2]->id])
+        ->and((string) $plan->fresh()->price)->toBe('30.00')
+        ->and($versions->map(fn ($v) => (string) $v->price)->all())->toBe(['10.00', '20.00', '30.00'])
+        ->and($versions[0]->effective_until->equalTo($versions[1]->effective_from))->toBeTrue()
+        ->and($versions[1]->effective_until->equalTo($versions[2]->effective_from))->toBeTrue()
+        ->and($versions[2]->effective_until)->toBeNull()
+        ->and($versions[0]->effective_from->lessThan($versions[1]->effective_from))->toBeTrue()
+        ->and($versions[1]->effective_from->lessThan($versions[2]->effective_from))->toBeTrue()
+        ->and($versions[0]->effective_until->greaterThan($versions[0]->effective_from))->toBeTrue()
+        ->and($versions[1]->effective_until->greaterThan($versions[1]->effective_from))->toBeTrue()
+        ->and($versions[1]->effective_from->format('u'))->not->toBe('000000') // microseconds really stored
+        ->and(app(PlanPriceBook::class)->versionFor($plan->id, CarbonImmutable::instance($versions[1]->effective_from))->id)->toBe($v2->id)
+        ->and(app(PlanPriceBook::class)->versionFor($plan->id, CarbonImmutable::instance($versions[1]->effective_from)->subMicrosecond())->id)->toBe($v1->id)
+        ->and(AuditLog::where('action', AuditActions::PlanPriceVersioned)->count())->toBe(3);
+});

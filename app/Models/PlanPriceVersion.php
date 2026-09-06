@@ -16,6 +16,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class PlanPriceVersion extends Model
 {
+    /** Storage/comparison format for the period boundaries (microsecond precision). */
+    public const PERIOD_FORMAT = 'Y-m-d H:i:s.u';
+
     /**
      * @var list<string>
      */
@@ -42,6 +45,15 @@ class PlanPriceVersion extends Model
             'effective_from' => 'datetime',
             'effective_until' => 'datetime',
         ];
+    }
+
+    /**
+     * Dates are written with microseconds on both engines (PostgreSQL
+     * timestamp(6); SQLite text that sorts and compares lexicographically).
+     */
+    public function getDateFormat(): string
+    {
+        return self::PERIOD_FORMAT;
     }
 
     /** @return BelongsTo<Plan, $this> */

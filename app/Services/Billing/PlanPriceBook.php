@@ -26,7 +26,10 @@ use Illuminate\Support\Facades\DB;
  *    transaction (or its own when none is open).
  *
  * Versions are never rewritten, split or back-dated; the only write to an
- * existing row is closing it once.
+ * existing row is closing it once. Period boundaries are compared and stored
+ * with MICROSECOND precision (bound explicitly as "Y-m-d H:i:s.u" so the query
+ * grammar never truncates them), which is what makes an immediate retry after
+ * a stale conflict deterministic — no clock spacing is ever required.
  *
  * Stale protection (admin edits): the caller passes the id of the open version
  * it loaded the form from (NULL when the plan had none); after the lock the
@@ -39,11 +42,13 @@ final class PlanPriceBook
 
     public function versionFor(int $planId, CarbonImmutable $at): ?PlanPriceVersion
     {
+        $atValue = self::boundary($at);
+
         return PlanPriceVersion::query()
             ->where('plan_id', $planId)
-            ->where('effective_from', '<=', $at)
-            ->where(static function ($query) use ($at): void {
-                $query->whereNull('effective_until')->orWhere('effective_until', '>', $at);
+            ->where('effective_from', '<=', $atValue)
+            ->where(static function ($query) use ($atValue): void {
+                $query->whereNull('effective_until')->orWhere('effective_until', '>', $atValue);
             })
             ->orderByDesc('effective_from')
             ->first();
@@ -88,16 +93,20 @@ final class PlanPriceBook
                 $this->assertOpenVersionIs($locked->id, $expectedOpenVersionId);
             }
 
+            $fromValue = self::boundary($from);
+
             $overlap = PlanPriceVersion::query()
                 ->where('plan_id', $locked->id)
-                ->where(static function ($query) use ($from): void {
+                ->where(static function ($query) use ($fromValue): void {
                     // Any version starting at or after `from` (open or closed), or
                     // a closed version still running after `from`, overlaps. The
                     // one open version that started BEFORE `from` is the period
-                    // we close at `from`.
-                    $query->where('effective_from', '>=', $from)
-                        ->orWhere(static function ($q) use ($from): void {
-                            $q->whereNotNull('effective_until')->where('effective_until', '>', $from);
+                    // we close at `from`. Strict comparisons at microsecond
+                    // precision: a closed period is always [from, until) with
+                    // until > from — never zero-length.
+                    $query->where('effective_from', '>=', $fromValue)
+                        ->orWhere(static function ($q) use ($fromValue): void {
+                            $q->whereNotNull('effective_until')->where('effective_until', '>', $fromValue);
                         });
                 })
                 ->orderBy('effective_from')
@@ -110,12 +119,12 @@ final class PlanPriceBook
             PlanPriceVersion::query()
                 ->where('plan_id', $locked->id)
                 ->whereNull('effective_until')
-                ->where('effective_from', '<', $from)
-                ->update(['effective_until' => $from, 'updated_at' => CarbonImmutable::now()]);
+                ->where('effective_from', '<', $fromValue)
+                ->update(['effective_until' => $fromValue, 'updated_at' => CarbonImmutable::now()->format(PlanPriceVersion::PERIOD_FORMAT)]);
 
             $closed = PlanPriceVersion::query()
                 ->where('plan_id', $locked->id)
-                ->where('effective_until', $from)
+                ->where('effective_until', $fromValue)
                 ->value('id');
 
             $version = PlanPriceVersion::query()->create([
@@ -123,7 +132,7 @@ final class PlanPriceBook
                 'price' => (string) $locked->price,
                 'currency' => strtoupper((string) $locked->currency),
                 'billing_period' => $locked->billing_period->value,
-                'effective_from' => $from,
+                'effective_from' => $fromValue,
                 'effective_until' => null,
                 'source' => $source->value,
                 'created_by' => $createdBy,
@@ -141,5 +150,11 @@ final class PlanPriceBook
 
             return $version;
         });
+    }
+
+    /** A boundary as the exact string both engines store and compare (microseconds kept). */
+    public static function boundary(CarbonImmutable $at): string
+    {
+        return $at->format(PlanPriceVersion::PERIOD_FORMAT);
     }
 }

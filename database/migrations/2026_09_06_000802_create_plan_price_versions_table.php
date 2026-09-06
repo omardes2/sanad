@@ -22,6 +22,11 @@ use Illuminate\Support\Facades\Schema;
  *  - plan_id restricts deletion: a plan with price history cannot vanish.
  *  - The partial unique index is the database-level backstop for "exactly one
  *    open version per plan" (PostgreSQL and SQLite).
+ *  - effective_from / effective_until carry MICROSECOND precision (timestamp(6)
+ *    on PostgreSQL; the model writes "Y-m-d H:i:s.u" on both engines), so an
+ *    admin can retry immediately after a stale conflict without any artificial
+ *    spacing, and the PostgreSQL check keeps every closed period strictly
+ *    positive.
  */
 return new class extends Migration
 {
@@ -33,8 +38,11 @@ return new class extends Migration
             $table->decimal('price', 10, 2);
             $table->string('currency', 3);
             $table->string('billing_period', 16);
-            $table->timestamp('effective_from');
-            $table->timestamp('effective_until')->nullable();
+            // Microsecond precision: two consecutive versions are never forced
+            // apart by a one-second clock, and [from, until) can never collapse
+            // to a zero-length interval by timestamp rounding.
+            $table->timestamp('effective_from', 6);
+            $table->timestamp('effective_until', 6)->nullable();
             // baseline | admin
             $table->string('source', 16);
             $table->unsignedBigInteger('created_by')->nullable();

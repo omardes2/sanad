@@ -100,14 +100,16 @@ it('of 6 concurrent financial edits from the same open version exactly one wins;
             ->and((string) $versions[1]->price)->toBe((string) $plan->fresh()->price) // projection = winner
             ->and(AuditLog::where('subject_type', (new PlanPriceVersion)->getMorphClass())->where('subject_id', $versions[1]->id)->count())->toBe(1);
 
-        // A loser retries LATER from the NEW open version and succeeds (versions
-        // are second-precise: a retry in the same second as the winner's start is
-        // refused as an overlap, never written).
-        usleep(1_100_000);
+        // A loser retries IMMEDIATELY from the NEW open version and succeeds:
+        // boundaries are microsecond-precise, so no spacing is ever needed.
         $retry = e0Run(['sanad:plan-price-probe', (string) $plan->id, '99', (string) $versions[1]->id]);
         $retry->wait();
+        $all = PlanPriceVersion::query()->where('plan_id', $plan->id)->orderBy('effective_from')->get();
         expect(trim($retry->getOutput()))->toBe('versioned')
-            ->and(PlanPriceVersion::query()->where('plan_id', $plan->id)->count())->toBe(3);
+            ->and($all)->toHaveCount(3)
+            ->and($all[1]->effective_until->equalTo($all[2]->effective_from))->toBeTrue()
+            ->and($all[1]->effective_until->greaterThan($all[1]->effective_from))->toBeTrue() // no zero-length interval
+            ->and($all[2]->effective_until)->toBeNull();
     } finally {
         e0Cleanup([$plan], []);
     }
