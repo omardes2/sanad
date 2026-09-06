@@ -71,6 +71,23 @@ final class MoneyRules
         }
     }
 
+    /**
+     * An idempotency key is an OPAQUE, bounded, caller-owned token (the UI
+     * mints `ui:<uuid>`): non-empty after trimming, at most 191 characters
+     * (the unique column width), a single line. It never carries a payload,
+     * an amount or customer data — the facts are compared separately.
+     */
+    public static function idempotencyKey(?string $key, string $rule = 'idempotency_key'): string
+    {
+        $key = trim((string) $key);
+
+        if ($key === '' || mb_strlen($key) > 191 || preg_match('/[\r\n\t]/', $key) === 1) {
+            throw PaymentRuleException::of($rule, 'مفتاح idempotency إلزامي (حتى 191 حرفًا، سطر واحد).');
+        }
+
+        return $key;
+    }
+
     public static function format(int $scaled): string
     {
         return DecimalMath::format($scaled, self::SCALE);

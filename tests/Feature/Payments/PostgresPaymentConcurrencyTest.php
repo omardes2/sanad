@@ -111,7 +111,7 @@ it('of 6 concurrent allocations of 30.00 from a 100.00 payment exactly three suc
     try {
         $processes = [];
         for ($i = 0; $i < 6; $i++) {
-            $processes[] = e1Run(['allocate', (string) $payment->id, (string) $event->id, '30.00']);
+            $processes[] = e1Run(['allocate', (string) $payment->id, (string) $event->id, '30.00', 'cap-'.$i.'-'.$payment->id]);
         }
         $outcomes = e1Outcomes($processes);
         $counts = array_count_values(array_map(fn ($o) => explode(':', $o)[0], $outcomes));
@@ -135,15 +135,15 @@ it('concurrent refund allocations never exceed the refund nor the allocation the
     $event = e1PeriodEvent($user, $plan);
     $payment = e1Payment($user, ['amount' => '100.00']);
     $service = app(AllocationService::class);
-    $big = $service->allocatePayment($payment->id, $event->id, '70.00');
-    $small = $service->allocatePayment($payment->id, $event->id, '30.00');
+    $big = $service->allocatePayment($payment->id, $event->id, '70.00', e1Key());
+    $small = $service->allocatePayment($payment->id, $event->id, '30.00', e1Key());
     $refund = e1Refund($payment, ['amount' => '50.00']);
 
     try {
         // (a) Bound by the REFUND: 6 × 20.00 against a 50.00 refund on a 70.00 allocation ⇒ exactly 2 succeed (40.00).
         $processes = [];
         for ($i = 0; $i < 6; $i++) {
-            $processes[] = e1Run(['allocate-refund', (string) $refund->id, (string) $big->id, '20.00']);
+            $processes[] = e1Run(['allocate-refund', (string) $refund->id, (string) $big->id, '20.00', 'rcap-'.$i.'-'.$refund->id]);
         }
         $outcomes = e1Outcomes($processes);
         $counts = array_count_values(array_map(fn ($o) => explode(':', $o)[0], $outcomes));
@@ -158,7 +158,7 @@ it('concurrent refund allocations never exceed the refund nor the allocation the
         $refund2 = e1Refund($payment, ['amount' => '50.00']);
         $processes = [];
         for ($i = 0; $i < 6; $i++) {
-            $processes[] = e1Run(['allocate-refund', (string) $refund2->id, (string) $small->id, '20.00']);
+            $processes[] = e1Run(['allocate-refund', (string) $refund2->id, (string) $small->id, '20.00', 'rcap-'.$i.'-'.$refund2->id]);
         }
         $outcomes = e1Outcomes($processes);
         $counts = array_count_values(array_map(fn ($o) => explode(':', $o)[0], $outcomes));

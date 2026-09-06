@@ -28,7 +28,7 @@ it('reports payment 100 / allocation 70 / refund 40 / refund allocation 20 as Gr
     $window = fn (): CashSummary => app(CashCollectedQuery::class)->summarise(CarbonImmutable::parse('2026-08-01', 'UTC'), CarbonImmutable::parse('2026-09-01', 'UTC'))['USD'];
 
     $payment = e1Payment($subscriber, ['amount' => '100.00', 'receivedAt' => CarbonImmutable::parse('2026-08-10 09:00:00', 'UTC')]);
-    $allocation = app(AllocationService::class)->allocatePayment($payment->id, $event->id, '70.00');
+    $allocation = app(AllocationService::class)->allocatePayment($payment->id, $event->id, '70.00', e1Key());
 
     $beforeRefund = $window();
     expect($beforeRefund->grossCashCollected)->toBe('100.00')->and($beforeRefund->refunds)->toBe('0.00')->and($beforeRefund->netCash)->toBe('100.00')
@@ -36,7 +36,7 @@ it('reports payment 100 / allocation 70 / refund 40 / refund allocation 20 as Gr
         ->and($beforeRefund->netAllocatedAmount)->toBe('70.00')->and($beforeRefund->unallocatedGrossCollectedAmount)->toBe('30.00');
 
     $refund = e1Refund($payment, ['amount' => '40.00', 'refundedAt' => CarbonImmutable::parse('2026-08-20 09:00:00', 'UTC')]);
-    app(AllocationService::class)->allocateRefund($refund->id, $allocation->id, '20.00');
+    app(AllocationService::class)->allocateRefund($refund->id, $allocation->id, '20.00', e1Key());
 
     $after = $window();
     expect($after->grossCashCollected)->toBe('100.00')

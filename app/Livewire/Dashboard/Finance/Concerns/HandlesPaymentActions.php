@@ -80,14 +80,16 @@ trait HandlesPaymentActions
      * own error bag and release the claim so the user can resubmit the same
      * attempt on purpose. Returns true only on success.
      *
-     * After success the claim is released when the service is idempotent for
-     * the key (a replay returns the same row); for actions the E1 services do
-     * not key (allocations) the claim is KEPT so a reused attempt key is
-     * refused as a duplicate for the TTL — the key rotates on success anyway.
+     * The claim is a UX guard only (double-click / in-flight retry): every
+     * keyed service (payment, refund, payment allocation, refund allocation)
+     * is idempotent for the attempt key at the database level, so the claim
+     * is released after success — a later replay of the same key returns the
+     * same row, a different payload is refused as a conflict. Financial
+     * correctness never depends on the cache store.
      *
      * @param  callable(): void  $action
      */
-    protected function attempt(string $form, string $attemptKey, callable $action, bool $keepClaimOnSuccess = false): bool
+    protected function attempt(string $form, string $attemptKey, callable $action): bool
     {
         $this->authorizeManage();
         $this->resetErrorBag();
@@ -124,9 +126,7 @@ trait HandlesPaymentActions
             return false;
         }
 
-        if (! $keepClaimOnSuccess) {
-            SubmitAttempt::release($form, $attemptKey);
-        }
+        SubmitAttempt::release($form, $attemptKey);
 
         return true;
     }

@@ -46,9 +46,9 @@ function cashFixture(): array
     $subscription = Subscription::create(['subscriber_id' => $usd->id, 'plan_id' => billingPlan()->id, 'status' => 'active', 'started_at' => now()]);
     $event = fn (string $from, string $to) => SubscriptionEvent::query()->create(['subscription_id' => $subscription->id, 'subscriber_id' => $usd->id, 'event_type' => 'extended', 'from_status' => 'active', 'to_status' => 'active', 'to_period_start' => $august($from), 'to_period_end' => $august($to), 'effective_at' => now(), 'source' => 'admin', 'actor_ref' => 'console']);
     $allocations = app(AllocationService::class);
-    $alloc1 = $allocations->allocatePayment($a->id, $event('2026-08-01', '2026-09-01')->id, '60.00');
-    $allocations->allocatePayment($a->id, $event('2026-09-01', '2026-10-01')->id, '20.00'); // period starts outside the window
-    $allocations->allocateRefund($r1->id, $alloc1->id, '30.00');
+    $alloc1 = $allocations->allocatePayment($a->id, $event('2026-08-01', '2026-09-01')->id, '60.00', e1Key());
+    $allocations->allocatePayment($a->id, $event('2026-09-01', '2026-10-01')->id, '20.00', e1Key()); // period starts outside the window
+    $allocations->allocateRefund($r1->id, $alloc1->id, '30.00', e1Key());
 
     return [$a, $b, $c, $d];
 }

@@ -74,9 +74,12 @@ class RefundDetail extends Component
             $refund = $this->refund();
             $this->assertRenderedToken($this->paymentToken, $refund->payment()->firstOrFail()->stateToken());
 
-            $row = $service->allocateRefund($refund->id, $this->positiveInt($this->rallocAllocationId, 'معرّف التخصيص'), $this->rallocAmount, self::optional($this->rallocReasonCode));
-            $this->notice = "نُسب الاسترداد #{$row->customer_refund_id} إلى التخصيص #{$row->payment_allocation_id} بمبلغ {$row->amount} {$row->currency} (سجل #{$row->id}).";
-        }, keepClaimOnSuccess: true); // refund allocations carry no idempotency key in E1: a reused attempt key stays refused
+            // The attempt key IS the service idempotency key: a replay returns the same row, a different payload conflicts.
+            $row = $service->allocateRefund($refund->id, $this->positiveInt($this->rallocAllocationId, 'معرّف التخصيص'), $this->rallocAmount, $this->allocationKey, self::optional($this->rallocReasonCode));
+            $this->notice = $row->wasRecentlyCreated
+                ? "نُسب الاسترداد #{$row->customer_refund_id} إلى التخصيص #{$row->payment_allocation_id} بمبلغ {$row->amount} {$row->currency} (سجل #{$row->id})."
+                : "تخصيص الاسترداد #{$row->id} مسجَّل مسبقًا بنفس المفتاح والحقائق؛ لم يُكتب شيء جديد.";
+        });
 
         if ($ok) {
             $this->reset('rallocAllocationId', 'rallocAmount', 'rallocReasonCode', 'confirming');

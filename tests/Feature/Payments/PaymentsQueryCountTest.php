@@ -48,7 +48,7 @@ it('payments list: the same number of queries with 3 rows and with 40 rows (pagi
 
 it('payment detail and refund detail: the same number of queries with 1 refund / 1 allocation and with 20 refunds / 11 allocations', function () {
     $fx = closableMonth();
-    app(AllocationService::class)->allocatePayment($fx['usd']->id, periodEvent($fx['subscriber'])->id, '1.00');
+    app(AllocationService::class)->allocatePayment($fx['usd']->id, periodEvent($fx['subscriber'])->id, '1.00', e1Key());
     $this->actingAs(userWithRole(Role::Finance));
     $paymentUrl = route('dashboard.finance.payments.show', $fx['usd']->id);
     $refundUrl = route('dashboard.finance.refunds.show', $fx['refund']->id);
@@ -61,7 +61,7 @@ it('payment detail and refund detail: the same number of queries with 1 refund /
         e1Refund($fx['usd'], ['amount' => '1.00', 'refundedAt' => CarbonImmutable::parse('2026-08-15', 'UTC')->addMinutes($i)]);
     }
     for ($i = 0; $i < 10; $i++) {
-        app(AllocationService::class)->allocatePayment($fx['usd']->id, periodEvent($fx['subscriber'])->id, '1.00');
+        app(AllocationService::class)->allocatePayment($fx['usd']->id, periodEvent($fx['subscriber'])->id, '1.00', e1Key());
     }
     $largePayment = paymentQueries(fn () => $this->get($paymentUrl)->assertOk());
     $largeRefund = paymentQueries(fn () => $this->get($refundUrl)->assertOk());

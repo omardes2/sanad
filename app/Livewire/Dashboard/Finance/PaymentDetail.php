@@ -146,10 +146,13 @@ class PaymentDetail extends Component
             $payment = $this->payment();
             $this->assertRenderedToken($this->paymentToken, $payment->stateToken());
 
-            $allocation = $service->allocatePayment($payment->id, $this->positiveInt($this->allocEventId, 'حدث الاشتراك'), $this->allocAmount, self::optional($this->allocReasonCode));
+            // The attempt key IS the service idempotency key: a replay returns the same row, a different payload conflicts.
+            $allocation = $service->allocatePayment($payment->id, $this->positiveInt($this->allocEventId, 'حدث الاشتراك'), $this->allocAmount, $this->allocationKey, self::optional($this->allocReasonCode));
 
-            $this->notice = "خُصِّص #{$allocation->id}: {$allocation->amount} {$allocation->currency} لفترة ".$allocation->period_start->toDateString().' → '.$allocation->period_end->toDateString().' (الاشتراك #'.$allocation->subscription_id.').';
-        }, keepClaimOnSuccess: true); // allocations carry no idempotency key in E1: a reused attempt key stays refused
+            $this->notice = $allocation->wasRecentlyCreated
+                ? "خُصِّص #{$allocation->id}: {$allocation->amount} {$allocation->currency} لفترة ".$allocation->period_start->toDateString().' → '.$allocation->period_end->toDateString().' (الاشتراك #'.$allocation->subscription_id.').'
+                : "التخصيص #{$allocation->id} مسجَّل مسبقًا بنفس المفتاح والحقائق؛ لم يُكتب شيء جديد.";
+        });
 
         if ($ok) {
             $this->reset('allocEventId', 'allocAmount', 'allocReasonCode', 'confirming');

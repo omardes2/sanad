@@ -71,13 +71,13 @@ it('refund detail shows the facts, the original payment, reporting status, alloc
     $this->actingAs(userWithRole(Role::SuperAdmin))->get(route('dashboard.finance.refunds.show', 999))->assertNotFound();
 });
 
-it('allocates a refund from the detail: only the payment\'s own allocations are targets, remaining reversible shown, caps refused verbatim, same-key double submit refused as duplicate, one audit per success', function () {
+it('allocates a refund from the detail: only the payment\'s own allocations are targets, remaining reversible shown, caps refused verbatim, one audit per success; a same-key replay returns the same row and a same-key different payload conflicts', function () {
     $fx = closableMonth();
     $finance = userWithRole(Role::Finance);
     $refund = $fx['refund']; // 10.00 on the 100.00 USD payment
     $event = periodEvent($fx['subscriber']);
-    $allocation = app(AllocationService::class)->allocatePayment($fx['usd']->id, $event->id, '60.00');
-    $foreign = app(AllocationService::class)->allocatePayment($fx['ils']->id, periodEvent($fx['subscriber'])->id, '5.00'); // another payment's allocation
+    $allocation = app(AllocationService::class)->allocatePayment($fx['usd']->id, $event->id, '60.00', e1Key());
+    $foreign = app(AllocationService::class)->allocatePayment($fx['ils']->id, periodEvent($fx['subscriber'])->id, '5.00', e1Key()); // another payment's allocation
 
     $page = Livewire::actingAs($finance)->test(RefundDetail::class, ['refund' => $refund])->call('openConfirm', 'allocate')
         ->assertSee('data-testid="form-refund-allocation"', false)->assertSee('#'.$allocation->id.' · 2026-09-01 → 2026-10-01 · 60.00 USD · reversible 60.00')->assertDontSee('#'.$foreign->id.' · ');
@@ -92,8 +92,18 @@ it('allocates a refund from the detail: only the payment\'s own allocations are 
         ->and(AuditLog::where('action', AuditActions::RefundAllocated)->where('subject_id', $fx['usd']->id)->count())->toBe(1)
         ->and((string) PaymentAllocation::query()->findOrFail($allocation->id)->amount)->toBe('60.00'); // the original allocation is never modified
 
-    $page->set('allocationKey', $key)->call('openConfirm', 'allocate')->set('rallocAllocationId', (string) $allocation->id)->set('rallocAmount', '1.00')->call('allocateRefund')->assertHasErrors(['refund_allocation.duplicate']);
-    expect(RefundAllocation::count())->toBe(1);
+    $rowId = RefundAllocation::query()->firstOrFail()->id;
+    $audits = fn () => AuditLog::where('action', AuditActions::RefundAllocated)->where('subject_id', $fx['usd']->id)->count();
+
+    // same key + same facts ⇒ the SAME row from the service (claim released after success; the DB unique key is the authority)
+    $page->set('allocationKey', $key)->call('openConfirm', 'allocate')->set('rallocAllocationId', (string) $allocation->id)->set('rallocAmount', '10.00')->call('allocateRefund')
+        ->assertHasNoErrors()->assertSee('مسجَّل مسبقًا بنفس المفتاح')->assertSee('#'.$rowId);
+    expect(RefundAllocation::count())->toBe(1)->and($audits())->toBe(1);
+
+    // same key + different amount ⇒ idempotency conflict, nothing written, key kept
+    $page->set('allocationKey', $key)->call('openConfirm', 'allocate')->set('rallocAllocationId', (string) $allocation->id)->set('rallocAmount', '1.00')->call('allocateRefund')
+        ->assertHasErrors(['refund_allocation.conflict'])->assertSee('IDEMPOTENCY CONFLICT');
+    expect(RefundAllocation::count())->toBe(1)->and($audits())->toBe(1)->and($page->get('allocationKey'))->toBe($key);
 });
 
 it('audit subject mapping: refund, payment allocation, refund allocation, dispute and resolve are all recorded under CustomerPayment#<payment>; the refund detail link reaches the refund and refund-allocation records', function () {
@@ -101,9 +111,9 @@ it('audit subject mapping: refund, payment allocation, refund allocation, disput
     $finance = userWithRole(Role::Finance);
     $payment = $fx['usd'];
     $event = periodEvent($fx['subscriber']);
-    $allocation = app(AllocationService::class)->allocatePayment($payment->id, $event->id, '50.00');
+    $allocation = app(AllocationService::class)->allocatePayment($payment->id, $event->id, '50.00', e1Key());
     $refund = e1Refund($payment, ['amount' => '20.00', 'refundedAt' => CarbonImmutable::parse('2026-08-20', 'UTC')]);
-    $refundAllocation = app(AllocationService::class)->allocateRefund($refund->id, $allocation->id, '20.00');
+    $refundAllocation = app(AllocationService::class)->allocateRefund($refund->id, $allocation->id, '20.00', e1Key());
     $service = app(CustomerPaymentService::class);
     $service->transition($payment->fresh(), CustomerPaymentEventType::Disputed, $payment->fresh()->stateToken(), PaymentSource::Gateway, 'chargeback');
     $service->transition($payment->fresh(), CustomerPaymentEventType::DisputeResolved, $payment->fresh()->stateToken(), PaymentSource::Gateway, 'won');

@@ -26,9 +26,10 @@ use Throwable;
  *  - fail-closed: if the store is unreachable the claim is refused and the
  *    submit is stopped before any service runs (nothing is written; the user
  *    retries the same attempt key).
- * The financial truth stays the services' idempotency keys, state tokens, row
- * locks and caps; where a service takes no key (allocations in E1) this guard
- * is convenience only, not a guarantee.
+ * The financial truth is the services' idempotency keys (payment, refund AND
+ * — since E5.2a — payment / refund allocation, each backed by a database
+ * unique index), state tokens, row locks and caps. This guard is UX only:
+ * financial correctness never depends on the cache store.
  */
 final class SubmitAttempt
 {

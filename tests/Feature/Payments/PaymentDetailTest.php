@@ -15,6 +15,7 @@ use App\Models\User;
 use App\Services\Payments\CashCollectedQuery;
 use App\Services\Payments\CustomerPaymentService;
 use App\Support\Audit\AuditActions;
+use App\Support\Payments\SubmitAttempt;
 use App\Support\Rbac\Role;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -192,7 +193,7 @@ it('refund attempt: prefilled payment, remaining refundable shown from the servi
     expect($page->get('refundKey'))->toBe($key)->and(CustomerRefund::query()->where('customer_payment_id', $payment->id)->count())->toBe(2);
 });
 
-it('allocation attempt: only the subscriber\'s events with a valid period are offered, cap refused verbatim, same-key double submit is refused as a duplicate, success rotates the key', function () {
+it('allocation attempt: only the subscriber\'s events with a valid period are offered, cap refused verbatim, success rotates the key; a same-key replay returns the same row (no second row, no second audit) and a same-key different payload is an idempotency conflict — without any cache claim', function () {
     $fx = closableMonth();
     $finance = userWithRole(Role::Finance);
     $payment = $fx['usd'];
@@ -213,9 +214,25 @@ it('allocation attempt: only the subscriber\'s events with a valid period are of
     $page->set('allocEventId', (string) $event->id)->set('allocAmount', '60.00')->call('allocatePayment')->assertHasNoErrors()->assertSee('خُصِّص')->assertSee('60.00 / 40.00');
     expect(PaymentAllocation::count())->toBe(1)->and($page->get('allocationKey'))->not->toBe($key);
 
-    // a double submit reusing the SAME attempt key is refused as a duplicate before the service runs (allocations carry no idempotency key in E1)
-    $page->set('allocationKey', $key)->call('openConfirm', 'allocate')->set('allocEventId', (string) $event->id)->set('allocAmount', '10.00')->call('allocatePayment')->assertHasErrors(['allocation.duplicate'])->assertSee('DUPLICATE SUBMIT');
-    expect(PaymentAllocation::count())->toBe(1)->and(AuditLog::where('action', AuditActions::PaymentAllocated)->where('subject_id', $payment->id)->count())->toBe(1);
+    $allocationId = PaymentAllocation::query()->firstOrFail()->id;
+    $audits = fn () => AuditLog::where('action', AuditActions::PaymentAllocated)->where('subject_id', $payment->id)->count();
+
+    // The claim was released after success (UX guard only): a replay of the SAME attempt key + the same facts reaches the
+    // service, which returns the SAME row — no second row, no second audit. The DB unique key is the authority, not the cache.
+    $page->set('allocationKey', $key)->call('openConfirm', 'allocate')->set('allocEventId', (string) $event->id)->set('allocAmount', '60.00')->call('allocatePayment')
+        ->assertHasNoErrors()->assertSee('مسجَّل مسبقًا بنفس المفتاح')->assertSee('#'.$allocationId);
+    expect(PaymentAllocation::count())->toBe(1)->and($audits())->toBe(1)->and($page->get('allocationKey'))->not->toBe($key);
+
+    // Same key + a different payload (10.00 instead of 60.00) ⇒ IDEMPOTENCY CONFLICT: nothing written, the key is kept, no new key is minted.
+    $page->set('allocationKey', $key)->call('openConfirm', 'allocate')->set('allocEventId', (string) $event->id)->set('allocAmount', '10.00')->call('allocatePayment')
+        ->assertHasErrors(['allocation.conflict'])->assertSee('IDEMPOTENCY CONFLICT')->assertSee('بحقائق مختلفة');
+    expect(PaymentAllocation::count())->toBe(1)->and($audits())->toBe(1)->and($page->get('allocationKey'))->toBe($key);
+
+    // A genuine double-click (the claim still held) is still stopped before the service by the UX guard.
+    expect(SubmitAttempt::claim('allocation', $key))->toBeTrue();
+    $page->set('allocAmount', '60.00')->call('allocatePayment')->assertHasErrors(['allocation.duplicate'])->assertSee('DUPLICATE SUBMIT');
+    SubmitAttempt::release('allocation', $key);
+    expect(PaymentAllocation::count())->toBe(1)->and($audits())->toBe(1);
 });
 
 it('refuses every action once the permission is withdrawn mid-session, and opening a confirmation panel writes nothing', function () {

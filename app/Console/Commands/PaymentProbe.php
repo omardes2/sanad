@@ -18,6 +18,7 @@ use App\Services\Payments\RefundService;
 use App\Support\Payments\SubmitAttempt;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Model;
 
 /**
  * Testing-only probe (Phase E1): performs ONE payment operation and prints a
@@ -29,10 +30,14 @@ use Illuminate\Console\Command;
  *      → created:<id> | existing:<id> | conflict
  *  refund <payment> <key> <amount>
  *      → ok:<id> | existing:<id> | rejected:<rule> | conflict
- *  allocate <payment> <subscription_event> <amount>
- *      → ok:<id> | rejected:<rule>
- *  allocate-refund <refund> <payment_allocation> <amount>
- *      → ok:<id> | rejected:<rule>
+ *  allocate <payment> <subscription_event> <amount> <key>
+ *      → ok:<id> | existing:<id> | rejected:<rule> | conflict
+ *  allocate-refund <refund> <payment_allocation> <amount> <key>
+ *      → ok:<id> | existing:<id> | rejected:<rule> | conflict
+ *  allocate-claimed <key> <payment> <subscription_event> <amount>   (UI path: SubmitAttempt claim, then the keyed service)
+ *      → ok:<id> | existing:<id> | duplicate | rejected:<rule> | conflict
+ *  allocate-refund-claimed <key> <refund> <payment_allocation> <amount>
+ *      → likewise
  */
 class PaymentProbe extends Command
 {
@@ -51,15 +56,15 @@ class PaymentProbe extends Command
             $line = match ((string) $this->argument('op')) {
                 'record' => $this->record($payments, $args),
                 'refund' => $this->refund($refunds, $args),
-                'allocate' => 'ok:'.$allocations->allocatePayment((int) $args[0], (int) $args[1], $args[2])->id,
-                'allocate-refund' => 'ok:'.$allocations->allocateRefund((int) $args[0], (int) $args[1], $args[2])->id,
+                'allocate' => self::written($allocations->allocatePayment((int) $args[0], (int) $args[1], $args[2], $args[3])),
+                'allocate-refund' => self::written($allocations->allocateRefund((int) $args[0], (int) $args[1], $args[2], $args[3])),
                 // E5.2a: lifecycle transitions with the caller's state token (stale ⇒ refused, never retried), and the UI submit-attempt claim.
                 'dispute' => 'ok:'.$payments->transition(CustomerPayment::query()->findOrFail((int) $args[0]), CustomerPaymentEventType::Disputed, $args[1], PaymentSource::Manual, 'probe')->latest_event_id,
                 'resolve' => 'ok:'.$payments->transition(CustomerPayment::query()->findOrFail((int) $args[0]), CustomerPaymentEventType::DisputeResolved, $args[1], PaymentSource::Manual, 'probe')->latest_event_id,
                 'claim' => SubmitAttempt::claim('probe', $args[0]) ? 'ok:claimed' : 'duplicate',
-                // The UI path for actions E1 does not key: claim the attempt key (kept on success), then the service.
-                'allocate-claimed' => SubmitAttempt::claim('allocation', $args[0]) ? 'ok:'.$allocations->allocatePayment((int) $args[1], (int) $args[2], $args[3])->id : 'duplicate',
-                'allocate-refund-claimed' => SubmitAttempt::claim('refund_allocation', $args[0]) ? 'ok:'.$allocations->allocateRefund((int) $args[1], (int) $args[2], $args[3])->id : 'duplicate',
+                // The UI path: claim the attempt key (UX guard only), then the service with the SAME key as its idempotency key.
+                'allocate-claimed' => SubmitAttempt::claim('allocation', $args[0]) ? self::written($allocations->allocatePayment((int) $args[1], (int) $args[2], $args[3], $args[0])) : 'duplicate',
+                'allocate-refund-claimed' => SubmitAttempt::claim('refund_allocation', $args[0]) ? self::written($allocations->allocateRefund((int) $args[1], (int) $args[2], $args[3], $args[0])) : 'duplicate',
                 'release' => (static function (string $scope, string $key): string {
                     SubmitAttempt::release($scope, $key);
 
@@ -78,6 +83,11 @@ class PaymentProbe extends Command
         $this->line($line);
 
         return self::SUCCESS;
+    }
+
+    private static function written(Model $row): string
+    {
+        return ($row->wasRecentlyCreated ? 'ok:' : 'existing:').$row->id;
     }
 
     /**

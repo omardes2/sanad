@@ -119,11 +119,11 @@
 
 ### `payment_allocations` (E1، append-only)
 إسناد النقد المحصَّل إلى فترة خدمة حدث اشتراك واحد (E0) — **attribution لا إيراد**؛ لا يُعدَّل عند الاسترداد.
-- `customer_payment_id` (**restrictOnDelete**) · `subscription_event_id` → `subscription_events` (**restrictOnDelete**) · `subscription_id` · `subscriber_id` · `period_start` / `period_end` (snapshot من `to_period_*` للحدث؛ لا تُكتب يدويًا) · `amount` · `currency` · `allocated_at`(6) · `actor_ref` · `reason_code?` · `created_at` فقط. على PostgreSQL `amount > 0` و`period_end > period_start`.
+- `customer_payment_id` (**restrictOnDelete**) · `subscription_event_id` → `subscription_events` (**restrictOnDelete**) · `subscription_id` · `subscriber_id` · `period_start` / `period_end` (snapshot من `to_period_*` للحدث؛ لا تُكتب يدويًا) · `amount` · `currency` · `allocated_at`(6) · `actor_ref` · `reason_code?` · `idempotency_key?` (E5.2a: string(191) **فريد**؛ إلزامي في الخدمة لكل صف جديد، NULL فقط لصفوف ما قبل E5.2a بلا backfill) · `created_at` فقط. على PostgreSQL `amount > 0` و`period_end > period_start`.
 
 ### `refund_allocations` (E1، append-only)
 إسناد استرداد إلى التخصيص الذي يعكسه: `Σ` لكل استرداد ≤ الاسترداد و`Σ` على كل تخصيص ≤ التخصيص.
-- `customer_refund_id` (**restrictOnDelete**) · `payment_allocation_id` (**restrictOnDelete**) · `amount` · `currency` · `allocated_at`(6) · `actor_ref` · `reason_code?` · `created_at` فقط.
+- `customer_refund_id` (**restrictOnDelete**) · `payment_allocation_id` (**restrictOnDelete**) · `amount` · `currency` · `allocated_at`(6) · `actor_ref` · `reason_code?` · `idempotency_key?` (E5.2a: string(191) **فريد**؛ إلزامي في الخدمة لكل صف جديد، NULL فقط للصفوف التاريخية) · `created_at` فقط.
 
 ### `cost_invoices` (E2)
 فاتورة مورّد كـ**دليل** لمكوّن تكلفة واحد (`provider/communication/external`)؛ التأكيد لا يجعل الإجمالي تكلفة فعلية.

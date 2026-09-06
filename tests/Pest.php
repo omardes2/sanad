@@ -804,6 +804,12 @@ use Symfony\Component\Process\Process;
 
 // ---- PostgreSQL race helpers for the payment probes (E1 / E5.2a) ------------------
 
+/** A fresh opaque idempotency key for one allocation write (E5.2a: every new allocation requires one). */
+function e1Key(): string
+{
+    return 'k:'.str()->random(16);
+}
+
 function e1Run(array $args): Process
 {
     $p = new Process(['php', 'artisan', 'sanad:payment-probe', ...$args], base_path());

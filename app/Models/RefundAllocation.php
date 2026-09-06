@@ -18,7 +18,7 @@ class RefundAllocation extends Model
     /**
      * @var list<string>
      */
-    protected $fillable = ['customer_refund_id', 'payment_allocation_id', 'amount', 'currency', 'allocated_at', 'actor_ref', 'reason_code', 'created_at'];
+    protected $fillable = ['customer_refund_id', 'payment_allocation_id', 'amount', 'currency', 'allocated_at', 'actor_ref', 'reason_code', 'idempotency_key', 'created_at'];
 
     /**
      * @return array<string, string>
