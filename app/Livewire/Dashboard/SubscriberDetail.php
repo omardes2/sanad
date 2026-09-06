@@ -38,10 +38,9 @@ class SubscriberDetail extends Component
     {
         $this->validate(['planId' => ['required', 'exists:plans,id']]);
 
-        $subscription = $this->subscription()
-            ?? Subscription::create(['subscriber_id' => $this->subscriber->id]);
-
-        $service->activate($subscription, Plan::find($this->planId));
+        // Creation + activation happen inside the service's transaction (E0:
+        // history event + audit atomic with the state; never a bare row).
+        $service->activateFor($this->subscriber, Plan::findOrFail($this->planId));
         $this->refreshSubscriber();
     }
 

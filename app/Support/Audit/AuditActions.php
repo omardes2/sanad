@@ -65,4 +65,13 @@ final class AuditActions
 
     /** Console entry: today's MRR snapshot rows were captured (counts only). */
     public const FinanceMrrSnapshotCaptured = 'finance.mrr_snapshot_captured';
+
+    /** A subscription transitioned (event_type in changes); written with the subscription_events row. */
+    public const SubscriptionTransitioned = 'subscription.transitioned';
+
+    /** A plan price version was opened (and the previous one closed) — atomic with the plan save. */
+    public const PlanPriceVersioned = 'plan.price_versioned';
+
+    /** Console entry: the financial history baseline was captured (counts only). */
+    public const FinanceHistoryBaselineApplied = 'finance.history_baseline_applied';
 }

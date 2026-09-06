@@ -7,11 +7,14 @@ namespace App\Livewire\Dashboard;
 use App\Enums\BillingPeriod;
 use App\Enums\PlanFeature;
 use App\Enums\PlanFeatureType;
+use App\Enums\PlanPriceVersionSource;
 use App\Enums\UsageDimension;
 use App\Models\Plan;
 use App\Services\Audit\AuditLogger;
+use App\Services\Billing\PlanPriceBook;
 use App\Support\Audit\AuditActions;
 use App\Support\Billing\DecimalMath;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Layout;
@@ -30,6 +33,9 @@ use Livewire\Component;
  * with the save (Phase D1): the plan row and the audit entry are written in
  * one transaction, so the audit trail can never describe a price that did not
  * change, and a price never changes without a trail. No PII is recorded.
+ * Phase E0 adds the plan price VERSION in the same transaction (PlanPriceBook:
+ * parent row lock, close the open version, open the new one); a name or
+ * description change creates no version.
  */
 #[Title('الباقات | سَنَد')]
 #[Layout('components.layouts.dashboard')]
@@ -127,7 +133,7 @@ class Plans extends Component
         $this->showForm = true;
     }
 
-    public function save(AuditLogger $audit): void
+    public function save(AuditLogger $audit, PlanPriceBook $priceBook): void
     {
         $data = $this->validate([
             'name' => ['required', 'string', 'max:255'],
@@ -165,13 +171,18 @@ class Plans extends Component
 
         $financialChanges = $this->financialChanges($plan, $isNew);
 
-        DB::transaction(function () use ($plan, $isNew, $financialChanges, $audit): void {
+        DB::transaction(function () use ($plan, $isNew, $financialChanges, $audit, $priceBook): void {
             $plan->save();
 
             if ($isNew) {
                 $audit->record(AuditActions::PlanCreated, $plan, $financialChanges, ['slug' => $plan->slug]);
             } elseif ($financialChanges !== []) {
                 $audit->record(AuditActions::PlanFinancialsUpdated, $plan, $financialChanges, ['slug' => $plan->slug]);
+            }
+
+            if ($isNew || $financialChanges !== []) {
+                // E0: the terms just saved become the open version from this instant.
+                $priceBook->recordVersion($plan, CarbonImmutable::now(), PlanPriceVersionSource::Admin, auth()->id());
             }
 
             // At most one default plan.
