@@ -99,8 +99,8 @@ class Reconciliation extends Component
 
     public string $recSource = 'invoice';
 
-    /** @var list<array{line: string, amount: string}> */
-    public array $recAllocations = [['line' => '', 'amount' => ''], ['line' => '', 'amount' => ''], ['line' => '', 'amount' => '']];
+    /** @var list<array{line: string, amount: string, fx_rate_id: string}> */
+    public array $recAllocations = [['line' => '', 'amount' => '', 'fx_rate_id' => ''], ['line' => '', 'amount' => '', 'fx_rate_id' => ''], ['line' => '', 'amount' => '', 'fx_rate_id' => '']];
 
     public string $recAmount = '';
 
@@ -219,7 +219,8 @@ class Reconciliation extends Component
                 if (trim((string) ($row['line'] ?? '')) === '' && trim((string) ($row['amount'] ?? '')) === '') {
                     continue;
                 }
-                $allocations[] = new EvidenceAllocation($this->positiveInt((string) ($row['line'] ?? ''), 'معرّف السطر'), (string) ($row['amount'] ?? ''));
+                $fxRateId = trim((string) ($row['fx_rate_id'] ?? ''));
+                $allocations[] = new EvidenceAllocation($this->positiveInt((string) ($row['line'] ?? ''), 'معرّف السطر'), (string) ($row['amount'] ?? ''), $fxRateId === '' ? null : $this->positiveInt($fxRateId, 'fx_rate_id'));
             }
 
             $reconciliation = $service->reconcile(new ReconciliationInput(

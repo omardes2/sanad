@@ -18,6 +18,7 @@ use App\Livewire\Dashboard\AuditLogs;
 use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Finance;
+use App\Livewire\Dashboard\Finance\Fx as FinanceFx;
 use App\Livewire\Dashboard\Finance\Payments as FinancePayments;
 use App\Livewire\Dashboard\Finance\Reconciliation as FinanceReconciliation;
 use App\Livewire\Dashboard\Messages;
@@ -102,6 +103,8 @@ Route::middleware(['auth', 'admin'])
         Route::get('/finance/payments', FinancePayments::class)->middleware('permission:finance.payments.manage')->name('dashboard.finance.payments');
         // Phase E2 — supplier invoices (evidence) + cost reconciliation (finance.reconcile): every write re-authorizes server-side.
         Route::get('/finance/reconciliation', FinanceReconciliation::class)->middleware('permission:finance.reconcile')->name('dashboard.finance.reconciliation');
+        // Phase E3 — manual FX quotes, frozen reporting conversions, reporting currency (finance.fx.manage).
+        Route::get('/finance/fx', FinanceFx::class)->middleware('permission:finance.fx.manage')->name('dashboard.finance.fx');
     });
 
 // Local chat simulator — 404 outside local/testing (see EnsureDevEnvironment).

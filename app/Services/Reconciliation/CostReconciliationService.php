@@ -9,6 +9,8 @@ use App\Data\Reconciliation\ReconciliationInput;
 use App\Enums\CostComponent;
 use App\Enums\CostInvoiceEventType;
 use App\Enums\ReconciliationSource;
+use App\Exceptions\Fx\FxRuleException;
+use App\Exceptions\Fx\StaleFxException;
 use App\Exceptions\Reconciliation\ReconciliationRuleException;
 use App\Exceptions\Reconciliation\StaleReconciliationException;
 use App\Models\CostAdjustment;
@@ -18,8 +20,10 @@ use App\Models\CostInvoiceLine;
 use App\Models\CostReconciliation;
 use App\Models\CostReconciliationScope;
 use App\Services\Audit\AuditLogger;
+use App\Services\Fx\ReportingConversionService;
 use App\Support\Audit\AuditActions;
 use App\Support\Billing\DecimalMath;
+use App\Support\Fx\FxMath;
 use App\Support\Payments\FinanceAuthorization;
 use App\Support\Rbac\Permission;
 use App\Support\Reconciliation\ReconciliationRules;
@@ -74,7 +78,7 @@ final class CostReconciliationService
                     if (! $allocation instanceof EvidenceAllocation) {
                         throw ReconciliationRuleException::of('allocations', 'تخصيص غير صالح.');
                     }
-                    $requests[] = [$allocation->costInvoiceLineId, ReconciliationRules::signedAmount($allocation->amount, 'allocation_amount')];
+                    $requests[] = [$allocation->costInvoiceLineId, ReconciliationRules::signedAmount($allocation->amount, 'allocation_amount'), $allocation->fxRateId];
                 }
                 break;
             case ReconciliationSource::ManualEvidenced:
@@ -124,7 +128,7 @@ final class CostReconciliationService
                 $invoiceIds = $lines->pluck('cost_invoice_id')->unique()->sort()->values();
                 $invoices = CostInvoice::query()->whereIn('id', $invoiceIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
 
-                foreach ($requests as [$lineId, $scaled]) {
+                foreach ($requests as [$lineId, $scaled, $fxRateId]) {
                     /** @var CostInvoiceLine $line */
                     $line = $lines->get($lineId);
                     /** @var CostInvoice $invoice */
@@ -138,8 +142,28 @@ final class CostReconciliationService
                         throw ReconciliationRuleException::of('scope_mismatch', "الفاتورة #{$invoice->id} تخص مكوّنًا/طرفًا آخر غير نطاق التسوية.");
                     }
 
+                    // Phase E3 — allocation-level FX: the share is in the LINE currency; a
+                    // cross-currency share needs the exact quote dated on the invoice's
+                    // issued_at (no lookup), verified as the current revision and frozen here.
+                    $fx = null;
+                    $convertedScaled = $scaled;
+
                     if ($invoice->currency !== $currency) {
-                        throw ReconciliationRuleException::of('FX_REQUIRED', "الفاتورة #{$invoice->id} بعملة {$invoice->currency} ونطاق التسوية {$currency}: لا تحويل ضمني (FX في E3).");
+                        if ($fxRateId === null) {
+                            throw ReconciliationRuleException::of('FX_REQUIRED', "الفاتورة #{$invoice->id} بعملة {$invoice->currency} ونطاق التسوية {$currency}: حدّد fx_rate_id صريحًا لسعر بتاريخ إصدار الفاتورة (".$invoice->issued_at->utc()->format('Y-m-d').'). لا تحويل ضمني.');
+                        }
+
+                        try {
+                            $rate = ReportingConversionService::acceptedRate($fxRateId, $invoice->currency, $currency, $invoice->issued_at->utc()->format('Y-m-d'));
+                        } catch (FxRuleException $e) {
+                            throw ReconciliationRuleException::of($e->rule, $e->getMessage());
+                        } catch (StaleFxException $e) {
+                            throw new StaleReconciliationException($e->getMessage());
+                        }
+
+                        $direction = FxMath::directionFor($rate->base_currency, $rate->quote_currency, $invoice->currency, $currency);
+                        $convertedScaled = ReconciliationRules::signedAmount(FxMath::convert(ReconciliationRules::format($scaled), ReconciliationRules::SCALE, (string) $rate->rate, $direction, ReconciliationRules::SCALE), 'allocation_amount', allowZero: true);
+                        $fx = ['fx_rate_id' => $rate->id, 'fx_rate_snapshot' => (string) $rate->rate, 'fx_direction' => $direction->value, 'fx_rate_date' => $rate->rateDate()];
                     }
 
                     if (! $line->kind->isAllocatable()) {
@@ -152,15 +176,16 @@ final class CostReconciliationService
                         throw ReconciliationRuleException::of('sign', "تخصيص السطر #{$line->id} يجب أن يحمل إشارة السطر نفسها (".ReconciliationRules::format($lineScaled).').');
                     }
 
-                    $already = DecimalMath::intFromDb(CostInvoiceAllocation::query()->where('cost_invoice_line_id', $line->id)->selectRaw('COALESCE(SUM(ROUND(amount * 1000000)), 0) AS s')->value('s'));
-                    $pending = array_sum(array_map(static fn (array $r): int => $r['line_id'] === $line->id ? $r['scaled'] : 0, $evidenceRows));
+                    // The cap is on the SOURCE share (line currency) across all reconciliations.
+                    $already = DecimalMath::intFromDb(CostInvoiceAllocation::query()->where('cost_invoice_line_id', $line->id)->selectRaw('COALESCE(SUM(ROUND(COALESCE(source_amount, amount) * 1000000)), 0) AS s')->value('s'));
+                    $pending = array_sum(array_map(static fn (array $r): int => $r['line_id'] === $line->id ? $r['source_scaled'] : 0, $evidenceRows));
 
                     if (abs($already + $pending + $scaled) > abs($lineScaled)) {
-                        throw ReconciliationRuleException::of('allocation_limit', 'مجموع تخصيصات السطر #'.$line->id.' ('.ReconciliationRules::format($already + $pending + $scaled).') يتجاوز مبلغ السطر ('.ReconciliationRules::format($lineScaled).'). لم يُكتب شيء.');
+                        throw ReconciliationRuleException::of('allocation_limit', 'مجموع تخصيصات السطر #'.$line->id.' ('.ReconciliationRules::format($already + $pending + $scaled).' '.$invoice->currency.') يتجاوز مبلغ السطر ('.ReconciliationRules::format($lineScaled).'). لم يُكتب شيء.');
                     }
 
-                    $evidenceRows[] = ['invoice_id' => $invoice->id, 'line_id' => $line->id, 'scaled' => $scaled];
-                    $reconciledScaled += $scaled;
+                    $evidenceRows[] = ['invoice_id' => $invoice->id, 'line_id' => $line->id, 'source_scaled' => $scaled, 'source_currency' => $invoice->currency, 'scaled' => $convertedScaled, 'fx' => $fx, 'issued_at' => $invoice->issued_at->utc()->format('Y-m-d')];
+                    $reconciledScaled += $convertedScaled;
                 }
             } elseif ($source === ReconciliationSource::ManualEvidenced) {
                 $reconciledScaled = (int) $manualScaled;
@@ -196,8 +221,10 @@ final class CostReconciliationService
             foreach ($evidenceRows as $row) {
                 CostInvoiceAllocation::query()->create([
                     'cost_invoice_id' => $row['invoice_id'], 'cost_invoice_line_id' => $row['line_id'], 'cost_reconciliation_id' => $reconciliation->id,
-                    'amount' => ReconciliationRules::format($row['scaled']), 'currency' => $currency, 'actor_ref' => FinanceAuthorization::actorRef(), 'created_at' => $now,
-                ]);
+                    'amount' => ReconciliationRules::format($row['scaled']), 'currency' => $currency,
+                    'source_amount' => ReconciliationRules::format($row['source_scaled']), 'source_currency' => $row['source_currency'],
+                    'actor_ref' => FinanceAuthorization::actorRef(), 'created_at' => $now,
+                ] + ($row['fx'] ?? []));
             }
 
             $scope->forceFill(['current_reconciliation_id' => $reconciliation->id, 'version' => $scope->version + 1, 'updated_by_ref' => FinanceAuthorization::actorRef()])->save();
@@ -211,6 +238,10 @@ final class CostReconciliationService
                 'unpriced_rows' => $snapshot->unpricedRows, 'snapshot_hash' => $snapshot->hash(),
                 'typed_confirmation' => $source === ReconciliationSource::ConfirmedZero ? self::ZERO_CONFIRMATION : null,
                 'reason_code' => $reason, 'evidence_ref' => $evidence, 'evidence_lines' => array_column($evidenceRows, 'line_id'),
+                'evidence_fx' => array_values(array_map(static fn (array $r): array => [
+                    'line_id' => $r['line_id'], 'invoice_issued_at' => $r['issued_at'], 'source_amount' => ReconciliationRules::format($r['source_scaled']), 'source_currency' => $r['source_currency'],
+                    'converted_amount' => ReconciliationRules::format($r['scaled']), 'currency' => $currency,
+                ] + ($r['fx'] ?? ['fx_rate_id' => null, 'fx_rate_date' => null, 'fx_direction' => 'NATIVE']), array_filter($evidenceRows, static fn (array $r): bool => $r['fx'] !== null))),
             ]);
 
             return $reconciliation;

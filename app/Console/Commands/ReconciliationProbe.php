@@ -23,7 +23,7 @@ use Illuminate\Console\Command;
  *      → created:<id> | existing:<id> | conflict
  *  confirm <invoice> <expected_token>
  *      → ok:<id> | stale | rejected:<rule>
- *  reconcile <component> <counterparty> <YYYY-MM> <currency> <expected|none> <line_id>:<amount>[,<line_id>:<amount>…]
+ *  reconcile <component> <counterparty> <YYYY-MM> <currency> <expected|none> <line_id>:<amount>[:<fx_rate_id>][,…]
  *      → ok:<reconciliation_id> | stale | rejected:<rule>
  *  zero <component> <counterparty> <YYYY-MM> <currency> <expected|none>
  *      → ok:<reconciliation_id> | stale | rejected:<rule>
@@ -49,10 +49,10 @@ class ReconciliationProbe extends Command
                     component: $a[0], counterpartyKey: $a[1], month: $a[2], currency: $a[3],
                     expectedCurrentReconciliationId: $a[4] === 'none' ? null : (int) $a[4],
                     source: 'invoice',
-                    allocations: array_map(static function (string $pair): EvidenceAllocation {
-                        [$lineId, $amount] = explode(':', $pair, 2);
+                    allocations: array_map(static function (string $triple): EvidenceAllocation {
+                        $parts = explode(':', $triple, 3);
 
-                        return new EvidenceAllocation((int) $lineId, $amount);
+                        return new EvidenceAllocation((int) $parts[0], $parts[1], isset($parts[2]) && $parts[2] !== '' ? (int) $parts[2] : null);
                     }, explode(',', $a[5])),
                     reasonCode: 'probe',
                 ))->id,

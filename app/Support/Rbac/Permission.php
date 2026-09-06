@@ -54,6 +54,8 @@ enum Permission: string
 
     case FinanceReconcile = 'finance.reconcile';
 
+    case FinanceFxManage = 'finance.fx.manage';
+
     case PlansManage = 'plans.manage';
     case SubscribersView = 'subscribers.view';
     case SubscribersManage = 'subscribers.manage';
@@ -86,6 +88,7 @@ enum Permission: string
             self::FinanceExport => 'تصدير المالية (CSV)',
             self::FinancePaymentsManage => 'تسجيل المدفوعات والاستردادات وتخصيصها',
             self::FinanceReconcile => 'فواتير المزوّدين وتسوية التكلفة',
+            self::FinanceFxManage => 'أسعار الصرف اليدوية وعملة التقرير',
             self::PlansManage => 'إدارة الباقات',
             self::SubscribersView => 'عرض المشتركين',
             self::SubscribersManage => 'إدارة المشتركين',

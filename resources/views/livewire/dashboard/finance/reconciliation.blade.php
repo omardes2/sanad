@@ -125,7 +125,7 @@
     {{-- ─── Reconciliation ───────────────────────────────────────────────── --}}
     <section class="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="form-reconciliation">
         <h2 class="text-base font-bold text-slate-800">إنشاء تسوية (Create Reconciliation) / صفر مؤكَّد (Confirm Zero)</h2>
-        <p class="mb-3 text-xs text-slate-500">النطاق = مكوّن + طرف + شهر تقويمي UTC + عملة. المصدر <code>invoice</code>: تخصيصات دليل صريحة من أسطر فواتير مؤكَّدة (service موجب، credit سالب؛ لا proration تلقائي؛ المبلغ المسوّى = مجموعها). <code>manual_evidenced</code>: مبلغ + سبب + دليل. <code>confirmed_zero</code>: شهادة مالية بكتابة <strong>ZERO</strong> حرفيًا + سبب + دليل. أدخل معرّف التسوية الحالية المتوقعة (فارغ = لا تسوية بعد)؛ تغيّرها ⇒ رفض.</p>
+        <p class="mb-3 text-xs text-slate-500">النطاق = مكوّن + طرف + شهر تقويمي UTC + عملة. المصدر <code>invoice</code>: تخصيصات دليل صريحة من أسطر فواتير مؤكَّدة (service موجب، credit سالب؛ لا proration تلقائي؛ المبلغ المسوّى = مجموعها بعملة النطاق). فاتورة بعملة أخرى تتطلب <code>fx_rate_id</code> صريحًا لسعر بتاريخ إصدارها — لا تحويل ضمني. <code>manual_evidenced</code>: مبلغ + سبب + دليل. <code>confirmed_zero</code>: شهادة مالية بكتابة <strong>ZERO</strong> حرفيًا + سبب + دليل. أدخل معرّف التسوية الحالية المتوقعة (فارغ = لا تسوية بعد)؛ تغيّرها ⇒ رفض.</p>
         @error('reconciliation')<p class="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700" data-testid="reconciliation-error">{{ $message }}</p>@enderror
         <form wire:submit="reconcile" class="grid gap-2 md:grid-cols-3">
             <label class="text-sm">المكوّن<select wire:model="recComponent" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm"><option value="provider">provider</option><option value="communication">communication</option><option value="external">external</option></select></label>
@@ -136,7 +136,8 @@
             <label class="text-sm">المصدر<select wire:model="recSource" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm"><option value="invoice">invoice</option><option value="manual_evidenced">manual_evidenced</option><option value="confirmed_zero">confirmed_zero</option></select></label>
             @foreach ($recAllocations as $i => $row)
                 <label class="text-sm">تخصيص دليل {{ $i + 1 }}: معرّف السطر<input type="text" wire:model="recAllocations.{{ $i }}.line" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm"></label>
-                <label class="text-sm md:col-span-2">المبلغ الموقَّع<input type="text" wire:model="recAllocations.{{ $i }}.amount" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm"></label>
+                <label class="text-sm">المبلغ الموقَّع (بعملة السطر)<input type="text" wire:model="recAllocations.{{ $i }}.amount" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm"></label>
+                <label class="text-sm">fx_rate_id (إلزامي عند اختلاف العملة؛ سعر بتاريخ إصدار الفاتورة)<input type="text" wire:model="recAllocations.{{ $i }}.fx_rate_id" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm"></label>
             @endforeach
             <label class="text-sm">المبلغ (manual_evidenced فقط)<input type="text" wire:model="recAmount" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm"></label>
             <label class="text-sm">رمز السبب<input type="text" wire:model="recReason" dir="ltr" maxlength="32" class="mt-1 w-full rounded-lg border-slate-300 text-sm"></label>

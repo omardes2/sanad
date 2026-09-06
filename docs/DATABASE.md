@@ -147,6 +147,24 @@
 ### `cost_adjustments` (E2، append-only)
 `cost_reconciliation_id` (**restrictOnDelete**) · `amount` موقَّع ≠ 0 · `currency` · `reason_code` · `evidence_ref` (إلزاميان) · `actor_ref`. `Adjusted Reconciled Cost = Base + Σ adjustments`؛ الأساس لا يتغيّر.
 
+### `fx_pairs` (E3)
+زوج صرف قانوني واحد لكل عملتين: `pair_key = min(ISO):max(ISO)` فريد (قيد CHECK على PostgreSQL) · `base_currency`/`quote_currency` الاتجاه الرسمي (`1 BASE = rate × QUOTE`) ثابت منذ الإنشاء · لا حذف. الزوج المعاكس لا يُنشأ.
+
+### `fx_rate_scopes` (E3، projection)
+صف لكل (`fx_pair_id`, `rate_date`) فريد؛ يحمل `current_rate_id?` و`version` فقط؛ هدف `FOR UPDATE` لتسجيل/تصحيح سعر ذلك التاريخ.
+
+### `fx_rates` (E3، append-only)
+سعر يدوي **لتاريخ محدد** (لا `effective_from/until`، لا صلاحية مستمرة): `fx_pair_id` · `scope_id` · `rate_date` · `base/quote` snapshot · `rate` decimal(24,12) > 0 · `source = manual` · `evidence_ref` (إلزامي) · `reason_code?` · `supersedes_id?` · `recorded_by_ref` · `created_at(6)`. التصحيح مراجعة جديدة تحت قفل النطاق.
+
+### `fx_conversion_scopes` (E3، projection)
+صف لكل (`subject_type`, `subject_id`, `purpose`, `target_currency`) فريد؛ `current_conversion_id?` + `version`؛ هدف القفل لتصحيح تحويل.
+
+### `fx_conversions` (E3، append-only)
+تحويل تقريري مجمَّد: الموضوع (`customer_payment` / `customer_refund` / `cost_reconciliation`) · `subject_date` (تاريخ السياسة: `received_at` / `refunded_at` / `period_end`) · `source_amount` + `source_scale` + `source_currency` · `fx_rate_id` (FK restrict، **المعرّف الصريح المستخدم**) · `fx_rate_date` · `rate_snapshot` · `direction` (`direct` = ضرب، `inverse` = قسمة، نفس الصف بلا reciprocal) · `target_amount` + `target_scale` + `target_currency` (تقريب واحد half-up) · `supersedes_id?` · `actor_ref`. لا يغيّر الموضوع.
+
+### `cost_invoice_allocations` (E3 additive)
+أعمدة جديدة: `source_amount`/`source_currency` (الحصة بعملة السطر؛ الـcap يُحسب عليها) و`fx_rate_id?`/`fx_rate_snapshot?`/`fx_direction?`/`fx_rate_date?` (NULL = NATIVE؛ قيد CHECK على PostgreSQL يربطها بعملة مختلفة). `amount` يبقى بعملة نطاق التسوية.
+
 ### `audit_logs`
 سجل تدقيق **append-only**.
 - `user_id?` → `users` (**nullOnDelete**)
