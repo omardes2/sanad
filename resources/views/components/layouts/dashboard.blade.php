@@ -19,6 +19,7 @@
         ['route' => 'dashboard.finance.payments', 'label' => 'المدفوعات', 'icon' => '💳', 'can' => 'finance.payments.manage'],
         ['route' => 'dashboard.finance.reconciliation', 'label' => 'تسوية التكلفة', 'icon' => '🧮', 'can' => 'finance.reconcile'],
         ['route' => 'dashboard.finance.fx', 'label' => 'أسعار الصرف', 'icon' => '💱', 'can' => 'finance.fx.manage'],
+        ['route' => 'dashboard.finance.close', 'label' => 'إقفال الفترة', 'icon' => '🔒', 'can' => 'finance.view'],
         ['route' => 'dashboard.ai.providers', 'label' => 'مزوّدو الذكاء', 'icon' => '🤖', 'can' => 'ai.providers.view'],
         ['route' => 'dashboard.ai.models', 'label' => 'النماذج', 'icon' => '🧠', 'can' => 'ai.models.manage'],
         ['route' => 'dashboard.ai.pricing', 'label' => 'الأسعار', 'icon' => '💵', 'can' => 'ai.pricing.view'],

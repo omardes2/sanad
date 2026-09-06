@@ -44,6 +44,11 @@ final class LedgerSnapshotter
 
         if ($component === CostComponent::Provider) {
             $query->where('provider', $counterpartyKey);
+        } else {
+            // Communication / external have no provider key: only rows that actually carry
+            // that component's cost are in scope, so AI-only ledger rows never move a
+            // communication / external snapshot.
+            $query->where($column, '<>', 0);
         }
 
         $row = $query->selectRaw(implode(', ', [
