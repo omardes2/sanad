@@ -35,6 +35,7 @@ php artisan sanad:make-admin --name="اسم المدير" --email="admin@example
 | `/dashboard/expenses` | المصروفات: المبلغ/الفئة/المتجر/التاريخ |
 | `/dashboard/whatsapp` | حالة تكامل واتساب (أدناه) |
 | `/dashboard/finance` (D2، `finance.view`) | المالية **المحسوبة**: Current MRR/ARR/ARPU لكل عملة (as-of now)، تكلفة معروفة/غير مسعَّرة/coverage لنافذة UTC، breakdowns، أعلى المشتركين (معرّف داخلي)، MRR Snapshot History (run-rate لا إيراد)، `Gross Margin: NOT AVAILABLE — Phase E`. تصدير CSV بـ`finance.export` على `/dashboard/finance/export` |
+| `/dashboard/finance/payments` (E1، `finance.payments.manage` = super_admin + finance) | صفحة إدارية دنيا: **Record Manual Payment** (created → succeeded، مفتاح idempotency مولَّد مع النموذج، رسوم فارغة = `FEES UNKNOWN`)، **Record Refund**، **Allocate Payment** (الفترة من حدث اشتراك للمشترك نفسه فقط)، **Allocate Refund**، وملخّص Cash Collected / Refunds / Net Cash / Fees / Allocated لكل عملة لنافذة UTC. كل إجراء يعيد فحص الصلاحية server-side. لا لوحة، لا رسوم بيانية، لا Revenue، لا Gross Profit (E5). |
 
 جميع القوائم مرقّمة الصفحات (pagination) وتعيد استخدام النماذج القائمة مباشرةً.
 

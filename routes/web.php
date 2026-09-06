@@ -18,6 +18,7 @@ use App\Livewire\Dashboard\AuditLogs;
 use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Finance;
+use App\Livewire\Dashboard\Finance\Payments as FinancePayments;
 use App\Livewire\Dashboard\Messages;
 use App\Livewire\Dashboard\Overview;
 use App\Livewire\Dashboard\Persona;
@@ -96,6 +97,8 @@ Route::middleware(['auth', 'admin'])
         // Phase D2 — calculated financials (finance.view) + CSV (finance.export).
         Route::get('/finance', Finance::class)->middleware('permission:finance.view')->name('dashboard.finance');
         Route::get('/finance/export', FinanceExportController::class)->middleware('permission:finance.export')->name('dashboard.finance.export');
+        // Phase E1 — manual payments / refunds / allocation (finance.payments.manage): every write re-authorizes server-side.
+        Route::get('/finance/payments', FinancePayments::class)->middleware('permission:finance.payments.manage')->name('dashboard.finance.payments');
     });
 
 // Local chat simulator — 404 outside local/testing (see EnsureDevEnvironment).

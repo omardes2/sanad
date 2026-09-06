@@ -61,19 +61,52 @@
 - `HistoryBaselineTest`: dry-run لا يكتب، `--apply` يلتقط بوقت الالتقاط (لا `started_at` القديم) من NULL بمصدر baseline، يترك الباقات ذات التاريخ، idempotent بلا audit ثانٍ، الاشتراكات اللاحقة تُلتقط وحدها، رفض `--date`/`--allow-backdate`.
 - `PostgresHistoryConcurrencyTest`: 6 تعديلات مالية متزامنة من نفس النسخة المفتوحة ⇒ واحد `versioned` و5 `stale`، النسخة القديمة تُغلق مرة واحدة، نسخة جديدة واحدة، audit واحد، بلا تداخل، والخاسر ينجح لاحقًا من النسخة الجديدة؛ 5 تشغيلات baseline متزامنة ⇒ baseline واحد لكل اشتراك، نسخة واحدة لكل باقة، audit واحد؛ 6 انتقالات إدارية متزامنة من نفس الـtoken ⇒ واحد `ok` و5 `stale`، حدث واحد، audit واحد، الإسقاطة = الفائز، والخاسر ينجح بعد refresh.
 - `SubscriptionHistoryTest` أيضًا: رفض token قديم (لا حالة/حدث/audit)، تغيّر الـtoken بعد كل انتقال حتى مع إسقاطة متطابقة، snapshot الفترة في `extend` (old/new period end) مع rollback بلا حدث، `event_type` صريح ومقيّد (enum + قيد CHECK على PostgreSQL).
-- `UsageLedgerMigrationTest`: حدّ rollback **15** (13 + 2).
+- `UsageLedgerMigrationTest`: حدّ rollback **15** (13 + 2) — أصبح **20** بعد E1.
 
 ### ترتيب النشر لـE0 (بعد الدمج وبموافقة صريحة)
 1. `php artisan migrate --force` (الجدولان).
 2. `php artisan sanad:finance:history-baseline` (dry-run) → مراجعة → `--apply` **بموافقة منفصلة**؛ هذا التشغيل هو بداية التاريخ المالي الرسمي.
 
-## 4) E1–E5 (مخطَّطة، لا تبدأ قبل الاعتماد)
+## 4) E1 — Customer Payments, Refunds & Allocation (منفَّذ)
 
-- **E1**: `customer_payments` + `customer_payment_events` + `customer_refunds` + `payment_allocations` + `refund_allocations`؛ عقد `PaymentGateway` + adapter `manual`؛ Cash Collected vs Allocated Collected Amount؛ قيود الاسترداد بقفل الصفوف؛ RBAC `finance.payments.manage`.
+### القرارات المعتمدة (19)
+UI إداري أدنى فقط (E5 للكامل) · `current_status`/`latest_event_id` projection يُحدَّث عبر الخدمة + `FOR UPDATE` والتاريخ الرسمي `customer_payment_events` · Cash Collected مبني على الأحداث (`received_at` لدفعة لها `succeeded`؛ الاستردادات بـ`refunded_at`؛ تغيّر الحالة لاحقًا لا يمحو التحصيل) · لا فترة يدوية: كل تخصيص يحمل `subscription_event_id` وsnapshot `period_start/end` من `to_period_*` · الاسترداد/التخصيص لدفعة نجحت فعليًا فقط · `refund_allocations` append-only ولا تعديل لـ`payment_allocations` · `Unallocated = Gross − allocations` و`Net Allocated = allocations − refund_allocations` بلا خلط · لا FX؛ عملة الرسوم = عملة الدفعة؛ `NULL` = `FEES UNKNOWN` · `idempotency_key` إلزامي فريد؛ `(gateway, gateway_payment_ref)` فريد عند وجوده ولا يُخترع · لا `PaymentGateway::recordManual()` — الخدمة `CustomerPaymentService::recordManual()` · لا نص حر (`reference/reason_code/evidence_ref` محدودة) + توسيع `SecretRedactor` (`pan, card_number, cvv, cvc, iban, account_number`؛ `card_brand` يبقى مقروءًا) · قواعد زمنية/عملة · معالجة السباقات 25P02-safe (savepoint) · لا overspend ولا clipping ضمني · جداول E1 immutable · RBAC `finance.payments.manage` = super_admin + finance · 5 migrations (الحدّ 20) · لا CyberSource/webhooks/فواتير/تسوية/FX/إقفال/Revenue Recognition/Gross Profit.
+
+### الجداول
+`customer_payments` · `customer_payment_events` (فهرس جزئي فريد: حدث `succeeded` **واحد** لكل دفعة على المحرّكين — لا double-counting) · `customer_refunds` · `payment_allocations` · `refund_allocations` — التفاصيل في [DATABASE.md](DATABASE.md). لا أعمدة نص حر (`external_note`…)، لا `method_hint`، لا PAN/CVV/IBAN/account number. خمسة migrations (`2026_09_06_000901…000905`)؛ حدّ rollback في `UsageLedgerMigrationTest` = **20**.
+
+### الخدمات (`App\Services\Payments`)
+- `CustomerPaymentService::recordManual(ManualPaymentInput)`: فحص الصلاحية server-side (`FinanceAuthorization`) → تطبيع القواعد (`MoneyRules`: amount > 0، ISO 4217، `received_at ≤ now` **بصرامة** (backdating لدفعة قديمة حقيقية مسموح؛ المستقبل لا)، عملة الرسوم = عملة الدفعة، رسوم بلا عملة أو العكس مرفوضة، مراجع = **رموز محدودة** بلا مسافات/`@`/سلسلة ≥13 رقمًا كي لا تحمل بريدًا أو PAN أو IBAN) → معاملة خارجية + **savepoint** للإدراج (الدفعة `created` → حدثا `created` و`succeeded` → projection `succeeded` + `latest_event_id` → audit `payment.recorded`). تعارض المفتاح الفريد يرجع الـsavepoint فقط ثم يُقرأ الصاحب ويُقارَن: نفس الحقائق ⇒ الصف نفسه؛ حقائق مختلفة أو نفس المرجع الخارجي بمفتاح آخر ⇒ `PaymentConflictException`. `transition(payment, to, expectedToken, source)`: قفل → `hash_equals(stateToken)` وإلا `StalePaymentStateException` → انتقال مسموح فقط (`created→succeeded|failed`, `succeeded→disputed`, `disputed→dispute_resolved`) → حدث → projection → audit `payment.transitioned` (لا UI له في E1).
+- `RefundService::record(RefundInput)`: قفل صف الدفعة → `assertSucceeded` = **شرطان**: تاريخي (حدث `succeeded` موجود — أساس Cash Collected الذي لا يمحوه نزاع لاحق) + تشغيلي (`current_status = succeeded` **الآن**؛ `disputed`/`dispute_resolved`/`failed` تحتفظ بتاريخها لكنها لا تقبل استردادًا أو تخصيصًا جديدًا حتى يعيدها lifecycle واضح) → `refunded_at ≥ received_at` → `Σ الاستردادات + المبلغ ≤ مبلغ الدفعة` بجمع صحيح بالسنتات → savepoint إدراج + audit `payment.refunded`؛ idempotent بنفس القاعدة.
+- `AllocationService::allocatePayment(paymentId, subscriptionEventId, amount)`: قفل الدفعة → `assertSucceeded` → الحدث موجود، لنفس المشترك، بفترة صالحة (`to_period_end > to_period_start`) → `Σ ≤ الدفعة` → إدراج مع snapshot الفترة + audit `payment.allocated`. `allocateRefund(refundId, allocationId, amount)`: قفل الدفعة → التخصيص يخص دفعة الاسترداد → نفس العملة → `Σ ≤ الاسترداد` و`Σ refund_allocations على التخصيص عبر **كل** الاستردادات ≤ التخصيص` → audit `refund.allocated`. طوابع `allocated_at/created_at` يولّدها الخادم (لا مدخل زمني للمستدعي).
+- `CashCollectedQuery::summarise(from, to)` (≤ 366 يومًا، لكل عملة، جمع صحيح بالسنتات داخل SQL على المحرّكين): `Gross Cash Collected`، `Refunds`، `Net Cash`، `Gateway Fees` المعروفة + عدد المجهولة (أي مجهول ⇒ `Net Cash After Gateway Fees = NULL`)، `Allocated Collected Amount` / `Refund Allocated Amount` / `Net Allocated Amount` (بحسب `period_start`)، `Unallocated Gross Collected Amount` محسوبة لكل دفعة.
+- الموديلات: `CustomerPayment` (يرفض تعديل الحقائق والحذف؛ `stateToken() = e:<latest_event_id>`)، `CustomerPaymentEvent` / `CustomerRefund` / `PaymentAllocation` / `RefundAllocation` بـ`ImmutableFinancialRecord` (أي update/delete يرمي `ImmutableFinancialRecordException`).
+- Probe للاختبار فقط: `sanad:payment-probe {record|refund|allocate|allocate-refund} …`.
+
+### RBAC والصفحة
+`finance.payments.manage` (super_admin + finance؛ operations/support = 403؛ legacy `is_admin` = 403). الصفحة `/dashboard/finance/payments` (`Livewire\Dashboard\Finance\Payments`): الأربع عمليات + ملخّص النقد للنافذة؛ mount وكل action يعيدان الفحص، والخدمات تفحص مرة ثالثة. لا PII (معرّفات داخلية فقط).
+
+### الاختبارات
+- `CustomerPaymentTest`: created→succeeded بحدثين وaudit واحد، idempotency (نفس الحقائق ⇒ نفس الصف بلا كتابة؛ مختلفة ⇒ conflict)، فرادة المرجع الخارجي، قواعد المال/الزمن/الرسوم/المراجع، `FEES UNKNOWN`، immutability، atomic audit rollback، transition بـtoken (stale مرفوض، انتقال غير مسموح مرفوض)، قيد CHECK على PostgreSQL.
+- `RefundTest`: جزئي حتى الحدّ ثم رفض كامل (لا clipping)، idempotency/conflict، رفض دفعة بلا `succeeded` أو `failed`، قواعد زمنية وسبب إلزامي، append-only + atomic.
+- `AllocationTest`: فترة من حدث حقيقي (`extend`) منسوخة، رفض حدث بلا فترة/مقلوب/صفر/لمشترك آخر/غير موجود/دفعة لم تنجح، توزيع على عدة أحداث حتى الحدّ، refund allocation بحدّي الاسترداد والتخصيص ونفس الدفعة، append-only + atomic.
+- `CashCollectedQueryTest`: الأرقام الكاملة لنافذة أغسطس (150/40/110، `FEES UNKNOWN`، 60/30/30، unallocated 70)، النزاع لا يمحو التحصيل، net-after-fees عند معرفة كل الرسوم بدقة السنت، نافذة فارغة/غير محدودة، parity على المحرّك الجاري.
+- `AttributionMetricsTest`: fixture 100 / 70 / 40 / 20 ⇒ Gross 100، Refunds 40، Net 60، Allocated 70، Refund Allocated 20، Net Allocated 50، Unallocated 30 (الاسترداد لا يغيّر Unallocated)؛ لا كلمة Revenue لأي قيمة.
+- `TemporalRulesTest` (ساعة مجمَّدة): `received_at ≤ now` بلا سماحية، backdating مسموح، `refunded_at ∈ [received_at, now]`، المبالغ الأربعة > 0، طوابع التخصيص من الخادم فقط.
+- `SensitiveFieldsTest`: لا أعمدة نص حر/بطاقات/بنوك/method_hint على الجداول الخمسة؛ `gateway_payment_ref` nullable وفريد مع `gateway`؛ `idempotency_key` إلزامي؛ المراجع ترفض البريد/PAN/IBAN/الجُمل وتحترم الحدود 64/32/191.
+- `PaymentsPageTest`: RBAC (route/nav/mount/action مع سحب الدور أثناء الجلسة)، تسجيل من النموذج + double submit idempotent + `FEES UNKNOWN` + لا PII + `NOT AVAILABLE`، أخطاء المجال كأخطاء نموذج بلا كتابة، refund/allocate/allocate-refund من الصفحة مع الملخّص.
+- `SecretRedactorTest`: مفاتيح البطاقات/البنوك تُقنَّع و`card_brand`/`reference`/`company` تبقى.
+- `PostgresPaymentConcurrencyTest` (عمليات حقيقية): 6 تسجيلات بنفس المفتاح ⇒ `created` واحد و5 `existing` لنفس الصف، حدثان، audit واحد، حقائق مختلفة ⇒ `conflict`؛ 6 استردادات × 30 على 100 ⇒ 3 `ok` و3 `rejected:refund_limit`، Σ = 90، كل صف 30.00؛ 6 تخصيصات × 30 ⇒ 3/3، Σ = 90؛ refund allocations مقيّدة بالاسترداد (2 من 6) وبالتخصيص (1 من 6) والتخصيص الأصلي لا يتغيّر. CI يشغّله مع حارس "لا skip".
+
+### ترتيب النشر لـE1 (بعد الدمج وبموافقة صريحة)
+`php artisan migrate --force` (الجداول الخمسة). لا أوامر أخرى؛ لا backfill.
+
+## 5) E2–E5 (مخطَّطة، لا تبدأ قبل الاعتماد)
+
 - **E2**: `provider_invoices` + `provider_invoice_events` + `provider_invoice_lines?`؛ `cost_reconciliations` لكل مكوّن (provider/communication/external) بمصدر وattestation للصفر؛ `cost_adjustments` append-only؛ RBAC `finance.reconcile`.
 - **E3**: `fx_rates` يدوية + إعداد `finance.reporting_currency`؛ `fx_rate_id` في كل تحويل؛ RBAC `finance.fx.manage`.
 - **E4**: `finance_period_closes` append-only بشروط الإقفال وإعادة الفتح بسجل جديد؛ مقاييس Cash Collected / Refunds / Gateway Fees / Net Cash After Gateway Fees / Reconciled Service Cost / Reconciled Cash Contribution؛ Gross Profit/Margin `NOT AVAILABLE`؛ RBAC `finance.close_period` (super_admin).
 - **E5**: صفحات Payments / Invoices & Reconciliation / FX / Period Close، CSV بعقد `section` + أعلام reconciled، RBAC النهائي.
 
-## 5) مؤجَّل لما بعد E
+## 6) مؤجَّل لما بعد E
 بوابة دفع حية وشحن فعلي، فوترة العملاء الصادرة، الضرائب، dunning، churn/cohorts/LTV، rollups مادية، تسجيل أحداث WhatsApp في الدفتر، جلب فواتير المزوّدين آليًا، سياسة Revenue Recognition.
