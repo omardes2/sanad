@@ -21,7 +21,8 @@ uses(RefreshDatabase::class);
 
 /**
  * Phase E5.2c — render = read-only, at the wire: the FX landing (pairs +
- * reporting currency + PREVIEW IMPACT), the rate list and scope detail, the
+ * reporting currency + PREVIEW IMPACT over its bounded window), the rate list
+ * in both its no-pair and pair-selected states, the scope detail, the
  * conversion list (LOAD SUBJECT) and scope detail, and the close page
  * (RUN PREFLIGHT, CHECK CURRENT DRIFT, every confirmation panel) issue NO
  * INSERT / UPDATE / DELETE / DDL on any table. Writes happen only after an
@@ -48,10 +49,14 @@ it('issues no write statement while rendering, filtering, paginating, previewing
     });
 
     $this->get(route('dashboard.finance.fx'))->assertOk();
-    Livewire::actingAs($finance)->test(Fx::class)->set('rcCode', 'ILS')->call('previewImpact')->call('openConfirm', 'currency')->call('openConfirm', 'pair')->call('closeConfirm')->assertOk();
+    Livewire::actingAs($finance)->test(Fx::class)->set('rcCode', 'ILS')->call('previewImpact')
+        ->set('impactFrom', '2026-01-01')->set('impactTo', '2026-09-06')->call('previewImpact')
+        ->call('openConfirm', 'currency')->call('openConfirm', 'pair')->call('closeConfirm')->assertOk();
 
+    $this->get(route('dashboard.finance.fx.rates', ['from' => '2026-08-01', 'to' => '2026-08-31']))->assertOk()->assertSee('Select a currency pair'); // the no-pair state
     $this->get(route('dashboard.finance.fx.rates', ['pair' => 'ILS:USD', 'from' => '2026-08-01', 'to' => '2026-08-31']))->assertOk();
-    Livewire::actingAs($finance)->test(FxRates::class, ['from' => '2026-08-01', 'to' => '2026-08-31'])->set('pair', 'ILS:USD')->call('gotoPage', 1)->call('openConfirm')->call('closeConfirm')->assertOk();
+    Livewire::actingAs($finance)->test(FxRates::class, ['from' => '2026-08-01', 'to' => '2026-08-31'])->assertSee('Select a currency pair')
+        ->set('pair', 'ILS:USD')->call('gotoPage', 1)->call('openConfirm')->call('closeConfirm')->set('pair', '')->assertOk();
     $this->get(route('dashboard.finance.fx.rates.show', $rateScope->id))->assertOk();
     Livewire::actingAs($finance)->test(FxRateScopeDetail::class, ['scope' => $rateScope])->call('openConfirm')->call('closeConfirm')->assertOk();
 

@@ -91,26 +91,40 @@ it('changes the reporting currency only with the rendered expected value and the
     $page->assertSet('rcExpected', 'ILS'); // the page re-renders on the new truth
 });
 
-it('previews the impact of a candidate currency on demand only: counts per subject type, read-only, nothing written', function () {
+it('previews the impact of a candidate currency on demand only: counts per subject type inside ONE bounded window, read-only, nothing written', function () {
     config(['billing.cost_currency' => 'USD']);
     $this->travelTo(CarbonImmutable::parse('2026-09-06 12:00:00', 'UTC'));
     $ils = e1Payment(billingSubscriber(), ['amount' => '365.00', 'currency' => 'ILS', 'receivedAt' => CarbonImmutable::parse('2026-08-10 09:00:00', 'UTC')]);
     e1Payment(billingSubscriber(), ['amount' => '20.00', 'currency' => 'USD', 'receivedAt' => CarbonImmutable::parse('2026-08-11 09:00:00', 'UTC')]);
+    $old = e1Payment(billingSubscriber(), ['amount' => '99.00', 'currency' => 'ILS', 'receivedAt' => CarbonImmutable::parse('2026-01-05 09:00:00', 'UTC')]); // outside the window
     fxPair('USD', 'ILS');
     $rate = fxRate();
     fxConvert('customer_payment', $ils->id, 'USD', $rate->id);
 
-    $page = Livewire::actingAs(userWithRole(Role::Finance))->test(Fx::class)->assertOk()->assertSet('impact', null)->assertDontSee('data-testid="currency-impact"', false);
+    $page = Livewire::actingAs(userWithRole(Role::Finance))->test(Fx::class)->assertOk()
+        ->assertSet('impact', null)->assertDontSee('data-testid="currency-impact"', false)
+        ->assertSet('impactFrom', '2026-06-09')->assertSet('impactTo', '2026-09-06'); // bounded by default
 
     $before = AuditLog::count();
     $page->set('rcCode', 'usd')->call('previewImpact');
     $impact = $page->get('impact');
 
     expect($impact['code'])->toBe('USD')->and($impact['current'])->toBe('USD')
+        ->and([$impact['from'], $impact['to']])->toBe(['2026-06-09', '2026-09-06'])
+        // the January payment is outside the window: 1 native + 1 converted, not 1 + 1 + 1
         ->and(collect($impact['rows'])->firstWhere('type', 'customer_payment'))->toEqual(['type' => 'customer_payment', 'native' => 1, 'converted' => 1, 'not_converted' => 0])
         ->and(collect($impact['rows'])->firstWhere('type', 'customer_refund'))->toEqual(['type' => 'customer_refund', 'native' => 0, 'converted' => 0, 'not_converted' => 0])
         ->and(AuditLog::count())->toBe($before)
         ->and(app(ReportingCurrencyService::class)->current())->toBe('USD');
 
-    $page->assertSee('customer_payment');
+    $page->assertSee('customer_payment')->assertSee('2026-06-09 → 2026-09-06');
+
+    // Widening the window brings the older subject in — as NOT CONVERTED, never as a converted or native row.
+    $page->set('impactFrom', '2026-01-01')->call('previewImpact');
+    expect(collect($page->get('impact')['rows'])->firstWhere('type', 'customer_payment'))->toEqual(['type' => 'customer_payment', 'native' => 1, 'converted' => 1, 'not_converted' => 1])
+        ->and($old->fresh()->currency)->toBe('ILS');
+
+    // The window is bounded: an oversized or unparsable one is refused and no preview is shown.
+    $page->set('impactFrom', '2020-01-01')->call('previewImpact')->assertHasErrors(['currency.validation'])->assertSet('impact', null);
+    $page->set('impactFrom', 'not-a-date')->call('previewImpact')->assertHasErrors(['currency.validation'])->assertSet('impact', null);
 });

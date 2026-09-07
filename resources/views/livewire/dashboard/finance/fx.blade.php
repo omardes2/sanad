@@ -81,6 +81,8 @@
                 <label class="text-sm">العملة الحالية المتوقعة (مرسلة كما عُرضت)<input type="text" wire:model="rcExpected" dir="ltr" readonly class="mt-1 w-full rounded-lg border-slate-300 bg-slate-50 text-sm" data-testid="currency-expected"></label>
                 <label class="text-sm">العملة الجديدة<input type="text" wire:model="rcCode" dir="ltr" maxlength="3" class="mt-1 w-full rounded-lg border-slate-300 text-sm" data-testid="currency-code"></label>
                 <label class="text-sm">رمز السبب (اختياري)<input type="text" wire:model="rcReason" dir="ltr" maxlength="32" class="mt-1 w-full rounded-lg border-slate-300 text-sm" data-testid="currency-reason"></label>
+                <label class="text-sm">نافذة المعاينة — من (UTC)<input type="date" wire:model="impactFrom" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm" data-testid="impact-from"></label>
+                <label class="text-sm">إلى (شامل)<input type="date" wire:model="impactTo" dir="ltr" class="mt-1 w-full rounded-lg border-slate-300 text-sm" data-testid="impact-to"></label>
                 <div class="md:col-span-2">
                     <button type="button" wire:click="previewImpact" class="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50" data-testid="currency-preview">PREVIEW IMPACT</button>
                     @if ($confirming !== 'currency')
@@ -90,7 +92,7 @@
 
                 @if ($impact)
                     <div class="md:col-span-2 overflow-x-auto rounded-xl border border-slate-200" data-testid="currency-impact">
-                        <p class="bg-slate-50 px-3 py-2 text-xs text-slate-600" dir="ltr">Informational preview of {{ $impact['code'] }} (current {{ $impact['current'] }}) computed at {{ $impact['at'] }} UTC — counts only, read-only, nothing recomputed. The services stay the authority.</p>
+                        <p class="bg-slate-50 px-3 py-2 text-xs text-slate-600" dir="ltr">Informational preview of {{ $impact['code'] }} (current {{ $impact['current'] }}) over policy dates {{ $impact['from'] }} → {{ $impact['to'] }} (UTC, inclusive), computed at {{ $impact['at'] }} UTC — counts only, read-only, nothing recomputed. The services stay the authority.</p>
                         <table class="min-w-full text-sm" dir="ltr">
                             <thead class="bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-2 text-left">Subject type</th><th class="px-3 py-2 text-right">NATIVE</th><th class="px-3 py-2 text-right">CONVERTED</th><th class="px-3 py-2 text-right">NOT CONVERTED</th></tr></thead>
                             <tbody>

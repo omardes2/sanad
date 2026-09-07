@@ -42,7 +42,7 @@ it('lets finance read the preflight but refuses close and reopen actions for fin
     $finance = userWithRole(Role::Finance);
 
     $page = Livewire::actingAs($finance)->test(PeriodClose::class)->set('month', '2026-08')->assertOk()
-        ->assertSee('data-testid="preflight-idle"', false)->assertDontSee('READY TO CLOSE') // nothing is evaluated on render
+        ->assertSee('PREFLIGHT: NOT RUN')->assertDontSee('READY TO CLOSE') // nothing is evaluated on render
         ->call('runPreflight')
         ->assertSee('READY TO CLOSE')->assertSee('131.000000')->assertSee('CONFIRMED_ZERO')
         ->set('closeTyped', 'CLOSE 2026-08');
@@ -150,4 +150,35 @@ it('reopen from the page carries its attempt key as the service idempotency key:
         ->call('reopen')->assertHasErrors(['reopen.stale'])->assertSet('expectedCloseId', (string) $reopen->id);
 
     expect(FinancePeriodClose::query()->where('status', 'reopened')->count())->toBe(1);
+});
+
+it('blocker deep links are permission-aware: the blocker itself always shows, the corrective link only to a user who may open that page (never a CTA to a 403)', function () {
+    $fx = closableMonth();
+    // Two live blockers with different resolvers: an unconverted payment (FX) and an unknown fee (payments).
+    e1Payment($fx['subscriber'], ['amount' => '73.00', 'currency' => 'ILS', 'receivedAt' => CarbonImmutable::parse('2026-08-20 09:00:00', 'UTC')]);
+
+    $payments = route('dashboard.finance.payments');
+    $conversions = route('dashboard.finance.fx.conversions');
+
+    // A super_admin holds every resolving permission: both blockers carry their link.
+    $full = Livewire::actingAs(userWithRole(Role::SuperAdmin))->test(PeriodClose::class)->set('month', '2026-08')->call('runPreflight')
+        ->assertSee('FEES_INCOMPLETE')->assertSee('FX_INCOMPLETE_CASH')
+        ->assertSee($payments)->assertSee($conversions);
+    expect($full->html())->toContain('data-banner-link=');
+
+    // Strip the two resolving permissions from the finance role: the blockers stay, the links disappear.
+    $viewer = userWithRole(Role::Finance);
+    $role = Spatie\Permission\Models\Role::findByName(Role::Finance->value);
+    foreach (['finance.payments.manage', 'finance.fx.manage'] as $permission) {
+        $role->revokePermissionTo($permission);
+    }
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+    $limited = Livewire::actingAs($viewer->fresh())->test(PeriodClose::class)->set('month', '2026-08')->call('runPreflight')
+        ->assertSee('FEES_INCOMPLETE')->assertSee('FX_INCOMPLETE_CASH')   // the blocker is never hidden
+        ->assertDontSee($payments)->assertDontSee($conversions);          // …but no link the user cannot follow
+
+    expect($limited->html())->not->toContain('data-banner-link=');
+    $this->actingAs($viewer->fresh())->get($payments)->assertForbidden(); // the link would indeed have 403'd
+    $this->actingAs($viewer->fresh())->get($conversions)->assertForbidden();
 });

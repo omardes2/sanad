@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Livewire\Dashboard\Finance\Fx;
 use App\Models\FxConversionScope;
 use App\Models\FxRateScope;
 use App\Support\Rbac\Role;
@@ -9,6 +10,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
@@ -84,6 +86,29 @@ it('rate list and conversion list: the same number of queries with 3 rows and wi
     $largeConversions = e3Queries(fn () => $this->get($conversions)->assertOk());
 
     expect($largeRates)->toBe($smallRates)->and($largeConversions)->toBe($smallConversions);
+});
+
+it('impact preview: aggregates only — the same number of queries with 2 subjects and with 60, and no row or id list is ever materialised', function () {
+    config(['billing.cost_currency' => 'USD']);
+    $subscriber = billingSubscriber();
+    $ils = e1Payment($subscriber, ['amount' => '365.00', 'currency' => 'ILS', 'receivedAt' => CarbonImmutable::parse('2026-08-10 09:00:00', 'UTC')]);
+    e1Payment($subscriber, ['amount' => '20.00', 'currency' => 'USD', 'receivedAt' => CarbonImmutable::parse('2026-08-11 09:00:00', 'UTC')]);
+    fxPair('USD', 'ILS');
+    fxConvert('customer_payment', $ils->id, 'USD', fxRate()->id);
+
+    $page = Livewire::actingAs(userWithRole(Role::Finance))->test(Fx::class)->set('rcCode', 'USD');
+    $page->call('previewImpact'); // warm up
+    $small = e3Queries(fn () => $page->call('previewImpact'));
+
+    for ($i = 0; $i < 58; $i++) {
+        e1Payment($subscriber, ['amount' => '1.00', 'currency' => $i % 2 === 0 ? 'ILS' : 'USD', 'receivedAt' => CarbonImmutable::parse('2026-08-12 09:00:00', 'UTC')->addMinutes($i)]);
+    }
+
+    $large = e3Queries(fn () => $page->call('previewImpact'));
+    $rows = collect($page->get('impact')['rows'])->firstWhere('type', 'customer_payment');
+
+    expect($large)->toBe($small)
+        ->and($rows)->toEqual(['type' => 'customer_payment', 'native' => 30, 'converted' => 1, 'not_converted' => 29]);
 });
 
 it('rate scope detail and conversion scope detail: the same number of queries with 1 revision and with 12 revisions (history and frozen conversions in one query each)', function () {

@@ -32,6 +32,7 @@
 
         @if (! $preview)
             <p class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600" data-testid="preflight-idle">
+                <strong dir="ltr">PREFLIGHT: NOT RUN</strong> —
                 لا يُشغَّل الـpreflight عند فتح الصفحة. اضغط <span dir="ltr">RUN PREFLIGHT</span> لتقييم <span dir="ltr">{{ $month }}</span> الآن. النتيجة معاينة إعلامية للحظتها فقط؛ الخدمة تعيد التقييم بنفسها عند الإقفال وهي المرجع الوحيد.
             </p>
         @else
