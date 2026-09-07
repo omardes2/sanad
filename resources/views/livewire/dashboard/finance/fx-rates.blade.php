@@ -2,7 +2,7 @@
     <header class="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
             <h1 class="text-2xl font-bold text-slate-800">أسعار الصرف اليدوية (FX Rates)</h1>
-            <p class="mt-1 text-sm text-slate-500">سعر واحد لكل (زوج، تاريخ) بالاتجاه الرسمي، وكل تصحيح مراجعة جديدة تُلحق ولا تُعدَّل. لا يوجد «أحدث سعر» ولا «أقرب سعر»: التحويل يسمّي مراجعته صراحةً. التوقيت <span dir="ltr">UTC</span>.</p>
+            <p class="mt-1 text-sm text-slate-500">سعر واحد لكل (زوج، تاريخ) بالاتجاه الرسمي، وكل تصحيح مراجعة جديدة تُلحق ولا تُعدَّل. لا يوجد «أحدث سعر» ولا «أقرب سعر»: التحويل يسمّي مراجعته صراحةً. تُقرأ القائمة عبر زوج واحد فقط (اختر الزوج أولًا). التوقيت <span dir="ltr">UTC</span>.</p>
         </div>
         <nav class="flex flex-wrap gap-2">
             <a href="{{ route('dashboard.finance.fx') }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50" data-testid="link-fx">الأزواج وعملة التقرير</a>
@@ -32,35 +32,42 @@
         @endif
     </section>
 
-    {{-- ─── Quote scopes (one row per pair+date) ─────────────────────────── --}}
+    {{-- ─── Quote scopes (one row per pair+date) — a pair is required ────── --}}
     <section class="mb-8" data-testid="section-rates">
-        <h2 class="text-base font-bold text-slate-800">النطاقات — {{ $scopes->total() }} rows · page {{ $scopes->currentPage() }} of {{ max(1, $scopes->lastPage()) }}</h2>
-        <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-            <table class="min-w-full text-sm" dir="ltr">
-                <thead class="bg-slate-50 text-xs text-slate-500"><tr>
-                    <th class="px-3 py-2 text-left">Scope</th><th class="px-3 py-2 text-left">Pair (official)</th><th class="px-3 py-2 text-left">Rate date (UTC)</th><th class="px-3 py-2 text-left">Current revision</th><th class="px-3 py-2 text-right">Rate</th><th class="px-3 py-2 text-right">Revisions</th><th class="px-3 py-2 text-left">Evidence</th><th class="px-3 py-2 text-left">Detail</th>
-                </tr></thead>
-                <tbody>
-                @forelse ($scopes as $scope)
-                    @php($rate = $scope->current_rate_id ? ($current[$scope->current_rate_id] ?? null) : null)
-                    @php($pair = $pairsById[$scope->fx_pair_id] ?? null)
-                    <tr class="border-t border-slate-100" data-testid="scope-{{ $scope->id }}">
-                        <td class="px-3 py-2">{{ $scope->id }}</td>
-                        <td class="px-3 py-2">{{ $pair?->pair_key ?? '—' }}@if ($pair) <span class="text-xs text-slate-500">1 {{ $pair->base_currency }} = rate × {{ $pair->quote_currency }}</span>@endif</td>
-                        <td class="px-3 py-2">{{ $scope->rate_date->format('Y-m-d') }}</td>
-                        <td class="px-3 py-2">{{ $scope->current_rate_id ? '#'.$scope->current_rate_id : 'NO QUOTE' }}</td>
-                        <td class="px-3 py-2 text-right">{{ $rate?->rate ?? '—' }}</td>
-                        <td class="px-3 py-2 text-right">{{ $revisions[$scope->id]->revisions ?? 0 }}</td>
-                        <td class="px-3 py-2 text-xs">{{ $rate?->evidence_ref ?? '—' }}</td>
-                        <td class="px-3 py-2"><a class="text-emerald-700 hover:underline" href="{{ route('dashboard.finance.fx.rates.show', $scope->id) }}">detail</a></td>
-                    </tr>
-                @empty
-                    <tr><td colspan="8" class="px-3 py-3 text-center text-slate-500">لا أسعار في النافذة.</td></tr>
-                @endforelse
-                </tbody>
-            </table>
-        </div>
-        <div class="mt-2">{{ $scopes->links() }}</div>
+        @if ($scopes === null)
+            <div class="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-600" data-testid="rates-select-pair">
+                <p class="font-semibold text-slate-800" dir="ltr">Select a currency pair</p>
+                <p class="mt-1">تُقرأ الأسعار عبر زوج واحد فقط: اختر الزوج أعلاه لعرض تواريخه المسعَّرة. بلا زوج لا يُستعلم عن أي سعر ولا تُرقَّم أي صفحة.</p>
+            </div>
+        @else
+            <h2 class="text-base font-bold text-slate-800">النطاقات — <span dir="ltr">{{ $pairKey }}</span> · {{ $scopes->total() }} rows · page {{ $scopes->currentPage() }} of {{ max(1, $scopes->lastPage()) }}</h2>
+            <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                <table class="min-w-full text-sm" dir="ltr">
+                    <thead class="bg-slate-50 text-xs text-slate-500"><tr>
+                        <th class="px-3 py-2 text-left">Scope</th><th class="px-3 py-2 text-left">Pair (official)</th><th class="px-3 py-2 text-left">Rate date (UTC)</th><th class="px-3 py-2 text-left">Current revision</th><th class="px-3 py-2 text-right">Rate</th><th class="px-3 py-2 text-right">Revisions</th><th class="px-3 py-2 text-left">Evidence</th><th class="px-3 py-2 text-left">Detail</th>
+                    </tr></thead>
+                    <tbody>
+                    @forelse ($scopes as $scope)
+                        @php($rate = $scope->current_rate_id ? ($current[$scope->current_rate_id] ?? null) : null)
+                        @php($pair = $pairsById[$scope->fx_pair_id] ?? null)
+                        <tr class="border-t border-slate-100" data-testid="scope-{{ $scope->id }}">
+                            <td class="px-3 py-2">{{ $scope->id }}</td>
+                            <td class="px-3 py-2">{{ $pair?->pair_key ?? '—' }}@if ($pair) <span class="text-xs text-slate-500">1 {{ $pair->base_currency }} = rate × {{ $pair->quote_currency }}</span>@endif</td>
+                            <td class="px-3 py-2">{{ $scope->rate_date->format('Y-m-d') }}</td>
+                            <td class="px-3 py-2">{{ $scope->current_rate_id ? '#'.$scope->current_rate_id : 'NO QUOTE' }}</td>
+                            <td class="px-3 py-2 text-right">{{ $rate?->rate ?? '—' }}</td>
+                            <td class="px-3 py-2 text-right">{{ $revisions[$scope->id]->revisions ?? 0 }}</td>
+                            <td class="px-3 py-2 text-xs">{{ $rate?->evidence_ref ?? '—' }}</td>
+                            <td class="px-3 py-2"><a class="text-emerald-700 hover:underline" href="{{ route('dashboard.finance.fx.rates.show', $scope->id) }}">detail</a></td>
+                        </tr>
+                    @empty
+                        <tr><td colspan="8" class="px-3 py-3 text-center text-slate-500">لا أسعار لهذا الزوج في النافذة.</td></tr>
+                    @endforelse
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-2">{{ $scopes->links() }}</div>
+        @endif
     </section>
 
     {{-- ─── Record a first quote for a date ──────────────────────────────── --}}

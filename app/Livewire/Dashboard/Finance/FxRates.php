@@ -23,6 +23,11 @@ use Livewire\WithPagination;
 /**
  * Manual quotes (Phase E3 → E5.2c operational UI) under `finance.fx.manage`.
  *
+ * The quote tables are read THROUGH A PAIR ONLY: with no pair selected the page
+ * asks for nothing — no listing, no count, no pagination — and says so. That
+ * keeps every read on fx_rate_scopes_pair_date_unique instead of a global
+ * rate_date order the schema has no index for.
+ *
  * The list is ONE row per (pair, date) scope with its CURRENT revision — the
  * revision history and every correction live on the scope detail page, where
  * the expected pointer is rendered. A quote is for its date: this page never
@@ -142,26 +147,25 @@ class FxRates extends Component
         $pairs = FxPair::query()->orderBy('pair_key')->get();
         $pairKey = $this->pairFilter($pairs);
 
-        // Newest quoted date first, id as the tiebreaker: with a pair chosen this exact order is served by
-        // fx_rate_scopes_pair_date_unique (fx_pair_id, rate_date), so the page reads ~25 index rows instead of
-        // walking the table backwards by id and discarding everything outside the window.
-        $query = FxRateScope::query()->orderByDesc('rate_date')->orderByDesc('id');
+        // NO PAIR ⇒ NO RATES QUERY AT ALL: not a listing, not a count, not a paginator. The quote tables are only
+        // ever read through one pair, where the page's order (rate_date desc, id desc) IS the order of
+        // fx_rate_scopes_pair_date_unique (fx_pair_id, rate_date) — so a page is ~25 index rows and the table is
+        // never scanned for a global rate_date order.
+        $scopes = null;
+        $current = collect();
+        $revisions = collect();
 
-        if ($window === null) {
-            $query->whereRaw('1 = 0'); // an invalid window lists nothing — never "everything"
-        } else {
-            $query->where('rate_date', '>=', $window[0]->format('Y-m-d'))->where('rate_date', '<=', $window[1]->format('Y-m-d'));
+        if ($pairKey !== null && $window !== null) {
+            $scopes = FxRateScope::query()
+                ->where('fx_pair_id', $pairs->firstWhere('pair_key', $pairKey)->id)
+                ->where('rate_date', '>=', $window[0]->format('Y-m-d'))->where('rate_date', '<=', $window[1]->format('Y-m-d'))
+                ->orderByDesc('rate_date')->orderByDesc('id')
+                ->paginate(self::PER_PAGE);
+
+            // Two grouped lookups for the whole page — never one query per row.
+            $current = FxRate::query()->whereIn('id', $scopes->pluck('current_rate_id')->filter()->all())->get()->keyBy('id');
+            $revisions = FxRate::query()->selectRaw('scope_id, COUNT(*) AS revisions')->whereIn('scope_id', $scopes->pluck('id')->all())->groupBy('scope_id')->get()->keyBy('scope_id');
         }
-
-        if ($pairKey !== null) {
-            $query->where('fx_pair_id', $pairs->firstWhere('pair_key', $pairKey)->id); // served by fx_rate_scopes_pair_date_unique
-        }
-
-        $scopes = $query->paginate(self::PER_PAGE);
-
-        // Two grouped lookups for the whole page — never one query per row.
-        $current = FxRate::query()->whereIn('id', $scopes->pluck('current_rate_id')->filter()->all())->get()->keyBy('id');
-        $revisions = FxRate::query()->selectRaw('scope_id, COUNT(*) AS revisions')->whereIn('scope_id', $scopes->pluck('id')->all())->groupBy('scope_id')->get()->keyBy('scope_id');
 
         return view('livewire.dashboard.finance.fx-rates', [
             'scopes' => $scopes,

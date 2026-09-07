@@ -10,7 +10,9 @@ use App\Models\FxRateScope;
 use App\Models\User;
 use App\Support\Rbac\Role;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -46,21 +48,46 @@ it('is reachable only with finance.fx.manage (list and detail), guests redirecte
     }
 });
 
-it('lists one row per (pair, date) scope with its current revision, filtered by pair and a bounded UTC window', function () {
+it('reads the quote list THROUGH A PAIR ONLY: with no pair it says so and issues not one query against the rate tables', function () {
     fxRate(); // USD/ILS 2026-08-10
     fxRate(['rateDate' => '2026-08-11', 'rate' => '3.700000000000']);
     fxRate(['baseCurrency' => 'EUR', 'quoteCurrency' => 'USD', 'rateDate' => '2026-08-10', 'rate' => '1.100000000000']);
 
-    $page = Livewire::actingAs(userWithRole(Role::Finance))->test(FxRates::class, ['from' => '2026-08-01', 'to' => '2026-08-31'])->assertOk();
-    $page->assertSee('ILS:USD')->assertSee('EUR:USD')->assertSee('3.650000000000')->assertSee('1.100000000000');
+    $rateQueries = [];
+    DB::listen(function (QueryExecuted $q) use (&$rateQueries): void {
+        if (str_contains($q->sql, 'fx_rate_scopes') || str_contains($q->sql, 'fx_rates')) {
+            $rateQueries[] = $q->sql;
+        }
+    });
+
+    // No pair: the empty state, no listing, no count, no paginator — and no read of the quote tables at all.
+    $page = Livewire::actingAs(userWithRole(Role::Finance))->test(FxRates::class, ['from' => '2026-08-01', 'to' => '2026-08-31'])->assertOk()
+        ->assertSee('Select a currency pair')
+        ->assertDontSee('3.650000000000')->assertDontSee('1.100000000000')->assertDontSee('rows · page');
+
+    expect($rateQueries)->toBe([]);
+
+    // The same holds for the plain HTTP render and for clearing the pair again.
+    $this->actingAs(userWithRole(Role::Finance))->get(route('dashboard.finance.fx.rates', ['from' => '2026-08-01', 'to' => '2026-08-31']))->assertOk()->assertSee('Select a currency pair');
+    expect($rateQueries)->toBe([]);
+
+    // A pair: its dates only, newest first, through the (fx_pair_id, rate_date) index order.
+    $page->set('pair', 'ILS:USD')->assertSee('3.650000000000')->assertSee('3.700000000000')->assertDontSee('1.100000000000')->assertSee('2 rows');
+    expect($rateQueries)->not->toBe([]);
 
     $page->set('pair', 'EUR:USD')->assertSee('1.100000000000')->assertDontSee('3.650000000000');
-    $page->set('pair', '')->set('from', '2026-08-11')->assertSee('3.700000000000')->assertDontSee('1.100000000000');
+    $page->set('pair', '')->assertSee('Select a currency pair')->assertDontSee('1.100000000000'); // back to no query
+});
 
-    // An unparsable window lists nothing — never everything.
-    $page->set('from', 'not-a-date')->assertSee('صيغة التاريخ غير صالحة')->assertDontSee('3.700000000000');
-    // A window wider than the cap is refused with the same "nothing listed" rule.
-    $page->set('from', '2020-01-01')->set('to', '2026-08-31')->assertSee('النافذة الأقصى');
+it('bounds the window of the selected pair and lists nothing on an invalid one', function () {
+    fxRate();
+    fxRate(['rateDate' => '2026-08-11', 'rate' => '3.700000000000']);
+
+    $page = Livewire::actingAs(userWithRole(Role::Finance))->test(FxRates::class, ['from' => '2026-08-01', 'to' => '2026-08-31'])->set('pair', 'ILS:USD')->assertOk();
+
+    $page->set('from', '2026-08-11')->assertSee('3.700000000000')->assertDontSee('3.650000000000');
+    $page->set('from', 'not-a-date')->assertSee('صيغة التاريخ غير صالحة')->assertDontSee('3.700000000000'); // an unparsable window lists nothing
+    $page->set('from', '2020-01-01')->set('to', '2026-08-31')->assertSee('النافذة الأقصى')->assertDontSee('3.700000000000');
 });
 
 it('records the first quote for a date and refuses a date that already has one as STATE CHANGED, writing nothing', function () {

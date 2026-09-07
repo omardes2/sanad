@@ -6,6 +6,7 @@ use App\Models\FxConversionScope;
 use App\Models\FxRateScope;
 use App\Support\Rbac\Role;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 
@@ -67,14 +68,14 @@ it('FX landing: the same number of queries with 1 pair and with 25 pairs (groupe
 it('rate list and conversion list: the same number of queries with 3 rows and with 40 rows (paginated, current revisions and counts keyed per page)', function () {
     $fx = closableMonth();
     $this->actingAs(userWithRole(Role::Finance));
-    $rates = route('dashboard.finance.fx.rates', ['from' => '2026-01-01', 'to' => '2026-09-06']);
+    $rates = route('dashboard.finance.fx.rates', ['pair' => 'ILS:USD', 'from' => '2026-01-01', 'to' => '2026-09-06']);
     $conversions = route('dashboard.finance.fx.conversions');
     $this->get($rates)->assertOk();
     $this->get($conversions)->assertOk();
     $smallRates = e3Queries(fn () => $this->get($rates)->assertOk());
     $smallConversions = e3Queries(fn () => $this->get($conversions)->assertOk());
 
-    seedQuotes('QAA', 'QBB', 40, '2026-02-01');
+    seedQuotes('USD', 'ILS', 40, '2026-02-01'); // 40 more dates on the SAME pair the list is filtered by
     for ($i = 0; $i < 40; $i++) {
         DB::table('fx_conversion_scopes')->insert(['subject_type' => 'customer_payment', 'subject_id' => 900 + $i, 'purpose' => 'reporting', 'target_currency' => 'USD', 'current_conversion_id' => null, 'version' => 0, 'created_at' => now(), 'updated_at' => now()]);
     }
@@ -149,7 +150,7 @@ function seedFxVolume(): void
     DB::statement('ANALYZE fx_rates');
 }
 
-it('PostgreSQL EXPLAIN at 6,000 rows: the pair-filtered quote window uses fx_rate_scopes_pair_date_unique, the conversion list and the revision history stay on their indexes, and the window-only quote list is bounded by the page (measured, no index migration)', function () {
+it('PostgreSQL EXPLAIN at 6,000 rows: the pair-filtered quote window uses fx_rate_scopes_pair_date_unique, the conversion list and the revision history stay on their indexes, and the page can issue no pair-less rates query at all (0 migrations)', function () {
     if (DB::connection()->getDriverName() !== 'pgsql') {
         $this->markTestSkipped('EXPLAIN check runs on PostgreSQL only.');
     }
@@ -174,13 +175,30 @@ it('PostgreSQL EXPLAIN at 6,000 rows: the pair-filtered quote window uses fx_rat
     $scopeId = DB::table('fx_rate_scopes')->where('fx_pair_id', $pairId)->orderByDesc('id')->value('id');
     expect($plan('SELECT * FROM fx_rates WHERE scope_id = ? ORDER BY id DESC', [$scopeId]))->toContain('fx_rates_scope_idx');
 
-    // 4) The window-only quote list (no pair chosen) has no index for a global rate_date order: it is a scan of the
-    //    table with a top-N sort of the window, and its cost is the SAME wherever the window sits (no walking back
-    //    over newer ids). Measured here as a recorded fact — closing it would need an index on
-    //    fx_rate_scopes (rate_date, id), which is NOT added without approval.
-    $recent = $plan('SELECT * FROM fx_rate_scopes WHERE rate_date >= ? AND rate_date <= ? ORDER BY rate_date DESC, id DESC LIMIT 25', ['2026-01-01', '2026-04-01']);
-    $old = $plan('SELECT * FROM fx_rate_scopes WHERE rate_date >= ? AND rate_date <= ? ORDER BY rate_date DESC, id DESC LIMIT 25', ['2023-01-01', '2023-04-01']);
+    // 4) End to end at this volume: the page NEVER issues a pair-less rates query — with no pair it reads the quote
+    //    tables not at all, and with a pair every statement it issues carries fx_pair_id (so it can only ever take
+    //    the plan proven in (1)). This is what keeps the schema at 0 migrations: there is no global rate_date order
+    //    to serve.
+    $captured = [];
+    DB::listen(function (QueryExecuted $q) use (&$captured): void {
+        if (str_contains($q->sql, 'fx_rate_scopes') || str_contains($q->sql, 'fx_rates')) {
+            $captured[] = $q->sql;
+        }
+    });
 
-    expect($recent)->toContain('top-N heapsort')->and($old)->toContain('top-N heapsort')
-        ->and($removed($old))->toBe($removed($recent)); // identical work for an old and a recent window
+    $this->actingAs(userWithRole(Role::Finance));
+    $this->get(route('dashboard.finance.fx.rates', ['from' => '2023-01-01', 'to' => '2023-04-01']))->assertOk()->assertSee('Select a currency pair');
+    expect($captured)->toBe([]);
+
+    $pairKey = DB::table('fx_pairs')->where('id', $pairId)->value('pair_key');
+    $this->get(route('dashboard.finance.fx.rates', ['pair' => $pairKey, 'from' => '2023-01-01', 'to' => '2023-04-01']))->assertOk();
+
+    expect($captured)->not->toBe([]);
+    foreach ($captured as $sql) {
+        if (str_contains($sql, 'fx_rate_scopes')) {
+            expect($sql)->toContain('fx_pair_id'); // the listing and its count are always pair-scoped
+        } else {
+            expect($sql)->toContain(' in ('); // the two follow-ups are keyed by the ids of that one page
+        }
+    }
 });
