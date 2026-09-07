@@ -14,6 +14,7 @@ use App\Models\ToolConsent;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
 use App\Support\Audit\AuditActions;
+use App\Support\Tools\EvidenceRef;
 use App\Support\Tools\ToolAuthorization;
 use App\Support\Tools\ToolRules;
 use Carbon\CarbonImmutable;
@@ -28,9 +29,13 @@ use Illuminate\Support\Facades\DB;
  * GRANTED with version 0. Consent is never implied by a role, a plan, a
  * previous message or another capability.
  *
- * Writing — `grant()` / `revoke()`: authorization first (the subscriber
- * themself or an operator holding the capability's allowlisted permission),
- * then ONE transaction that
+ * Writing — `grant()` / `revoke()`: authorization first, and the two are NOT
+ * the same decision. A GRANT is accepted only from the authenticated
+ * subscriber themself — no operator, no console, no job, no provider may
+ * create consent on their behalf. A REVOKE is accepted from the subscriber,
+ * from an operator holding the capability's allowlisted permission, or from a
+ * console run that declared itself a named administrator: staff may reduce
+ * authority, never create it. Then ONE transaction that
  *   - locks the row `FOR UPDATE` (the concurrency point),
  *   - refuses a caller whose `expectedVersion` is not the current one (stale:
  *     nothing written, no audit),
@@ -70,27 +75,30 @@ final class ToolConsentService
     /**
      * @throws StaleToolConsentException|ToolRuleException
      */
-    public function grant(int $subscriberId, ToolCapability $capability, int $expectedVersion, ToolConsentReason $reason, ?string $evidenceRef = null): ToolConsent
+    public function grant(int $subscriberId, ToolCapability $capability, int $expectedVersion, ToolConsentReason $reason, ?EvidenceRef $evidence = null): ToolConsent
     {
-        return $this->mutate($subscriberId, $capability, ToolConsentStatus::Granted, $expectedVersion, $reason, $evidenceRef);
+        ToolAuthorization::assertMayGrantConsent($subscriberId, $capability);
+
+        return $this->mutate($subscriberId, $capability, ToolConsentStatus::Granted, $expectedVersion, $reason, $evidence);
     }
 
     /**
      * @throws StaleToolConsentException|ToolRuleException
      */
-    public function revoke(int $subscriberId, ToolCapability $capability, int $expectedVersion, ToolConsentReason $reason, ?string $evidenceRef = null): ToolConsent
+    public function revoke(int $subscriberId, ToolCapability $capability, int $expectedVersion, ToolConsentReason $reason, ?EvidenceRef $evidence = null): ToolConsent
     {
-        return $this->mutate($subscriberId, $capability, ToolConsentStatus::Revoked, $expectedVersion, $reason, $evidenceRef);
+        ToolAuthorization::assertMayRevokeConsent($subscriberId, $capability);
+
+        return $this->mutate($subscriberId, $capability, ToolConsentStatus::Revoked, $expectedVersion, $reason, $evidence);
     }
 
     // ------------------------------------------------------------------
 
-    private function mutate(int $subscriberId, ToolCapability $capability, ToolConsentStatus $target, int $expectedVersion, ToolConsentReason $reason, ?string $evidenceRef): ToolConsent
+    private function mutate(int $subscriberId, ToolCapability $capability, ToolConsentStatus $target, int $expectedVersion, ToolConsentReason $reason, ?EvidenceRef $evidenceRef): ToolConsent
     {
-        ToolAuthorization::assertMayManageConsent($subscriberId, $capability);
         $subscriberId = ToolRules::subscriberId($subscriberId);
         $expectedVersion = ToolRules::expectedVersion($expectedVersion);
-        $evidence = ToolRules::evidenceRef($evidenceRef);
+        $evidence = $evidenceRef?->value(); // an opaque machine reference or nothing at all
 
         if (! User::query()->whereKey($subscriberId)->exists()) {
             throw ToolRuleException::of('subscriber', 'المشترك غير موجود.');
@@ -174,8 +182,9 @@ final class ToolConsentService
 
     /**
      * One audit entry per mutation, inside the same transaction. Bounded facts
-     * only: ids, the capability, the statuses, the version and a closed reason
-     * code — never a name, an email, a phone number or free text.
+     * only: ids, the capability, the statuses, the version, a closed reason
+     * code, an opaque evidence reference and the named acting principal —
+     * never a name, an email, a phone number or free text.
      */
     private function record(ToolConsent $row, string $from, ToolConsentStatus $target, int $fromVersion): void
     {
@@ -188,6 +197,9 @@ final class ToolConsentService
                 'capability' => $row->capability->value,
                 'reason_code' => $row->reason_code->value,
                 'evidence_ref' => $row->evidence_ref,
+                // The acting principal, spelled out: `user:<id>` or a NAMED console
+                // administrator (`console_admin:<ref>`) — never an anonymous console.
+                'actor_ref' => $row->updated_by_ref,
             ], static fn ($v) => $v !== null),
         );
     }

@@ -20,7 +20,9 @@ use Symfony\Component\Process\Process;
  *    version moves once;
  *  - a mixed race of grants and revokes from the same version ⇒ ONE of them
  *    wins, the projection is exactly one row at version+1 with a coherent
- *    status, and the audit count matches the number of writes.
+ *    status, and the audit count matches the number of writes;
+ *  - 6 concurrent CONSOLE grant attempts ⇒ none of them creates consent, while
+ *    a console revocation is accepted and recorded as a named administrator.
  */
 beforeEach(function () {
     if (DB::connection()->getDriverName() !== 'pgsql') {
@@ -148,6 +150,41 @@ it('a mixed grant-vs-revoke race from the same version leaves ONE deterministic 
         $state = consentRun(['state', (string) $user->id, ToolCapability::RemindersWrite->value]);
         $state->wait();
         expect(trim($state->getOutput()))->toBe('revoked:2');
+    } finally {
+        consentCleanup($user);
+    }
+});
+
+it('no console process can create consent, however many try at once — while a named console administrator may revoke', function () {
+    $user = User::factory()->create(['is_admin' => false]);
+
+    try {
+        // Six console runs inside the administrator scope, all attempting a grant.
+        $processes = [];
+        for ($i = 0; $i < 6; $i++) {
+            $processes[] = consentRun(['refused-grant', (string) $user->id, ToolCapability::TasksWrite->value]);
+        }
+
+        expect(array_unique(consentOutcomes($processes)))->toBe(['forbidden'])
+            ->and(ToolConsent::query()->where('subscriber_id', $user->id)->count())->toBe(0)
+            ->and(AuditLog::query()->where('subject_type', (new ToolConsent)->getMorphClass())->count())->toBe(0);
+
+        // The subscriber's own action creates it…
+        $grant = consentRun(['grant', (string) $user->id, ToolCapability::TasksWrite->value, '0']);
+        $grant->wait();
+        expect(trim($grant->getOutput()))->toBe('ok:1');
+
+        // …and a NAMED console administrator may take it away, recorded as that actor.
+        $revoke = consentRun(['revoke', (string) $user->id, ToolCapability::TasksWrite->value, '1', 'console']);
+        $revoke->wait();
+        $row = ToolConsent::query()->where('subscriber_id', $user->id)->firstOrFail();
+        $audit = AuditLog::query()->where('subject_type', $row->getMorphClass())->where('subject_id', $row->id)->latest('id')->firstOrFail();
+
+        expect(trim($revoke->getOutput()))->toBe('ok:2')
+            ->and($row->status->value)->toBe('revoked')
+            ->and($row->updated_by_ref)->toBe('console_admin:ops.consent-revocation')
+            ->and($audit->metadata['context']['actor_ref'])->toBe('console_admin:ops.consent-revocation')
+            ->and($audit->metadata['context']['evidence_ref'])->toBe('policy:probe');
     } finally {
         consentCleanup($user);
     }

@@ -6,6 +6,7 @@ use App\Enums\ToolCapability;
 use App\Enums\ToolConsentReason;
 use App\Models\User;
 use App\Services\Tools\ToolConsentService;
+use App\Support\Tools\EvidenceRef;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -36,7 +37,7 @@ it('is the 60th migration, creates tool_consents with its identity and index, an
 
     $user = User::factory()->create();
     $this->actingAs($user);
-    app(ToolConsentService::class)->grant($user->id, ToolCapability::TasksWrite, 0, ToolConsentReason::SubscriberRequest, 'ticket:1');
+    app(ToolConsentService::class)->grant($user->id, ToolCapability::TasksWrite, 0, ToolConsentReason::SubscriberRequest, EvidenceRef::of('message:1'));
     expect(DB::table('tool_consents')->count())->toBe(1);
 
     Artisan::call('migrate:rollback', ['--step' => 1, '--force' => true]);
@@ -57,7 +58,7 @@ it('is the 60th migration, creates tool_consents with its identity and index, an
         ->and(DB::table('tool_consents')->count())->toBe(0) // the table comes back empty, as a dropped table must
         ->and(DB::table('migrations')->count())->toBe(60);
 
-    app(ToolConsentService::class)->grant($user->id, ToolCapability::TasksWrite, 0, ToolConsentReason::SubscriberRequest, 'ticket:2');
+    app(ToolConsentService::class)->grant($user->id, ToolCapability::TasksWrite, 0, ToolConsentReason::SubscriberRequest, EvidenceRef::of('message:2'));
     expect(DB::table('tool_consents')->count())->toBe(1);
 });
 
