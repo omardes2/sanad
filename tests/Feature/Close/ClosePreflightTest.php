@@ -14,7 +14,6 @@ use App\Models\FxConversion;
 use App\Models\FxRate;
 use App\Services\Close\ClosePreflight;
 use App\Services\Close\PeriodCloseService;
-use App\Services\Fx\ReportingCurrencyService;
 use App\Services\Payments\CustomerPaymentService;
 use App\Services\Reconciliation\CostInvoiceService;
 use App\Services\Reconciliation\CostReconciliationService;
@@ -160,7 +159,7 @@ it('blocks on cost FX gaps (a reconciliation or adjustment in another currency w
 
 it('reflects the current reporting currency: switching it changes statuses, never conversions or figures already frozen elsewhere', function () {
     closableMonth();
-    app(ReportingCurrencyService::class)->change('ILS', 'ILS');
+    rcSet('ILS');
     $e = preflight();
 
     expect($e->reportingCurrency)->toBe('ILS')

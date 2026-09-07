@@ -27,15 +27,15 @@ it('defaults the reporting currency to billing.cost_currency and changes it only
     $service = app(ReportingCurrencyService::class);
     expect($service->current())->toBe('USD');
 
-    expect(fxRule(fn () => $service->change('ILS', 'ils')))->toBe('typed_confirmation')
-        ->and(fxRule(fn () => $service->change('ILS', '')))->toBe('typed_confirmation')
-        ->and(fxRule(fn () => $service->change('USD', 'USD')))->toBe('unchanged')
-        ->and(fxRule(fn () => $service->change('IL', 'IL')))->toBe('reporting_currency');
+    expect(fxRule(fn () => $service->change('ILS', 'ils', 'USD')))->toBe('typed_confirmation')
+        ->and(fxRule(fn () => $service->change('ILS', '', 'USD')))->toBe('typed_confirmation')
+        ->and(fxRule(fn () => $service->change('USD', 'USD', 'USD')))->toBe('unchanged')
+        ->and(fxRule(fn () => $service->change('IL', 'IL', 'USD')))->toBe('reporting_currency');
 
     $payment = e1Payment(billingSubscriber(), ['amount' => '100.00', 'currency' => 'USD', 'receivedAt' => CarbonImmutable::parse('2026-08-10', 'UTC')]);
     $conversion = fxConvert('customer_payment', $payment->id, 'ILS', fxRate(['rate' => '3.65'])->id);
 
-    expect($service->change('ILS', 'ILS', 'board_decision'))->toBe('ILS')->and($service->current())->toBe('ILS')
+    expect(rcSet('ILS', 'board_decision'))->toBe('ILS')->and($service->current())->toBe('ILS')
         ->and(AuditLog::where('action', AuditActions::FinanceReportingCurrencyChanged)->count())->toBe(1)
         ->and(AuditLog::where('action', AuditActions::FinanceReportingCurrencyChanged)->first()->metadata['changes']['reporting_currency'])->toBe(['from' => 'USD', 'to' => 'ILS'])
         ->and(AuditLog::where('action', AuditActions::FinanceReportingCurrencyChanged)->first()->metadata['context']['conversions_recomputed'])->toBe(0)
@@ -72,7 +72,7 @@ it('shows NATIVE, CONVERTED and NOT CONVERTED lines with the originals, and a to
         ->and($view['totals']['refunds']->amount)->toBe('10.00')->and($view['totals']['net']->amount)->toBe('210.00');
 
     // Switching the reporting currency: the USD lines become NOT CONVERTED (no ILS conversion exists), the ILS ones NATIVE; nothing recomputed.
-    app(ReportingCurrencyService::class)->change('ILS', 'ILS');
+    rcSet('ILS');
     $view = app(ReportingView::class)->cash(CarbonImmutable::parse('2026-08-01', 'UTC'), CarbonImmutable::parse('2026-09-01', 'UTC'));
     $byId = collect($view['lines'])->keyBy(fn ($l) => $l->subjectType.':'.$l->subjectId);
     expect($byId['customer_payment:'.$usd->id]->status)->toBe('NOT CONVERTED')->and($byId['customer_payment:'.$ilsConverted->id]->status)->toBe('NATIVE')

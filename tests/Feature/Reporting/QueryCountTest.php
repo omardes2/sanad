@@ -40,7 +40,7 @@ function revisions(array $fx, int $n): void
 {
     $close = closeMonth('2026-08', null, 'rev-1');
     for ($i = 2; $i <= $n; $i++) {
-        $reopen = app(PeriodCloseService::class)->reopen($close->id, $close->id, 'restatement', 'memo:'.$i, 'REOPEN 2026-08');
+        $reopen = app(PeriodCloseService::class)->reopen($close->id, $close->id, 'restatement', 'memo:'.$i, 'REOPEN 2026-08', e4Key());
         app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:'.$i, e2Key());
         $close = closeMonth('2026-08', $reopen->id, 'rev-'.$i);
     }
@@ -58,7 +58,7 @@ function warmUp(string $url): void
     test()->get($url)->assertOk();
 }
 
-it('close history: the number of queries does not grow with the number of revisions, and exactly one live evaluation happens (for the selected month, not per row)', function () {
+it('close history: the number of queries does not grow with the number of revisions, and rendering evaluates NOTHING (E5.2c: preflight is on demand only)', function () {
     $fx = closableMonth();
     revisions($fx, 1);
     $user = userWithRole(Role::Finance);
@@ -70,7 +70,7 @@ it('close history: the number of queries does not grow with the number of revisi
     $this->actingAs(userWithRole(Role::SuperAdmin)); // reopen / close are super_admin only
     for ($i = 2; $i <= 4; $i++) {
         $current = FinancePeriodClose::query()->orderByDesc('id')->first();
-        $reopen = app(PeriodCloseService::class)->reopen($current->id, $current->id, 'restatement', 'memo:'.$i, 'REOPEN 2026-08');
+        $reopen = app(PeriodCloseService::class)->reopen($current->id, $current->id, 'restatement', 'memo:'.$i, 'REOPEN 2026-08', e4Key());
         app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:'.$i, e2Key());
         closeMonth('2026-08', $reopen->id, 'rev-'.$i);
     }
@@ -80,7 +80,7 @@ it('close history: the number of queries does not grow with the number of revisi
     $four = queriesDuring(fn () => $this->get(route('dashboard.finance.close', ['month' => '2026-08']))->assertOk()->assertSee('FROZEN CLOSE REVISION 4')->assertSee('FROZEN CLOSE REVISION 1'));
 
     expect(count($four))->toBe(count($one))
-        ->and(preflightQueries($four))->toBe(1)->and(preflightQueries($one))->toBe(1);
+        ->and(preflightQueries($four))->toBe(0)->and(preflightQueries($one))->toBe(0);
 });
 
 it('close detail and close export: a fixed number of queries whatever the number of input rows; no preflight at all', function () {
@@ -95,7 +95,7 @@ it('close detail and close export: a fixed number of queries whatever the number
 
     // A month with many more inputs: 30 extra payments (each with a fee) ⇒ 60 more input rows.
     $this->actingAs(userWithRole(Role::SuperAdmin));
-    $reopen = app(PeriodCloseService::class)->reopen($close->id, $close->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
+    $reopen = app(PeriodCloseService::class)->reopen($close->id, $close->id, 'restatement', 'memo:1', 'REOPEN 2026-08', e4Key());
     for ($i = 0; $i < 30; $i++) {
         e1Payment($fx['subscriber'], ['amount' => '1.00', 'currency' => 'USD', 'receivedAt' => CarbonImmutable::parse('2026-08-15', 'UTC')->addMinutes($i), 'gatewayFeeAmount' => '0.10', 'feeCurrency' => 'USD']);
     }

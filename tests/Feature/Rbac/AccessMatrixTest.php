@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Models\FxConversionScope;
+use App\Models\FxRateScope;
 use App\Models\User;
 use App\Support\Rbac\Permission;
 use App\Support\Rbac\Role;
@@ -252,4 +254,35 @@ it('Phase E5.2a payment routes reuse finance.payments.manage: finance and super_
         $this->actingAs(userWithRole(Role::Finance))->get($url)->assertOk();
         $this->actingAs(userWithRole(Role::SuperAdmin))->get($url)->assertOk();
     }
+});
+
+it('Phase E5.2c FX routes reuse finance.fx.manage and the close page finance.view: no new permission, operations/support/legacy admin/no-role 403, guests redirected', function () {
+    rbacSync();
+    $fx = closableMonth();
+    $rateScope = FxRateScope::query()->firstOrFail();
+    $conversionScope = FxConversionScope::query()->firstOrFail();
+    $urls = [
+        route('dashboard.finance.fx'),
+        route('dashboard.finance.fx.rates', ['from' => '2026-08-01', 'to' => '2026-08-31']),
+        route('dashboard.finance.fx.rates.show', $rateScope->id),
+        route('dashboard.finance.fx.conversions', ['type' => 'customer_payment']),
+        route('dashboard.finance.fx.conversions.show', $conversionScope->id),
+    ];
+
+    foreach ($urls as $url) {
+        $this->get($url)->assertRedirect(route('login'));
+    }
+    foreach ($urls as $url) {
+        $this->actingAs(User::factory()->create(['is_admin' => true]))->get($url)->assertForbidden();
+        $this->actingAs(User::factory()->create(['is_admin' => false]))->get($url)->assertForbidden();
+        $this->actingAs(userWithRole(Role::Operations))->get($url)->assertForbidden();
+        $this->actingAs(userWithRole(Role::Support))->get($url)->assertForbidden();
+        $this->actingAs(userWithRole(Role::Finance))->get($url)->assertOk();
+        $this->actingAs(userWithRole(Role::SuperAdmin))->get($url)->assertOk();
+    }
+
+    // The close page stays readable with finance.view; the two writes stay super_admin-only (Phase E4 permissions unchanged).
+    $this->actingAs(userWithRole(Role::Finance))->get(route('dashboard.finance.close', ['month' => '2026-08']))->assertOk()->assertSee('عرض فقط');
+    expect(collect(Permission::cases())->map(fn ($p) => $p->value)->all())
+        ->not->toContain('finance.fx.rates.manage')->not->toContain('finance.fx.conversions.manage')->not->toContain('finance.close.preflight');
 });

@@ -8,7 +8,6 @@ use App\Models\FinancePeriodClose;
 use App\Models\FinancePeriodCloseScope;
 use App\Models\User;
 use App\Services\Close\PeriodCloseService;
-use App\Services\Fx\ReportingCurrencyService;
 use App\Services\Reconciliation\CostReconciliationService;
 use App\Support\Rbac\Role;
 use Carbon\CarbonImmutable;
@@ -48,7 +47,7 @@ it('renders a historical close from its frozen row and inputs — live changes, 
     // Live world moves on: new adjustment (live contribution 132), a corrected FX quote, a new reporting currency.
     app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2', e2Key());
     $corrected = fxRate(['rate' => '3.70', 'rateDate' => '2026-08-10', 'expectedCurrentRateId' => $fx['rate']->id, 'reasonCode' => 'correction', 'evidenceRef' => 'boi:rev2']);
-    app(ReportingCurrencyService::class)->change('ILS', 'ILS');
+    rcSet('ILS');
 
     $page = $this->actingAs(userWithRole(Role::Finance))->get(route('dashboard.finance.close.show', $close->id))->assertOk();
     $html = $page->getContent();
@@ -99,7 +98,7 @@ it('CHECK CURRENT DRIFT is on demand only: nothing on render, an explicit answer
 it('shows the revision chain, the reopen record, read-only audit entries with a link into the audit page, and the CSV link only with finance.export', function () {
     closableMonth();
     $v1 = closeMonth('2026-08', null, 'k1');
-    $reopen = app(PeriodCloseService::class)->reopen($v1->id, $v1->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
+    $reopen = app(PeriodCloseService::class)->reopen($v1->id, $v1->id, 'restatement', 'memo:1', 'REOPEN 2026-08', e4Key());
     $v2 = closeMonth('2026-08', $reopen->id, 'k2');
     $scope = FinancePeriodCloseScope::query()->firstOrFail();
     $finance = userWithRole(Role::Finance);
@@ -134,19 +133,20 @@ it('is reachable only with finance.view: finance and super_admin 200, operations
     $this->actingAs(userWithRole(Role::SuperAdmin))->get(route('dashboard.finance.close.show', 999))->assertNotFound();
 });
 
-it('close history page: rows come from the frozen rows, the current close drift is derived from the already-evaluated live hash, older revisions get CHECK CURRENT DRIFT on demand', function () {
+it('close history page: rows come from the frozen rows and EVERY revision, current included, gets CHECK CURRENT DRIFT on demand (E5.2c: no evaluation on render)', function () {
     $fx = closableMonth();
     $v1 = closeMonth('2026-08', null, 'k1');
-    $reopen = app(PeriodCloseService::class)->reopen($v1->id, $v1->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
+    $reopen = app(PeriodCloseService::class)->reopen($v1->id, $v1->id, 'restatement', 'memo:1', 'REOPEN 2026-08', e4Key());
     app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2', e2Key());
     $v2 = closeMonth('2026-08', $reopen->id, 'k2');
 
     $page = Livewire::actingAs(userWithRole(Role::Finance))->test(PeriodClose::class)->set('month', '2026-08')
         ->assertSee('FROZEN CLOSE REVISION 1')->assertSee('FROZEN CLOSE REVISION 2')->assertSee('reopen record (rev 1)')
-        ->assertSee('data-testid="drift-'.$v2->id.'"', false)->assertSee('NO DRIFT') // current close: free comparison, no extra evaluation
+        ->assertSee('data-testid="check-drift-'.$v2->id.'"', false)->assertDontSee('data-testid="drift-'.$v2->id.'"', false) // current close: on demand too
         ->assertSee('data-testid="check-drift-'.$v1->id.'"', false)->assertDontSee('data-testid="drift-'.$v1->id.'"', false) // older revision: on demand
         ->assertSee(route('dashboard.finance.close.show', $v1->id))->assertSee(route('dashboard.finance.close.export', $v2->id));
 
+    $page->call('checkDrift', $v2->id)->assertSee('data-testid="drift-'.$v2->id.'"', false)->assertSee('NO DRIFT'); // current close: nothing moved after it
     $page->call('checkDrift', $v1->id)->assertSee('data-testid="drift-'.$v1->id.'"', false)->assertSee('DRIFT SINCE CLOSE'); // v1 was closed before the adjustment
     expect((string) $v1->fresh()->reconciled_cash_contribution)->toBe('131.000000')->and((string) $v2->fresh()->reconciled_cash_contribution)->toBe('132.000000')
         ->and(FinancePeriodClose::count())->toBe(3);
@@ -156,7 +156,7 @@ it('shows every frozen field by name (month UTC, status, revision, previous clos
     $fx = closableMonth();
     $v1 = closeMonth('2026-08', null, 'k1');
     $this->actingAs(userWithRole(Role::SuperAdmin));
-    $reopen = app(PeriodCloseService::class)->reopen($v1->id, $v1->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
+    $reopen = app(PeriodCloseService::class)->reopen($v1->id, $v1->id, 'restatement', 'memo:1', 'REOPEN 2026-08', e4Key());
     $v2 = closeMonth('2026-08', $reopen->id, 'k2');
 
     $html = $this->actingAs(userWithRole(Role::Finance))->get(route('dashboard.finance.close.show', $v2->id))->assertOk()->getContent();

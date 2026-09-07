@@ -678,6 +678,7 @@ use App\Exceptions\Fx\FxRuleException;
 use App\Models\FxConversion;
 use App\Models\FxPair;
 use App\Models\FxRate;
+use App\Models\FxRateScope;
 use App\Services\Fx\FxPairBook;
 use App\Services\Fx\FxRateBook;
 use App\Services\Fx\ReportingConversionService;
@@ -741,6 +742,7 @@ use App\Exceptions\Close\CloseBlockedException;
 use App\Exceptions\Close\CloseRuleException;
 use App\Models\FinancePeriodClose;
 use App\Services\Close\PeriodCloseService;
+use App\Services\Fx\ReportingCurrencyService;
 
 /**
  * A fully closable August 2026 in reporting currency USD:
@@ -777,6 +779,20 @@ function closableMonth(): array
 function closeMonth(string $month = '2026-08', ?int $expected = null, ?string $key = null): FinancePeriodClose
 {
     return app(PeriodCloseService::class)->close($month, $expected, $key ?? 'close:'.str()->random(10), 'CLOSE '.$month);
+}
+
+/** Change the reporting currency through its race-safe writer, stating the value the caller just read (E5.2c). */
+function rcSet(string $code, ?string $reason = null): string
+{
+    $service = app(ReportingCurrencyService::class);
+
+    return $service->change($code, $code, $service->current(), $reason);
+}
+
+/** A fresh opaque idempotency key for one reopen (E5.2c: every reopen requires one). */
+function e4Key(): string
+{
+    return 'reopen:'.str()->random(16);
 }
 
 /** The rule name an E4 service refuses with, "blocked:<codes>" for a blocked close, or "none". */
@@ -913,4 +929,64 @@ function e2Cleanup(string $counterparty): void
     AuditLog::where('subject_type', (new CostReconciliationScope)->getMorphClass())->whereIn('subject_id', $scopeIds)->delete();
     DB::table('cost_invoices')->whereIn('id', $invoiceIds)->delete();
     DB::table('ai_providers')->where('key', $counterparty)->delete();
+}
+
+/*
+ * Phase E3 PostgreSQL race helpers (shared by every FX race file so each runs standalone).
+ */
+function fxRun(array $args): Process
+{
+    $p = new Process(['php', 'artisan', 'sanad:fx-probe', ...$args], base_path());
+    $p->start();
+
+    return $p;
+}
+
+/** @return list<string> */
+function fxOutcomes(array $processes): array
+{
+    $outcomes = [];
+    foreach ($processes as $p) {
+        $p->wait();
+        expect($p->getExitCode())->toBe(0, $p->getOutput().$p->getErrorOutput());
+        $outcomes[] = trim($p->getOutput());
+    }
+
+    return $outcomes;
+}
+
+/** Two synthetic currency codes nobody else uses, so cleanup touches only this test's rows. */
+function fxCodes(): array
+{
+    $letters = static fn (): string => chr(random_int(65, 90)).chr(random_int(65, 90));
+    $a = 'X'.$letters();
+    $b = 'Y'.$letters();
+
+    return [$a, $b];
+}
+
+function fxCleanup(array $codes, ?User $user = null): void
+{
+    $pairIds = FxPair::query()->whereIn('base_currency', $codes)->orWhereIn('quote_currency', $codes)->pluck('id');
+    $rateIds = FxRate::query()->whereIn('fx_pair_id', $pairIds)->pluck('id');
+    $convIds = FxConversion::query()->whereIn('fx_rate_id', $rateIds)->pluck('id');
+    $convScopeIds = FxConversion::query()->whereIn('id', $convIds)->pluck('scope_id');
+    DB::table('fx_conversion_scopes')->whereIn('id', $convScopeIds)->update(['current_conversion_id' => null]);
+    DB::table('fx_conversions')->whereIn('id', $convIds)->delete();
+    DB::table('fx_conversion_scopes')->whereIn('id', $convScopeIds)->delete();
+    DB::table('cost_invoice_allocations')->whereIn('fx_rate_id', $rateIds)->delete();
+    DB::table('fx_rate_scopes')->whereIn('fx_pair_id', $pairIds)->update(['current_rate_id' => null]);
+    DB::table('fx_rates')->whereIn('id', $rateIds)->delete();
+    AuditLog::where('subject_type', (new FxRateScope)->getMorphClass())->whereIn('subject_id', FxRateScope::query()->whereIn('fx_pair_id', $pairIds)->pluck('id'))->delete();
+    DB::table('fx_rate_scopes')->whereIn('fx_pair_id', $pairIds)->delete();
+    AuditLog::where('subject_type', (new FxPair)->getMorphClass())->whereIn('subject_id', $pairIds)->delete();
+    DB::table('fx_pairs')->whereIn('id', $pairIds)->delete();
+
+    if ($user !== null) {
+        $paymentIds = CustomerPayment::query()->where('subscriber_id', $user->id)->pluck('id');
+        DB::table('customer_payment_events')->whereIn('customer_payment_id', $paymentIds)->delete();
+        AuditLog::where('subject_type', (new CustomerPayment)->getMorphClass())->whereIn('subject_id', $paymentIds)->delete();
+        DB::table('customer_payments')->whereIn('id', $paymentIds)->delete();
+        $user->delete();
+    }
 }

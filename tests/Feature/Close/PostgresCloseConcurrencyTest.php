@@ -114,7 +114,7 @@ it('of 6 concurrent closes from the same pointer exactly one closes the month; f
             ->and((string) FinancePeriodClose::query()->find($scope->current_close_id)->reconciled_cash_contribution)->toBe('0.000000');
 
         // Idempotency race: six replays of one key on the reopened month ⇒ one close.
-        $reopen = closeRun(['reopen', (string) $scope->current_close_id, (string) $scope->current_close_id, $month]);
+        $reopen = closeRun(['reopen', (string) $scope->current_close_id, (string) $scope->current_close_id, $month, e4Key()]);
         $reopen->wait();
         expect(trim($reopen->getOutput()))->toStartWith('ok:');
         $scope->refresh();
@@ -135,7 +135,7 @@ it('of 6 concurrent closes from the same pointer exactly one closes the month; f
     }
 });
 
-it('of 6 concurrent reopens of the current close exactly one wins; five are stale; the old close is untouched', function () {
+it('of 6 concurrent reopens of the current close with DIFFERENT keys exactly one wins; five are stale; the old close is untouched', function () {
     $month = '2024-04';
     $cps = emptyClosableMonth($month);
 
@@ -148,7 +148,7 @@ it('of 6 concurrent reopens of the current close exactly one wins; five are stal
 
         $processes = [];
         for ($i = 0; $i < 6; $i++) {
-            $processes[] = closeRun(['reopen', (string) $closeId, (string) $closeId, $month]);
+            $processes[] = closeRun(['reopen', (string) $closeId, (string) $closeId, $month, e4Key()]); // a DIFFERENT key each: six genuinely different requests
         }
         $outcomes = closeOutcomes($processes);
         $scope = FinancePeriodCloseScope::query()->whereKey($close->scope_id)->firstOrFail();
@@ -158,6 +158,74 @@ it('of 6 concurrent reopens of the current close exactly one wins; five are stal
             ->and(FinancePeriodClose::query()->where('scope_id', $scope->id)->where('status', 'reopened')->count())->toBe(1)
             ->and($scope->state)->toBe('open')->and($scope->version)->toBe(2)
             ->and($close->fresh()->input_hash)->toBe($hash)->and($close->fresh()->status->value)->toBe('closed')
+            ->and(AuditLog::where('action', 'finance.period_reopened')->where('subject_id', $scope->id)->count())->toBe(1);
+    } finally {
+        closeCleanup($month, $cps);
+    }
+});
+
+it('of 6 concurrent reopens carrying the SAME key exactly one row is written and every process returns it: one reopen, one pointer move, one audit (E5.2c)', function () {
+    $month = '2024-05';
+    $cps = emptyClosableMonth($month);
+
+    try {
+        $first = closeRun(['close', $month, 'none', 'race-same-key-'.str()->random(4)]);
+        $first->wait();
+        $closeId = (int) explode(':', trim($first->getOutput()))[1];
+        $close = FinancePeriodClose::query()->findOrFail($closeId);
+        $key = 'reopen-key-'.str()->random(8);
+
+        $processes = [];
+        for ($i = 0; $i < 6; $i++) {
+            $processes[] = closeRun(['reopen', (string) $closeId, (string) $closeId, $month, $key]);
+        }
+        $outcomes = closeOutcomes($processes);
+        $scope = FinancePeriodCloseScope::query()->whereKey($close->scope_id)->firstOrFail();
+        $reopen = FinancePeriodClose::query()->where('idempotency_key', $key)->firstOrFail();
+
+        // Exactly one writer; the other five replay the same key with the same facts and get the SAME row back.
+        expect(array_filter($outcomes, fn ($o) => $o === 'ok:'.$reopen->id))->toHaveCount(1)
+            ->and(array_filter($outcomes, fn ($o) => $o === 'existing:'.$reopen->id))->toHaveCount(5)
+            ->and(FinancePeriodClose::query()->where('scope_id', $scope->id)->where('status', 'reopened')->count())->toBe(1)
+            ->and($reopen->reopened_close_id)->toBe($closeId)
+            ->and($scope->state)->toBe('open')->and($scope->version)->toBe(2)->and($scope->current_close_id)->toBe($reopen->id)
+            ->and($close->fresh()->status->value)->toBe('closed')
+            ->and(AuditLog::where('action', 'finance.period_reopened')->where('subject_id', $scope->id)->count())->toBe(1);
+    } finally {
+        closeCleanup($month, $cps);
+    }
+});
+
+it('a historical reopen replayed after the month was closed again returns its recorded row and never moves the pointer backwards (E5.2c)', function () {
+    $month = '2024-06';
+    $cps = emptyClosableMonth($month);
+
+    try {
+        $v1 = closeRun(['close', $month, 'none', 'hist-close-1-'.str()->random(4)]);
+        $v1->wait();
+        $v1Id = (int) explode(':', trim($v1->getOutput()))[1];
+        $key = 'reopen-hist-'.str()->random(8);
+
+        $reopen = closeRun(['reopen', (string) $v1Id, (string) $v1Id, $month, $key]);
+        $reopen->wait();
+        $reopenId = (int) explode(':', trim($reopen->getOutput()))[1];
+
+        $v2 = closeRun(['close', $month, (string) $reopenId, 'hist-close-2-'.str()->random(4)]);
+        $v2->wait();
+        $v2Id = (int) explode(':', trim($v2->getOutput()))[1];
+
+        $scope = FinancePeriodCloseScope::query()->whereKey(FinancePeriodClose::query()->findOrFail($v2Id)->scope_id)->firstOrFail();
+        expect($scope->current_close_id)->toBe($v2Id)->and($scope->state)->toBe('closed');
+
+        // The old reopen is replayed (a retried request, a queued job, a stuck browser tab): same key, same facts.
+        $replay = closeRun(['reopen', (string) $v1Id, (string) $v1Id, $month, $key]);
+        $replay->wait();
+
+        expect(trim($replay->getOutput()))->toBe('existing:'.$reopenId)
+            ->and(FinancePeriodClose::query()->where('scope_id', $scope->id)->count())->toBe(3) // v1 + reopen + v2, nothing new
+            ->and($scope->fresh()->current_close_id)->toBe($v2Id) // the pointer NEVER goes back to the reopen record
+            ->and($scope->fresh()->state)->toBe('closed')
+            ->and($scope->fresh()->version)->toBe(3)
             ->and(AuditLog::where('action', 'finance.period_reopened')->where('subject_id', $scope->id)->count())->toBe(1);
     } finally {
         closeCleanup($month, $cps);

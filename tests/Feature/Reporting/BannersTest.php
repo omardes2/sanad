@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Enums\CustomerPaymentEventType;
 use App\Enums\PaymentSource;
+use App\Livewire\Dashboard\Finance\PeriodClose;
 use App\Services\Payments\CustomerPaymentService;
 use App\Services\Reconciliation\CostInvoiceService;
 use App\Support\Rbac\Role;
@@ -74,8 +75,9 @@ it('shows FEES UNKNOWN, NOT CONVERTED, LEDGER MOVED, EVIDENCE VOIDED, UNRESOLVED
     $row = substr($html, strpos($html, 'data-testid="month-2026-08"'), (int) strpos($html, '</tr>', strpos($html, 'data-testid="month-2026-08"')) - strpos($html, 'data-testid="month-2026-08"'));
     expect(substr_count($row, 'NOT AVAILABLE'))->toBeGreaterThanOrEqual(3)->and($row)->not->toContain('>0.000000<')->not->toContain('>0.00<');
 
-    // The close page shows the same blockers through the same component.
-    $close = $this->actingAs($user)->get(route('dashboard.finance.close', ['month' => '2026-08']))->assertOk()->getContent();
+    // The close page shows the same blockers through the same component — after RUN PREFLIGHT, which is the only thing that evaluates a month there (E5.2c).
+    $this->actingAs($user)->get(route('dashboard.finance.close', ['month' => '2026-08']))->assertOk()->assertDontSee('data-testid="preflight-banners"', false);
+    $close = Livewire::actingAs($user)->test(PeriodClose::class)->set('month', '2026-08')->call('runPreflight')->html();
     $preflight = bannersOf($close, 'preflight-banners');
     expect(implode("\n", $preflight))->toContain('BLOCKING · FEES_INCOMPLETE')->toContain('BLOCKING · UNRESOLVED_DISPUTES')->toContain('BLOCKING · LEDGER_MOVED')->toContain('BLOCKING · EVIDENCE_STALE')->toContain('BLOCKING · FX_INCOMPLETE_CASH');
 });

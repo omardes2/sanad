@@ -4,219 +4,182 @@ declare(strict_types=1);
 
 namespace App\Livewire\Dashboard\Finance;
 
-use App\Data\Fx\RecordRateInput;
-use App\Data\Fx\ReportingConversionInput;
+use App\Enums\FxSubjectType;
 use App\Exceptions\Fx\FxRuleException;
-use App\Exceptions\Fx\StaleFxException;
+use App\Livewire\Dashboard\Finance\Concerns\HandlesFxActions;
+use App\Models\FxConversionScope;
 use App\Models\FxPair;
 use App\Models\FxRate;
+use App\Models\FxRateScope;
 use App\Services\Fx\FxPairBook;
-use App\Services\Fx\FxRateBook;
-use App\Services\Fx\ReportingConversionService;
 use App\Services\Fx\ReportingCurrencyService;
-use App\Services\Fx\ReportingView;
 use App\Support\Rbac\Permission;
 use Carbon\CarbonImmutable;
-use InvalidArgumentException;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
-use Livewire\Attributes\Url;
 use Livewire\Component;
 
 /**
- * Minimal admin page for Phase E3 under `finance.fx.manage`: Create FX Pair ·
- * Record Rate for Date · Correct/Supersede Rate (same form with the expected
- * current id) · Convert subject for Reporting (explicit fx_rate_id) · Set
- * Reporting Currency (typed code), plus the reporting-currency view of cash
- * and cost. `finance.view` alone can read converted values on the finance
- * pages but never creates a conversion. Mount and every action re-authorise.
+ * FX pairs and the reporting currency (Phase E3 → E5.2c operational UI) —
+ * `finance.fx.manage` on the route, the mount and every action.
+ *
+ * A pair is CANONICAL: one row covers two currencies in ONE official
+ * orientation (1 base = rate × quote); the reverse pair is refused, and a
+ * quote is never flipped in storage — `direct` / `inverse` is a display
+ * derivation at conversion time only.
+ *
+ * Changing the reporting currency states the code the page rendered
+ * (`expectedCurrentCurrency`, hidden) and types the new code verbatim; the
+ * service re-reads the truth under a row lock, so a concurrent change is
+ * refused as stale instead of overwriting. It NEVER recomputes a frozen
+ * conversion — only NATIVE / CONVERTED / NOT CONVERTED labels change, and the
+ * impact preview below says exactly how many subjects each label would cover.
+ * The preview is read-only, on demand, and informational: the services stay
+ * the authority.
  */
-#[Title('أسعار الصرف وعملة التقرير | سَنَد')]
+#[Title('أزواج الصرف وعملة التقرير | سَنَد')]
 #[Layout('components.layouts.dashboard')]
 class Fx extends Component
 {
-    // ---- Pair ----
+    use HandlesFxActions;
+
+    // ---- create pair ----
+    public string $pairKey = '';
+
     public string $pairBase = '';
 
     public string $pairQuote = '';
 
-    // ---- Rate ----
-    public string $rateBase = '';
+    // ---- reporting currency ----
+    public string $rcKey = '';
 
-    public string $rateQuote = '';
+    public string $rcExpected = '';
 
-    public string $rateDate = '';
-
-    public string $rateValue = '';
-
-    public string $rateEvidence = '';
-
-    public string $rateReason = '';
-
-    public string $rateExpected = '';
-
-    // ---- Conversion ----
-    public string $convSubjectType = 'customer_payment';
-
-    public string $convSubjectId = '';
-
-    public string $convTarget = '';
-
-    public string $convRateId = '';
-
-    public string $convExpected = '';
-
-    public string $convReason = '';
-
-    // ---- Reporting currency ----
     public string $rcCode = '';
 
     public string $rcTyped = '';
 
     public string $rcReason = '';
 
-    // ---- Views ----
-    #[Url]
-    public string $from = '';
+    public ?string $confirming = null; // pair | currency
 
-    #[Url]
-    public string $to = '';
-
-    #[Url]
-    public string $fromMonth = '';
-
-    #[Url]
-    public string $toMonth = '';
+    /** On-demand impact preview of ONE candidate code: page state, never cached or stored. */
+    public ?array $impact = null;
 
     public ?string $notice = null;
 
     public function mount(): void
     {
-        $this->authorizeFx();
-        $now = CarbonImmutable::now('UTC');
-        $this->rateDate = $now->format('Y-m-d');
+        $this->authorizeManage();
+        $this->pairKey = self::freshKey();
+        $this->rcKey = self::freshKey();
+        $this->rcExpected = app(ReportingCurrencyService::class)->current();
+    }
 
-        if ($this->from === '' || $this->to === '') {
-            $this->to = $now->format('Y-m-d');
-            $this->from = $now->subDays(29)->format('Y-m-d');
-        }
+    public function openConfirm(string $action): void
+    {
+        $this->authorizeManage();
+        $this->confirming = in_array($action, ['pair', 'currency'], true) ? $action : null;
+    }
 
-        if ($this->fromMonth === '' || $this->toMonth === '') {
-            $this->toMonth = $now->format('Y-m');
-            $this->fromMonth = $now->subMonths(2)->format('Y-m');
-        }
+    public function closeConfirm(): void
+    {
+        $this->confirming = null;
+        $this->impact = null;
     }
 
     public function createPair(FxPairBook $book): void
     {
-        $this->run('pair', function () use ($book): string {
+        $ok = $this->attempt('pair', $this->pairKey, function () use ($book): void {
             $pair = $book->create($this->pairBase, $this->pairQuote);
-            $this->reset('pairBase', 'pairQuote');
-
-            return "أُنشئ الزوج {$pair->pair_key} بالاتجاه الرسمي {$pair->base_currency}/{$pair->quote_currency} (1 {$pair->base_currency} = rate × {$pair->quote_currency}).";
+            $this->notice = "أُنشئ الزوج {$pair->pair_key} بالاتجاه الرسمي {$pair->base_currency}/{$pair->quote_currency} (1 {$pair->base_currency} = rate × {$pair->quote_currency}).";
         });
+
+        if ($ok) {
+            $this->reset('pairBase', 'pairQuote', 'confirming');
+            $this->pairKey = self::freshKey();
+        }
     }
 
-    public function recordRate(FxRateBook $book): void
+    /** Read-only, on demand: what the candidate code would label, without writing or recomputing anything. */
+    public function previewImpact(ReportingCurrencyService $reporting): void
     {
-        $this->run('rate', function () use ($book): string {
-            $rate = $book->record(new RecordRateInput(
-                baseCurrency: $this->rateBase, quoteCurrency: $this->rateQuote, rateDate: $this->rateDate, rate: $this->rateValue, evidenceRef: $this->rateEvidence,
-                expectedCurrentRateId: trim($this->rateExpected) === '' ? null : $this->positiveInt($this->rateExpected, 'المراجعة الحالية المتوقعة'), reasonCode: self::optional($this->rateReason),
-            ));
-            $this->reset('rateValue', 'rateEvidence', 'rateReason');
-            $this->rateExpected = (string) $rate->id;
+        $this->authorizeManage();
+        $this->resetErrorBag('currency');
 
-            return "سُجِّل السعر #{$rate->id}: 1 {$rate->base_currency} = {$rate->rate} {$rate->quote_currency} بتاريخ {$rate->rateDate()}".($rate->supersedes_id ? " (يستبدل #{$rate->supersedes_id})" : '').'.';
-        });
-    }
+        try {
+            $code = FxPairBook::currency($this->rcCode, 'reporting_currency');
+        } catch (FxRuleException $e) {
+            $this->addError('currency.rule', $e->rule.' — '.$e->getMessage());
 
-    public function convert(ReportingConversionService $service): void
-    {
-        $this->run('conversion', function () use ($service): string {
-            $conversion = $service->convert(new ReportingConversionInput(
-                subjectType: $this->convSubjectType, subjectId: $this->positiveInt($this->convSubjectId, 'معرّف الموضوع'), targetCurrency: $this->convTarget,
-                fxRateId: $this->positiveInt($this->convRateId, 'معرّف السعر'), expectedCurrentConversionId: trim($this->convExpected) === '' ? null : $this->positiveInt($this->convExpected, 'التحويل الحالي المتوقع'), reasonCode: self::optional($this->convReason),
-            ));
-            $this->reset('convReason');
-            $this->convExpected = (string) $conversion->id;
+            return;
+        }
 
-            return "حُوِّل {$conversion->subject_type} #{$conversion->subject_id}: {$conversion->sourceAmountAtScale()} {$conversion->source_currency} → {$conversion->targetAmountAtScale()} {$conversion->target_currency} بالسعر #{$conversion->fx_rate_id} ({$conversion->direction->value}، تاريخ {$conversion->fx_rate_date->format('Y-m-d')}). التحويل #{$conversion->id}.";
-        });
+        $this->impact = ['code' => $code, 'current' => $reporting->current(), 'rows' => self::impactRows($code), 'at' => CarbonImmutable::now('UTC')->format('Y-m-d H:i:s')];
     }
 
     public function setReportingCurrency(ReportingCurrencyService $service): void
     {
-        $this->run('reporting_currency', function () use ($service): string {
-            $code = $service->change($this->rcCode, $this->rcTyped, self::optional($this->rcReason));
-            $this->reset('rcCode', 'rcTyped', 'rcReason');
-
-            return "عملة التقرير الآن {$code}. لم يُعَد حساب أي تحويل مجمَّد.";
+        $ok = $this->attempt('currency', $this->rcKey, function () use ($service): void {
+            // The code this page rendered is the concurrency contract; a changed value is refused, never overwritten.
+            $code = $service->change($this->rcCode, $this->rcTyped, $this->rcExpected, self::optional($this->rcReason));
+            $this->notice = "عملة التقرير الآن {$code}. لم يُعَد حساب أي تحويل مجمَّد؛ تغيّرت التسميات فقط (NATIVE / CONVERTED / NOT CONVERTED).";
         });
+
+        if ($ok) {
+            $this->reset('rcCode', 'rcTyped', 'rcReason', 'confirming');
+            $this->impact = null;
+            $this->rcKey = self::freshKey();
+            $this->refreshRecord();
+        }
     }
 
-    public function render(ReportingView $view, ReportingCurrencyService $reporting, FxRateBook $rates)
+    public function render(ReportingCurrencyService $reporting)
     {
-        $this->authorizeFx();
+        $this->authorizeManage();
+        $user = auth()->user();
+        $pairs = FxPair::query()->orderBy('pair_key')->get();
 
-        $cash = $cost = null;
-        $cashError = $costError = null;
-
-        try {
-            [$from, $to] = Payments::window($this->from, $this->to);
-            $cash = $view->cash($from, $to);
-        } catch (InvalidArgumentException|FxRuleException $e) {
-            $cashError = $e->getMessage();
-        }
-
-        try {
-            $cost = $view->cost($this->fromMonth, $this->toMonth);
-        } catch (\Throwable $e) {
-            $costError = $e->getMessage();
-        }
+        // One grouped query per figure — never per pair.
+        $scopes = FxRateScope::query()->selectRaw('fx_pair_id, COUNT(*) AS scopes, MAX(rate_date) AS latest')->groupBy('fx_pair_id')->get()->keyBy('fx_pair_id');
+        $revisions = FxRate::query()->selectRaw('fx_pair_id, COUNT(*) AS revisions')->groupBy('fx_pair_id')->get()->keyBy('fx_pair_id');
 
         return view('livewire.dashboard.finance.fx', [
+            'pairs' => $pairs,
+            'scopes' => $scopes,
+            'revisions' => $revisions,
             'reportingCurrency' => $reporting->current(),
-            'pairs' => FxPair::query()->orderBy('pair_key')->get(),
-            'rates' => FxRate::query()->orderByDesc('id')->limit(25)->get(),
-            'cash' => $cash,
-            'cashError' => $cashError,
-            'cost' => $cost,
-            'costError' => $costError,
+            'canAudit' => (bool) $user->can(Permission::AuditView->value),
+            'auditUrl' => route('dashboard.audit', ['action' => 'finance.reporting_currency_changed']),
         ]);
     }
 
-    private function run(string $bag, callable $fn): void
+    /**
+     * Per subject type: how many rows would be NATIVE (same currency as the
+     * candidate), CONVERTED (a current frozen conversion to it already
+     * exists) or NOT CONVERTED. Counts only — no amounts, no writes.
+     *
+     * @return list<array{type: string, native: int, converted: int, not_converted: int}>
+     */
+    private static function impactRows(string $code): array
     {
-        $this->authorizeFx();
-        $this->resetErrorBag($bag);
-        $this->notice = null;
+        $out = [];
 
-        try {
-            $this->notice = $fn();
-        } catch (FxRuleException|StaleFxException|InvalidArgumentException $e) {
-            $this->addError($bag, $e->getMessage());
-        }
-    }
+        foreach (FxSubjectType::cases() as $type) {
+            $model = $type->modelClass();
+            $native = $model::query()->where('currency', $code)->count();
+            $foreign = $model::query()->where('currency', '!=', $code)->pluck('id');
+            $converted = $foreign->isEmpty() ? 0 : FxConversionScope::query()->where('subject_type', $type->value)->where('purpose', 'reporting')->where('target_currency', $code)
+                ->whereIn('subject_id', $foreign)->whereNotNull('current_conversion_id')->count();
 
-    private function authorizeFx(): void
-    {
-        abort_unless(auth()->user()?->can(Permission::FinanceFxManage->value) ?? false, 403);
-    }
-
-    private static function optional(string $value): ?string
-    {
-        return trim($value) === '' ? null : trim($value);
-    }
-
-    private function positiveInt(string $value, string $label): int
-    {
-        $value = trim($value);
-
-        if (! ctype_digit($value) || (int) $value <= 0) {
-            throw new InvalidArgumentException("{$label} يجب أن يكون رقمًا صحيحًا موجبًا.");
+            $out[] = ['type' => $type->value, 'native' => $native, 'converted' => $converted, 'not_converted' => $foreign->count() - $converted];
         }
 
-        return (int) $value;
+        return $out;
+    }
+
+    protected function refreshRecord(): void
+    {
+        $this->rcExpected = app(ReportingCurrencyService::class)->current();
     }
 }

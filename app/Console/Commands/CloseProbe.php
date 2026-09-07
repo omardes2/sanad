@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Exceptions\Close\CloseBlockedException;
 use App\Exceptions\Close\CloseRuleException;
 use App\Exceptions\Close\StaleCloseException;
+use App\Models\FinancePeriodClose;
 use App\Services\Close\PeriodCloseService;
 use Illuminate\Console\Command;
 
@@ -14,7 +15,8 @@ use Illuminate\Console\Command;
  * Testing-only probe (Phase E4): ONE close / reopen operation, one line.
  *
  *  close <YYYY-MM> <expected|none> <idempotency_key>       → ok:<id> | stale | blocked:<codes> | rejected:<rule>
- *  reopen <close_id> <expected|none> <YYYY-MM>              → ok:<id> | stale | rejected:<rule>
+ *  reopen <close_id> <expected|none> <YYYY-MM> <idempotency_key>
+ *      → ok:<id> | existing:<id> | stale | rejected:<rule>
  */
 class CloseProbe extends Command
 {
@@ -32,7 +34,7 @@ class CloseProbe extends Command
         try {
             $line = match ((string) $this->argument('op')) {
                 'close' => 'ok:'.$service->close($a[0], $a[1] === 'none' ? null : (int) $a[1], $a[2], 'CLOSE '.$a[0])->id,
-                'reopen' => 'ok:'.$service->reopen((int) $a[0], $a[1] === 'none' ? null : (int) $a[1], 'probe', 'probe:reopen', 'REOPEN '.$a[2])->id,
+                'reopen' => self::written($service->reopen((int) $a[0], $a[1] === 'none' ? null : (int) $a[1], 'probe', 'probe:reopen', 'REOPEN '.$a[2], $a[3])),
                 default => throw new \InvalidArgumentException('Unknown op'),
             };
         } catch (CloseRuleException $e) {
@@ -46,5 +48,10 @@ class CloseProbe extends Command
         $this->line($line);
 
         return self::SUCCESS;
+    }
+
+    private static function written(FinancePeriodClose $row): string
+    {
+        return ($row->wasRecentlyCreated ? 'ok:' : 'existing:').$row->id;
     }
 }

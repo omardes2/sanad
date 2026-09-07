@@ -127,7 +127,7 @@ it('finance.export grants no write capability: with finance.view + finance.expor
     $this->get(route('dashboard.finance.reconciliation'))->assertForbidden();
     $this->get(route('dashboard.finance.fx'))->assertForbidden();
     Livewire::actingAs($exporter)->test(PeriodClose::class)->set('month', '2026-08')->set('reopenCloseId', (string) $close->id)->set('reopenTyped', 'REOPEN 2026-08')->set('reopenReason', 'x')->set('reopenEvidence', 'y')->call('reopen')->assertForbidden();
-    expect(fn () => app(PeriodCloseService::class)->reopen($close->id, $close->id, 'x', 'y', 'REOPEN 2026-08'))->toThrow(AuthorizationException::class)
+    expect(fn () => app(PeriodCloseService::class)->reopen($close->id, $close->id, 'x', 'y', 'REOPEN 2026-08', e4Key()))->toThrow(AuthorizationException::class)
         ->and(fn () => $close->forceFill(['reconciled_cash_contribution' => '1'])->save())->toThrow(ImmutableFinancialRecordException::class);
 
     $writes = [];

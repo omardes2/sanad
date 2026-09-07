@@ -103,7 +103,7 @@ it('RECONCILED band: a closed month is FROZEN CLOSE REVISION n from the close ro
 
     // After a reopen the month is LIVE / CURRENT again (state reopened) and shows the live figure — the old close row is untouched.
     $this->actingAs(userWithRole(Role::SuperAdmin)); // reopen is super_admin only
-    app(PeriodCloseService::class)->reopen($close->id, $close->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
+    app(PeriodCloseService::class)->reopen($close->id, $close->id, 'restatement', 'memo:1', 'REOPEN 2026-08', e4Key());
     $aug = monthRow(overview(userWithRole(Role::Finance))->getContent(), '2026-08');
     expect($aug)->toContain('data-basis="live"')->toContain('LIVE / CURRENT')->toContain('132.000000')->not->toContain('FROZEN CLOSE REVISION')
         ->and((string) FinancePeriodClose::query()->findOrFail($close->id)->reconciled_cash_contribution)->toBe('131.000000');
@@ -112,7 +112,7 @@ it('RECONCILED band: a closed month is FROZEN CLOSE REVISION n from the close ro
 it('never aggregates closes: a window spanning months lists a series with no total, and only the current reporting currency and the current revision enter the band', function () {
     closableMonth();
     $first = closeMonth('2026-08', null, 'k1');
-    app(PeriodCloseService::class)->reopen($first->id, $first->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
+    app(PeriodCloseService::class)->reopen($first->id, $first->id, 'restatement', 'memo:1', 'REOPEN 2026-08', e4Key());
     app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2', e2Key());
     $second = closeMonth('2026-08', FinancePeriodClose::query()->orderByDesc('id')->first()->id, 'k2'); // revision 2 = 132
 

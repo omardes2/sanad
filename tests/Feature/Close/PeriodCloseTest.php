@@ -18,7 +18,6 @@ use App\Models\FinancePeriodCloseScope;
 use App\Services\Audit\AuditLogger;
 use App\Services\Close\ClosePreflight;
 use App\Services\Close\PeriodCloseService;
-use App\Services\Fx\ReportingCurrencyService;
 use App\Services\Payments\CustomerPaymentService;
 use App\Services\Reconciliation\CostInvoiceService;
 use App\Services\Reconciliation\CostReconciliationService;
@@ -52,7 +51,7 @@ beforeEach(function () {
 
 function reopen(FinancePeriodClose $close, ?int $expected = null): FinancePeriodClose
 {
-    return app(PeriodCloseService::class)->reopen($close->id, $expected ?? $close->id, 'restatement', 'memo:1', 'REOPEN '.$close->month());
+    return app(PeriodCloseService::class)->reopen($close->id, $expected ?? $close->id, 'restatement', 'memo:1', 'REOPEN '.$close->month(), e4Key());
 }
 
 it('closes a complete month: frozen figures, conditions, canonical snapshot, hash, input rows from the same snapshot, pointer, audit', function () {
@@ -155,11 +154,11 @@ it('reopens with a new record (reason + evidence + typed), leaves the old close 
     $firstSnapshot = $first->inputs_snapshot;
     $firstRows = FinancePeriodCloseInput::query()->where('close_id', $first->id)->get()->map(fn ($r) => $r->getAttributes())->all();
 
-    expect(closeRule(fn () => $service->reopen($first->id, $first->id, 'x', 'y', 'reopen 2026-08')))->toBe('typed_confirmation')
-        ->and(closeRule(fn () => $service->reopen($first->id, $first->id, '', 'y', 'REOPEN 2026-08')))->toBe('reason_code')
-        ->and(closeRule(fn () => $service->reopen($first->id, $first->id, 'x', '', 'REOPEN 2026-08')))->toBe('evidence_ref')
-        ->and(fn () => $service->reopen($first->id, null, 'x', 'y', 'REOPEN 2026-08'))->toThrow(StaleCloseException::class)
-        ->and(closeRule(fn () => $service->reopen(999, $first->id, 'x', 'y', 'REOPEN 2026-08')))->toBe('close');
+    expect(closeRule(fn () => $service->reopen($first->id, $first->id, 'x', 'y', 'reopen 2026-08', e4Key())))->toBe('typed_confirmation')
+        ->and(closeRule(fn () => $service->reopen($first->id, $first->id, '', 'y', 'REOPEN 2026-08', e4Key())))->toBe('reason_code')
+        ->and(closeRule(fn () => $service->reopen($first->id, $first->id, 'x', '', 'REOPEN 2026-08', e4Key())))->toBe('evidence_ref')
+        ->and(fn () => $service->reopen($first->id, null, 'x', 'y', 'REOPEN 2026-08', e4Key()))->toThrow(StaleCloseException::class)
+        ->and(closeRule(fn () => $service->reopen(999, $first->id, 'x', 'y', 'REOPEN 2026-08', e4Key())))->toBe('close');
 
     $reopen = reopen($first);
     $scope = FinancePeriodCloseScope::query()->firstOrFail();
@@ -196,7 +195,7 @@ it('flags DRIFT SINCE CLOSE when live data changes after a close, without mutati
     app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2', e2Key());
     expect($service->drift($close->fresh()))->toBeTrue()->and($close->fresh()->input_hash)->toBe($close->input_hash)->and((string) $close->fresh()->reconciled_cash_contribution)->toBe('131.000000');
 
-    app(ReportingCurrencyService::class)->change('ILS', 'ILS');
+    rcSet('ILS');
     expect((string) $close->fresh()->reconciled_cash_contribution)->toBe('131.000000')->and($close->fresh()->reporting_currency)->toBe('USD')
         ->and(FinancePeriodClose::count())->toBe(1)->and(FinancePeriodCloseScope::query()->firstOrFail()->reporting_currency)->toBe('USD');
 });
@@ -216,7 +215,7 @@ it('is super_admin only with authorization inside the service; finance can evalu
     expect($close->actor_ref)->toStartWith('user:');
 
     $this->actingAs(userWithRole(Role::Finance));
-    expect(fn () => $service->reopen($close->id, $close->id, 'x', 'y', 'REOPEN 2026-08'))->toThrow(AuthorizationException::class)
+    expect(fn () => $service->reopen($close->id, $close->id, 'x', 'y', 'REOPEN 2026-08', e4Key()))->toThrow(AuthorizationException::class)
         ->and(FinancePeriodClose::count())->toBe(1);
 });
 
