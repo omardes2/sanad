@@ -186,7 +186,7 @@ jobs:
       - name: PostgreSQL concurrency tests must run (not skipped)
         run: |
           set -o pipefail
-          php artisan test tests/Feature/Billing/PostgresConcurrencyTest.php tests/Feature/Payments/PostgresPaymentConcurrencyTest.php tests/Feature/Reconciliation/PostgresReconciliationConcurrencyTest.php tests/Feature/Fx/PostgresFxConcurrencyTest.php tests/Feature/Close/PostgresCloseConcurrencyTest.php tests/Feature/Payments/PostgresPaymentDoubleSubmitTest.php tests/Feature/Payments/PostgresAllocationIdempotencyTest.php 2>&1 | tee pg-concurrency.log
+          php artisan test tests/Feature/Billing/PostgresConcurrencyTest.php tests/Feature/Payments/PostgresPaymentConcurrencyTest.php tests/Feature/Reconciliation/PostgresReconciliationConcurrencyTest.php tests/Feature/Fx/PostgresFxConcurrencyTest.php tests/Feature/Close/PostgresCloseConcurrencyTest.php tests/Feature/Payments/PostgresPaymentDoubleSubmitTest.php tests/Feature/Payments/PostgresAllocationIdempotencyTest.php tests/Feature/Reconciliation/PostgresReconciliationDoubleSubmitTest.php 2>&1 | tee pg-concurrency.log
           if grep -qiE "skipped|no tests executed" pg-concurrency.log; then
             echo "::error::A PostgreSQL concurrency test was skipped — the job is not running on PostgreSQL."
             exit 1

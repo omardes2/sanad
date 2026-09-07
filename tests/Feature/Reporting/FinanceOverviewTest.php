@@ -90,7 +90,7 @@ it('RECONCILED band: a closed month is FROZEN CLOSE REVISION n from the close ro
     closableMonth();
     $close = closeMonth('2026-08', null, 'k1');
     // Live data moves after the close: a new adjustment changes the live contribution to 132 — the frozen row must still say 131.
-    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2', e2Key());
 
     $html = overview(userWithRole(Role::Finance))->getContent();
     $aug = monthRow($html, '2026-08');
@@ -113,7 +113,7 @@ it('never aggregates closes: a window spanning months lists a series with no tot
     closableMonth();
     $first = closeMonth('2026-08', null, 'k1');
     app(PeriodCloseService::class)->reopen($first->id, $first->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
-    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust(CostReconciliation::query()->where('component', 'provider')->firstOrFail()->id, '-1.000000', 'credit', 'cn:2', e2Key());
     $second = closeMonth('2026-08', FinancePeriodClose::query()->orderByDesc('id')->first()->id, 'k2'); // revision 2 = 132
 
     $html = overview(userWithRole(Role::Finance), '2026-07-15', '2026-09-06')->getContent();

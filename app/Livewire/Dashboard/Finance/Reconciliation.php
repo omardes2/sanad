@@ -4,139 +4,91 @@ declare(strict_types=1);
 
 namespace App\Livewire\Dashboard\Finance;
 
-use App\Data\Reconciliation\CostInvoiceInput;
-use App\Data\Reconciliation\EvidenceAllocation;
-use App\Data\Reconciliation\InvoiceLineInput;
-use App\Data\Reconciliation\ReconciliationInput;
-use App\Exceptions\Reconciliation\ReconciliationConflictException;
+use App\Enums\CostComponent;
+use App\Enums\CostCoverageStatus;
+use App\Enums\ReconciliationSource;
 use App\Exceptions\Reconciliation\ReconciliationRuleException;
-use App\Exceptions\Reconciliation\StaleReconciliationException;
-use App\Models\CostInvoice;
-use App\Models\CostInvoiceLine;
+use App\Livewire\Dashboard\Finance\Concerns\HandlesReconciliationActions;
+use App\Models\CostReconciliation;
 use App\Models\CostReconciliationScope;
-use App\Services\Reconciliation\CostInvoiceService;
 use App\Services\Reconciliation\CostReconciliationService;
 use App\Services\Reconciliation\ReconciledCostQuery;
-use App\Support\Rbac\Permission;
+use App\Services\Reconciliation\ReconciliationLedgerView;
+use App\Support\Reconciliation\ReconciliationRules;
 use Carbon\CarbonImmutable;
-use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Attributes\Url;
 use Livewire\Component;
+use Livewire\WithPagination;
 
 /**
- * Minimal admin page for Phase E2 (the full finance UI is Phase E5) under
- * `finance.reconcile`: Record Invoice · Add Line · Confirm Invoice ·
- * Void / Supersede · Create Reconciliation (explicit evidence allocations) ·
- * Confirm Zero (typed ZERO) · Add Adjustment, plus a plain per-scope
- * reconciled-cost table for a month range. Mount and EVERY action re-check
- * the permission server-side; the services check again. No dashboard, no
- * CSV, no cash contribution, no gross profit. No PII, no free text.
+ * Reconciliation scope list (Phase E2 → E5.2b operational UI), same route as
+ * the former single-page E2 form. `finance.reconcile` on the route, the mount
+ * and every action. Read-only render of CHEAP stored data only: the scope
+ * identity, the current pointer, the current reconciliation's source /
+ * status, frozen base, Σ adjustments (one grouped query per page), Adjusted,
+ * the frozen ledger snapshot and the frozen variance. NO live ledger capture
+ * per row: the live ledger status is `NOT CHECKED` until the user runs
+ * CHECK LEDGER for ONE scope (read-only, on demand, no cache, no snapshot
+ * materialisation). Filters allowlisted, bounded (≤ 13 months), URL-kept;
+ * 25 rows per page. Every write lives on the scope detail page.
  */
 #[Title('تسوية التكلفة | سَنَد')]
 #[Layout('components.layouts.dashboard')]
 class Reconciliation extends Component
 {
-    private const DATE = 'Y-m-d';
+    use HandlesReconciliationActions;
+    use WithPagination;
 
-    // ---- Record invoice ----
-    public string $invComponent = 'provider';
+    public const PER_PAGE = 25;
 
-    public string $invCounterparty = '';
+    public const STATUSES = ['not_reconciled', 'reconciled', 'confirmed_zero'];
 
-    public string $invKey = '';
-
-    public string $invRef = '';
-
-    public string $invIssuedAt = '';
-
-    public string $invPeriodStart = '';
-
-    public string $invPeriodEnd = '';
-
-    public string $invCurrency = '';
-
-    public string $invTotal = '';
-
-    public string $invEvidence = '';
-
-    // ---- Add line ----
-    public string $lineInvoiceId = '';
-
-    public string $lineNo = '';
-
-    public string $lineKind = 'service';
-
-    public string $lineCode = '';
-
-    public string $lineAmount = '';
-
-    public string $linePeriodStart = '';
-
-    public string $linePeriodEnd = '';
-
-    // ---- Confirm / void / supersede ----
-    public string $lcInvoiceId = '';
-
-    public string $lcToken = '';
-
-    public string $lcReason = '';
-
-    public string $lcReplacementId = '';
-
-    // ---- Reconciliation ----
-    public string $recComponent = 'provider';
-
-    public string $recCounterparty = '';
-
-    public string $recMonth = '';
-
-    public string $recCurrency = '';
-
-    public string $recExpected = '';
-
-    public string $recSource = 'invoice';
-
-    /** @var list<array{line: string, amount: string, fx_rate_id: string}> */
-    public array $recAllocations = [['line' => '', 'amount' => '', 'fx_rate_id' => ''], ['line' => '', 'amount' => '', 'fx_rate_id' => ''], ['line' => '', 'amount' => '', 'fx_rate_id' => '']];
-
-    public string $recAmount = '';
-
-    public string $recReason = '';
-
-    public string $recEvidence = '';
-
-    public string $recTyped = '';
-
-    // ---- Adjustment ----
-    public string $adjReconciliationId = '';
-
-    public string $adjAmount = '';
-
-    public string $adjReason = '';
-
-    public string $adjEvidence = '';
-
-    // ---- Summary window ----
     #[Url]
     public string $fromMonth = '';
 
     #[Url]
     public string $toMonth = '';
 
+    #[Url]
+    public string $component = '';
+
+    #[Url]
+    public string $counterparty = '';
+
+    #[Url]
+    public string $currency = '';
+
+    #[Url]
+    public string $status = '';
+
+    /**
+     * On-demand live ledger checks of THIS page view, keyed by scope id — page
+     * state, not a cache: nothing is stored server-side, a re-render does not
+     * re-run them, a filter change clears them.
+     *
+     * @var array<int, array{at: string, status: string, flags: list<string>}>
+     */
+    public array $ledgerChecks = [];
+
+    // ---- start a reconciliation for a scope that has no row yet ----
+    public string $newComponent = 'provider';
+
+    public string $newCounterparty = '';
+
+    public string $newMonth = '';
+
+    public string $newCurrency = '';
+
     public ?string $notice = null;
 
     public function mount(): void
     {
-        $this->authorizeReconcile();
+        $this->authorizeManage();
         $now = CarbonImmutable::now('UTC');
-        $this->invKey = 'ui:'.Str::uuid()->toString();
-        $this->invIssuedAt = $now->format(self::DATE);
-        $this->invPeriodStart = $now->startOfMonth()->format(self::DATE);
-        $this->invPeriodEnd = $now->startOfMonth()->addMonth()->format(self::DATE);
-        $this->recMonth = $now->subMonth()->format('Y-m');
+        $this->newMonth = $now->subMonth()->format('Y-m');
 
         if ($this->fromMonth === '' || $this->toMonth === '') {
             $this->toMonth = $now->format('Y-m');
@@ -144,194 +96,161 @@ class Reconciliation extends Component
         }
     }
 
-    public function recordInvoice(CostInvoiceService $service): void
+    public function updated(string $property): void
     {
-        $this->authorizeReconcile();
-        $this->resetErrorBag('invoice');
-        $this->notice = null;
+        if (in_array($property, ['fromMonth', 'toMonth', 'component', 'counterparty', 'currency', 'status'], true)) {
+            $this->resetPage();
+            $this->ledgerChecks = [];
+        }
+    }
+
+    /** CHECK LEDGER — one scope, read-only, on demand: the same describe() the close preflight uses, never per row on render. */
+    public function checkLedger(int $scopeId, ReconciledCostQuery $query): void
+    {
+        $this->authorizeManage();
+        $scope = CostReconciliationScope::query()->findOrFail($scopeId);
+        $summary = $query->describe($scope);
+
+        $this->ledgerChecks[$scopeId] = [
+            'at' => CarbonImmutable::now('UTC')->format('Y-m-d H:i:s'),
+            'status' => $summary->reconciliationId === null ? 'NOT RECONCILED — nothing to compare' : ($summary->ledgerMoved ? 'LEDGER MOVED SINCE RECONCILIATION' : 'UNCHANGED SINCE RECONCILIATION'),
+            'flags' => $summary->flags,
+        ];
+    }
+
+    /** Open the detail page for a scope identity that has no row yet (the row is created by the service on the first reconciliation). */
+    public function startScope(): void
+    {
+        $this->authorizeManage();
+        $this->resetErrorBag();
 
         try {
-            $invoice = $service->recordDraft(new CostInvoiceInput(
-                component: $this->invComponent, counterpartyKey: $this->invCounterparty, idempotencyKey: $this->invKey,
-                issuedAt: $this->date($this->invIssuedAt, 'تاريخ الإصدار'), periodStart: $this->date($this->invPeriodStart, 'بداية الفترة'), periodEnd: $this->date($this->invPeriodEnd, 'نهاية الفترة'),
-                currency: $this->invCurrency, totalAmount: $this->invTotal, invoiceRef: self::optional($this->invRef), evidenceRef: self::optional($this->invEvidence),
-            ));
-        } catch (ReconciliationRuleException|ReconciliationConflictException|InvalidArgumentException $e) {
-            $this->addError('invoice', $e->getMessage());
+            $component = ReconciliationRules::component($this->newComponent);
+            $counterparty = ReconciliationRules::requiredRef($this->newCounterparty, 64, 'counterparty_key');
+            [$start] = ReconciliationRules::month($this->newMonth);
+            $currency = ReconciliationRules::currency($this->newCurrency, 'currency');
+        } catch (ReconciliationRuleException $e) {
+            $this->addError('scope.rule', $e->rule.' — '.$e->getMessage());
 
             return;
         }
 
-        $this->notice = $invoice->wasRecentlyCreated
-            ? "سُجِّلت الفاتورة #{$invoice->id} كمسودة (token {$invoice->stateToken()}) — {$invoice->total_amount} {$invoice->currency}. أضف الأسطر ثم أكّد."
-            : "الفاتورة #{$invoice->id} مسجَّلة مسبقًا بنفس المفتاح والحقائق؛ لم يُكتب شيء جديد.";
-        $this->reset('invCounterparty', 'invRef', 'invTotal', 'invEvidence');
-        $this->invKey = 'ui:'.Str::uuid()->toString();
-    }
+        $existing = CostReconciliationScope::query()->where('component', $component->value)->where('counterparty_key', $counterparty)
+            ->where('period_start', $start->format('Y-m-d H:i:s'))->where('currency', $currency)->first();
 
-    public function addLine(CostInvoiceService $service): void
-    {
-        $this->authorizeReconcile();
-        $this->resetErrorBag('line');
-        $this->notice = null;
-
-        try {
-            $line = $service->addLine(new InvoiceLineInput(
-                costInvoiceId: $this->positiveInt($this->lineInvoiceId, 'معرّف الفاتورة'), lineNo: $this->positiveInt($this->lineNo, 'رقم السطر'), kind: $this->lineKind,
-                descriptionCode: $this->lineCode, amount: $this->lineAmount,
-                periodStart: trim($this->linePeriodStart) === '' ? null : $this->date($this->linePeriodStart, 'بداية فترة السطر'),
-                periodEnd: trim($this->linePeriodEnd) === '' ? null : $this->date($this->linePeriodEnd, 'نهاية فترة السطر'),
-            ));
-        } catch (ReconciliationRuleException|InvalidArgumentException $e) {
-            $this->addError('line', $e->getMessage());
-
-            return;
-        }
-
-        $this->notice = "أُضيف السطر #{$line->id} ({$line->kind->value} {$line->amount} {$line->currency}) للفاتورة #{$line->cost_invoice_id}.";
-        $this->reset('lineNo', 'lineCode', 'lineAmount', 'linePeriodStart', 'linePeriodEnd');
-    }
-
-    public function confirmInvoice(CostInvoiceService $service): void
-    {
-        $this->lifecycle(fn () => $service->confirm($this->positiveInt($this->lcInvoiceId, 'معرّف الفاتورة'), trim($this->lcToken)), 'أُكِّدت الفاتورة');
-    }
-
-    public function voidInvoice(CostInvoiceService $service): void
-    {
-        $this->lifecycle(fn () => $service->void($this->positiveInt($this->lcInvoiceId, 'معرّف الفاتورة'), trim($this->lcToken), $this->lcReason), 'أُلغيت الفاتورة');
-    }
-
-    public function supersedeInvoice(CostInvoiceService $service): void
-    {
-        $this->lifecycle(fn () => $service->supersede($this->positiveInt($this->lcInvoiceId, 'معرّف الفاتورة'), trim($this->lcToken), $this->positiveInt($this->lcReplacementId, 'معرّف الفاتورة البديلة'), $this->lcReason), 'استُبدلت الفاتورة');
-    }
-
-    public function reconcile(CostReconciliationService $service): void
-    {
-        $this->authorizeReconcile();
-        $this->resetErrorBag('reconciliation');
-        $this->notice = null;
-
-        try {
-            $allocations = [];
-            foreach ($this->recAllocations as $row) {
-                if (trim((string) ($row['line'] ?? '')) === '' && trim((string) ($row['amount'] ?? '')) === '') {
-                    continue;
-                }
-                $fxRateId = trim((string) ($row['fx_rate_id'] ?? ''));
-                $allocations[] = new EvidenceAllocation($this->positiveInt((string) ($row['line'] ?? ''), 'معرّف السطر'), (string) ($row['amount'] ?? ''), $fxRateId === '' ? null : $this->positiveInt($fxRateId, 'fx_rate_id'));
-            }
-
-            $reconciliation = $service->reconcile(new ReconciliationInput(
-                component: $this->recComponent, counterpartyKey: $this->recCounterparty, month: $this->recMonth, currency: $this->recCurrency,
-                expectedCurrentReconciliationId: trim($this->recExpected) === '' ? null : $this->positiveInt($this->recExpected, 'التسوية الحالية المتوقعة'),
-                source: $this->recSource, allocations: $allocations, reconciledAmount: self::optional($this->recAmount),
-                reasonCode: self::optional($this->recReason), evidenceRef: self::optional($this->recEvidence), typedConfirmation: self::optional($this->recTyped),
-            ));
-        } catch (ReconciliationRuleException|StaleReconciliationException|InvalidArgumentException $e) {
-            $this->addError('reconciliation', $e->getMessage());
-
-            return;
-        }
-
-        $label = $reconciliation->source->value === 'confirmed_zero' ? 'CONFIRMED ZERO' : $reconciliation->reconciled_amount.' '.$reconciliation->currency;
-        $this->notice = "سُجِّلت التسوية #{$reconciliation->id} لنطاق {$reconciliation->component->value}/{$reconciliation->counterparty_key}/".$reconciliation->period_start->format('Y-m')." = {$label} (Calculated known {$reconciliation->calculated_known_amount}, coverage {$reconciliation->cost_coverage_status->value}).";
-        $this->reset('recAllocations', 'recAmount', 'recReason', 'recEvidence', 'recTyped');
-        $this->recExpected = (string) $reconciliation->id;
-    }
-
-    public function adjust(CostReconciliationService $service): void
-    {
-        $this->authorizeReconcile();
-        $this->resetErrorBag('adjustment');
-        $this->notice = null;
-
-        try {
-            $adjustment = $service->adjust($this->positiveInt($this->adjReconciliationId, 'معرّف التسوية'), $this->adjAmount, $this->adjReason, $this->adjEvidence);
-        } catch (ReconciliationRuleException|StaleReconciliationException|InvalidArgumentException $e) {
-            $this->addError('adjustment', $e->getMessage());
-
-            return;
-        }
-
-        $this->notice = "أُضيف التعديل #{$adjustment->id} ({$adjustment->amount} {$adjustment->currency}) على التسوية #{$adjustment->cost_reconciliation_id}؛ المبلغ الأساسي لم يتغيّر.";
-        $this->reset('adjAmount', 'adjReason', 'adjEvidence');
-    }
-
-    public function render(ReconciledCostQuery $query)
-    {
-        $this->authorizeReconcile();
-
-        $summary = [];
-        $windowError = null;
-
-        try {
-            $summary = $query->summarise($this->fromMonth, $this->toMonth);
-        } catch (ReconciliationRuleException|InvalidArgumentException $e) {
-            $windowError = $e->getMessage();
-        }
-
-        return view('livewire.dashboard.finance.reconciliation', [
-            'summary' => $summary,
-            'windowError' => $windowError,
-            'invoices' => CostInvoice::query()->orderByDesc('id')->limit(25)->get(),
-            'lines' => CostInvoiceLine::query()->orderByDesc('id')->limit(40)->get(),
-            'scopes' => CostReconciliationScope::query()->orderByDesc('id')->limit(25)->get(),
+        $this->redirectRoute($existing ? 'dashboard.finance.reconciliation.show' : 'dashboard.finance.reconciliation.new', $existing ? ['scope' => $existing->id] : [
+            'component' => $component->value, 'counterparty' => $counterparty, 'month' => $start->format('Y-m'), 'currency' => $currency,
         ]);
     }
 
-    private function lifecycle(callable $fn, string $done): void
+    public function render(ReconciliationLedgerView $ledger)
     {
-        $this->authorizeReconcile();
-        $this->resetErrorBag('lifecycle');
-        $this->notice = null;
+        $this->authorizeManage();
+        $filters = $this->filters();
+        $windowError = null;
+        $window = null;
 
         try {
-            $invoice = $fn();
-        } catch (ReconciliationRuleException|StaleReconciliationException|InvalidArgumentException $e) {
-            $this->addError('lifecycle', $e->getMessage());
-
-            return;
+            $window = CostInvoices::window($this->fromMonth, $this->toMonth);
+        } catch (InvalidArgumentException $e) {
+            $windowError = $e->getMessage();
         }
 
-        $this->notice = "{$done} #{$invoice->id} (الحالة {$invoice->current_status->value}، token {$invoice->stateToken()}).";
-        $this->reset('lcToken', 'lcReason', 'lcReplacementId');
-    }
+        $query = CostReconciliationScope::query()->orderByDesc('id');
 
-    private function authorizeReconcile(): void
-    {
-        abort_unless(auth()->user()?->can(Permission::FinanceReconcile->value) ?? false, 403);
-    }
-
-    private static function optional(string $value): ?string
-    {
-        return trim($value) === '' ? null : trim($value);
-    }
-
-    private function positiveInt(string $value, string $label): int
-    {
-        $value = trim($value);
-
-        if (! ctype_digit($value) || (int) $value <= 0) {
-            throw new InvalidArgumentException("{$label} يجب أن يكون رقمًا صحيحًا موجبًا.");
+        if ($window !== null) {
+            $query->where('period_start', '>=', $window[0]->format('Y-m-d H:i:s'))->where('period_start', '<', $window[1]->format('Y-m-d H:i:s'));
+        } else {
+            $query->whereRaw('1 = 0');
+        }
+        if ($filters['component'] !== null) {
+            $query->where('component', $filters['component']);
+        }
+        if ($filters['counterparty'] !== null) {
+            $query->where('counterparty_key', $filters['counterparty']);
+        }
+        if ($filters['currency'] !== null) {
+            $query->where('currency', $filters['currency']);
+        }
+        if ($filters['status'] === 'not_reconciled') {
+            $query->whereNull('current_reconciliation_id');
+        } elseif ($filters['status'] === 'confirmed_zero') {
+            $query->whereIn('current_reconciliation_id', CostReconciliation::query()->select('id')->where('source', ReconciliationSource::ConfirmedZero->value));
+        } elseif ($filters['status'] === 'reconciled') {
+            $query->whereIn('current_reconciliation_id', CostReconciliation::query()->select('id')->where('source', '!=', ReconciliationSource::ConfirmedZero->value));
         }
 
-        return (int) $value;
+        $scopes = $query->paginate(self::PER_PAGE);
+        $currentIds = $scopes->getCollection()->pluck('current_reconciliation_id')->filter()->values()->all();
+        $current = CostReconciliation::query()->whereIn('id', $currentIds)->get()->keyBy('id');
+        $adjustments = $ledger->adjustments($currentIds);
+
+        $rows = [];
+        foreach ($scopes as $scope) {
+            $rec = $scope->current_reconciliation_id === null ? null : $current->get($scope->current_reconciliation_id);
+            $rows[] = self::row($scope, $rec, $adjustments[$scope->current_reconciliation_id] ?? 0);
+        }
+
+        return view('livewire.dashboard.finance.reconciliation', [
+            'scopes' => $scopes,
+            'rows' => $rows,
+            'windowError' => $windowError,
+            'filters' => $filters,
+            'components' => array_map(static fn (CostComponent $c): string => $c->value, CostComponent::cases()),
+            'statuses' => self::STATUSES,
+            'currencies' => CostInvoices::CURRENCIES,
+            'maxMonths' => ReconciledCostQuery::MAX_MONTHS,
+        ]);
     }
 
-    private function date(string $value, string $label): CarbonImmutable
+    /**
+     * Frozen, stored figures only — never a ledger capture.
+     *
+     * @return array<string, mixed>
+     */
+    public static function row(CostReconciliationScope $scope, ?CostReconciliation $rec, int $adjustmentsScaled): array
     {
-        try {
-            $at = CarbonImmutable::createFromFormat('!'.self::DATE, trim($value), 'UTC');
-        } catch (\Throwable) {
-            $at = false;
+        if ($rec === null) {
+            return ['scope' => $scope, 'rec' => null, 'status' => 'NOT RECONCILED', 'base' => null, 'adjustments' => ReconciliationRules::format(0), 'adjusted' => null, 'variance' => null, 'varianceStatus' => 'UNKNOWN', 'coverage' => null];
         }
 
-        if ($at === false) {
-            throw new InvalidArgumentException("{$label} بصيغة غير صالحة (YYYY-MM-DD، UTC).");
-        }
+        $base = CostReconciliationService::scaledOf((string) $rec->reconciled_amount);
+        $known = CostReconciliationService::scaledOf((string) $rec->calculated_known_amount);
+        $variance = $rec->cost_coverage_status->allowsVariance();
 
-        return $at;
+        return [
+            'scope' => $scope,
+            'rec' => $rec,
+            'status' => $rec->source === ReconciliationSource::ConfirmedZero ? 'CONFIRMED ZERO' : 'RECONCILED',
+            'base' => $rec->source === ReconciliationSource::ConfirmedZero ? 'CONFIRMED ZERO' : ReconciliationRules::format($base),
+            'adjustments' => ReconciliationRules::format($adjustmentsScaled),
+            'adjusted' => ReconciliationRules::format($base + $adjustmentsScaled),
+            'variance' => $variance ? ReconciliationRules::format($base + $adjustmentsScaled - $known) : null,
+            'varianceStatus' => $variance ? 'KNOWN (frozen)' : ($rec->cost_coverage_status === CostCoverageStatus::NoProducer ? 'UNKNOWN (NO PRODUCER)' : 'UNKNOWN (PARTIAL CALCULATED COVERAGE)'),
+            'coverage' => $rec->cost_coverage_status->label(),
+        ];
+    }
+
+    /**
+     * @return array{component: ?string, counterparty: ?string, currency: ?string, status: ?string}
+     */
+    public function filters(): array
+    {
+        $component = strtolower(trim($this->component));
+        $counterparty = trim($this->counterparty);
+        $currency = strtoupper(trim($this->currency));
+        $status = strtolower(trim($this->status));
+
+        return [
+            'component' => CostComponent::tryFrom($component)?->value,
+            'counterparty' => preg_match('/^[\p{L}\p{N}_\-.:\/#]{1,64}$/u', $counterparty) === 1 ? $counterparty : null,
+            'currency' => preg_match('/^[A-Z]{3}$/', $currency) === 1 ? $currency : null,
+            'status' => in_array($status, self::STATUSES, true) ? $status : null,
+        ];
+    }
+
+    protected function refreshRecord(): void
+    {
+        // The list has no record-bound write action.
     }
 }

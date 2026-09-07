@@ -48,7 +48,7 @@ it('never issues UPDATE or DELETE against usage_events during a full reconciliat
     });
 
     $rec = e2Reconcile([[$service->id, '5.000000'], [$credit->id, '-1.000000']]);
-    app(CostReconciliationService::class)->adjust($rec->id, '-0.250000', 'credit_note', 'cn:1');
+    app(CostReconciliationService::class)->adjust($rec->id, '-0.250000', 'credit_note', 'cn:1', e2Key());
     e2Reconcile([], ['expectedCurrentReconciliationId' => $rec->id, 'source' => 'manual_evidenced', 'reconciledAmount' => '4.000000', 'reasonCode' => 'restated', 'evidenceRef' => 'stmt']);
     app(ReconciledCostQuery::class)->summarise('2026-08', '2026-08');
 

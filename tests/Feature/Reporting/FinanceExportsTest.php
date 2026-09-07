@@ -189,7 +189,7 @@ it('close export: frozen rows only — figures, conditions, expected providers a
     $close = closeMonth('2026-08', null, 'k1');
     $before = csvGet(userWithRole(Role::Finance), 'dashboard.finance.close.export', ['close' => $close->id])->streamedContent();
 
-    app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2', e2Key());
     fxRate(['rate' => '3.70', 'rateDate' => '2026-08-10', 'expectedCurrentRateId' => $fx['rate']->id, 'reasonCode' => 'correction', 'evidenceRef' => 'boi:rev2']);
     app(ReportingCurrencyService::class)->change('ILS', 'ILS');
 

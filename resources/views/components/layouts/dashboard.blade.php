@@ -18,6 +18,7 @@
         ['route' => 'dashboard.finance', 'label' => 'المالية', 'icon' => '📈', 'can' => 'finance.view'],
         ['route' => 'dashboard.finance.payments', 'label' => 'المدفوعات', 'icon' => '💳', 'can' => 'finance.payments.manage'],
         ['route' => 'dashboard.finance.refunds', 'label' => 'الاستردادات', 'icon' => '↩️', 'can' => 'finance.payments.manage'],
+        ['route' => 'dashboard.finance.cost_invoices', 'label' => 'فواتير التكلفة', 'icon' => '🧾', 'can' => 'finance.reconcile'],
         ['route' => 'dashboard.finance.reconciliation', 'label' => 'تسوية التكلفة', 'icon' => '🧮', 'can' => 'finance.reconcile'],
         ['route' => 'dashboard.finance.fx', 'label' => 'أسعار الصرف', 'icon' => '💱', 'can' => 'finance.fx.manage'],
         ['route' => 'dashboard.finance.close', 'label' => 'إقفال الفترة', 'icon' => '🔒', 'can' => 'finance.view'],

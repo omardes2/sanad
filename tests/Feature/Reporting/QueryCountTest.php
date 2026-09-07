@@ -41,7 +41,7 @@ function revisions(array $fx, int $n): void
     $close = closeMonth('2026-08', null, 'rev-1');
     for ($i = 2; $i <= $n; $i++) {
         $reopen = app(PeriodCloseService::class)->reopen($close->id, $close->id, 'restatement', 'memo:'.$i, 'REOPEN 2026-08');
-        app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:'.$i);
+        app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:'.$i, e2Key());
         $close = closeMonth('2026-08', $reopen->id, 'rev-'.$i);
     }
 }
@@ -71,7 +71,7 @@ it('close history: the number of queries does not grow with the number of revisi
     for ($i = 2; $i <= 4; $i++) {
         $current = FinancePeriodClose::query()->orderByDesc('id')->first();
         $reopen = app(PeriodCloseService::class)->reopen($current->id, $current->id, 'restatement', 'memo:'.$i, 'REOPEN 2026-08');
-        app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:'.$i);
+        app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:'.$i, e2Key());
         closeMonth('2026-08', $reopen->id, 'rev-'.$i);
     }
     expect(FinancePeriodClose::count())->toBe(7); // 4 closes + 3 reopen records

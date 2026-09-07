@@ -46,7 +46,7 @@ it('renders a historical close from its frozen row and inputs — live changes, 
     $inputHash = $close->input_hash;
 
     // Live world moves on: new adjustment (live contribution 132), a corrected FX quote, a new reporting currency.
-    app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2', e2Key());
     $corrected = fxRate(['rate' => '3.70', 'rateDate' => '2026-08-10', 'expectedCurrentRateId' => $fx['rate']->id, 'reasonCode' => 'correction', 'evidenceRef' => 'boi:rev2']);
     app(ReportingCurrencyService::class)->change('ILS', 'ILS');
 
@@ -91,7 +91,7 @@ it('CHECK CURRENT DRIFT is on demand only: nothing on render, an explicit answer
         ->assertSee('CHECK CURRENT DRIFT')->assertDontSee('data-testid="drift-result"', false)
         ->call('checkDrift')->assertSee('NO DRIFT')->assertSee('131.000000');
 
-    app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2', e2Key());
     $page->call('checkDrift')->assertSee('DRIFT SINCE CLOSE')->assertSee('frozen values unchanged')->assertSee('131.000000')->assertDontSee('132.000000');
     expect((string) $close->fresh()->reconciled_cash_contribution)->toBe('131.000000');
 });
@@ -138,7 +138,7 @@ it('close history page: rows come from the frozen rows, the current close drift 
     $fx = closableMonth();
     $v1 = closeMonth('2026-08', null, 'k1');
     $reopen = app(PeriodCloseService::class)->reopen($v1->id, $v1->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
-    app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2');
+    app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2', e2Key());
     $v2 = closeMonth('2026-08', $reopen->id, 'k2');
 
     $page = Livewire::actingAs(userWithRole(Role::Finance))->test(PeriodClose::class)->set('month', '2026-08')

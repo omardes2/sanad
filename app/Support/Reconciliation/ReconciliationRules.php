@@ -76,6 +76,16 @@ final class ReconciliationRules
         }
     }
 
+    /** Same contract as MoneyRules::idempotencyKey (opaque, non-empty, ≤ 191, single line, no payload / PII), refused as an E2 rule. */
+    public static function idempotencyKey(?string $key, string $rule = 'idempotency_key'): string
+    {
+        try {
+            return MoneyRules::idempotencyKey($key, $rule);
+        } catch (PaymentRuleException $e) {
+            throw ReconciliationRuleException::of($rule, $e->getMessage());
+        }
+    }
+
     public static function requiredRef(?string $value, int $max, string $rule): string
     {
         $ref = self::ref($value, $max, $rule);
