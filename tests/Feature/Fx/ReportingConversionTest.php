@@ -10,7 +10,6 @@ use App\Models\FxConversion;
 use App\Models\FxConversionScope;
 use App\Models\FxRate;
 use App\Services\Audit\AuditLogger;
-use App\Services\Fx\ReportingCurrencyService;
 use App\Services\Fx\ReportingView;
 use App\Support\Audit\AuditActions;
 use App\Support\Security\SecretRedactor;
@@ -98,7 +97,7 @@ it('revises a conversion append-only under its scope pointer; a stale expectatio
         ->and(fn () => $c1->delete())->toThrow(ImmutableFinancialRecordException::class)
         ->and(fn () => $scope->forceFill(['target_currency' => 'EUR'])->save())->toThrow(ImmutableFinancialRecordException::class);
 
-    app(ReportingCurrencyService::class)->change('ILS', 'ILS');
+    rcSet('ILS');
     $view = app(ReportingView::class)->cash(CarbonImmutable::parse('2026-08-01', 'UTC'), CarbonImmutable::parse('2026-09-01', 'UTC'));
     expect($view['lines'][0]->status)->toBe('CONVERTED')->and($view['lines'][0]->targetAmount)->toBe('370.00')->and($view['lines'][0]->conversionId)->toBe($c2->id)->and($view['lines'][0]->fxRateId)->toBe($r2->id);
 });

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Livewire\Dashboard\Finance\Concerns;
 
+use App\Exceptions\Close\CloseBlockedException;
+use App\Exceptions\Close\CloseRuleException;
+use App\Exceptions\Close\StaleCloseException;
 use App\Exceptions\Fx\FxRuleException;
 use App\Exceptions\Fx\StaleFxException;
 use App\Exceptions\Payments\PaymentConflictException;
@@ -132,7 +135,7 @@ trait HandlesFinanceActions
 
         try {
             $action();
-        } catch (StalePaymentStateException|StaleReconciliationException|StaleFxException $e) {
+        } catch (StalePaymentStateException|StaleReconciliationException|StaleFxException|StaleCloseException $e) {
             SubmitAttempt::release($form, $attemptKey);
             $this->addError($form.'.stale', self::STALE_MESSAGE.' ('.$e->getMessage().')');
             $this->refreshRecord();
@@ -143,7 +146,12 @@ trait HandlesFinanceActions
             $this->addError($form.'.conflict', 'Idempotency conflict — '.$e->getMessage());
 
             return false;
-        } catch (PaymentRuleException|ReconciliationRuleException|FxRuleException $e) {
+        } catch (CloseBlockedException $e) {
+            SubmitAttempt::release($form, $attemptKey);
+            $this->addError($form.'.rule', 'BLOCKED — '.implode(' · ', $e->conditions));
+
+            return false;
+        } catch (PaymentRuleException|ReconciliationRuleException|FxRuleException|CloseRuleException $e) {
             SubmitAttempt::release($form, $attemptKey);
             $this->addError($form.'.rule', $e->rule.' — '.$e->getMessage());
 

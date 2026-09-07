@@ -5,7 +5,6 @@ declare(strict_types=1);
 use App\Models\FinancePeriodClose;
 use App\Models\User;
 use App\Services\Close\PeriodCloseService;
-use App\Services\Fx\ReportingCurrencyService;
 use App\Services\Fx\ReportingView;
 use App\Services\Payments\CashCollectedQuery;
 use App\Services\Reconciliation\CostReconciliationService;
@@ -191,7 +190,7 @@ it('close export: frozen rows only — figures, conditions, expected providers a
 
     app(CostReconciliationService::class)->adjust($fx['reconciliation']->id, '-1.000000', 'credit', 'cn:2', e2Key());
     fxRate(['rate' => '3.70', 'rateDate' => '2026-08-10', 'expectedCurrentRateId' => $fx['rate']->id, 'reasonCode' => 'correction', 'evidenceRef' => 'boi:rev2']);
-    app(ReportingCurrencyService::class)->change('ILS', 'ILS');
+    rcSet('ILS');
 
     $response = csvGet(userWithRole(Role::Finance), 'dashboard.finance.close.export', ['close' => $close->id]);
     $sections = assertContract($response, 'FROZEN CLOSE REVISION 1');
@@ -217,7 +216,7 @@ it('close export: frozen rows only — figures, conditions, expected providers a
 
     // A NULL figure is an empty cell + NOT AVAILABLE — proven on a reopen record (no figures) and on the frozen conditions of a reopen export.
     $this->actingAs(userWithRole(Role::SuperAdmin));
-    $reopen = app(PeriodCloseService::class)->reopen($close->id, $close->id, 'restatement', 'memo:1', 'REOPEN 2026-08');
+    $reopen = app(PeriodCloseService::class)->reopen($close->id, $close->id, 'restatement', 'memo:1', 'REOPEN 2026-08', e4Key());
     $sections = assertContract(csvGet(userWithRole(Role::Finance), 'dashboard.finance.close.export', ['close' => $reopen->id]), 'REOPEN RECORD (revision 1)');
     $figures = array_column($sections['figures'], null, 'figure');
     expect($figures['reconciled_cash_contribution']['amount'])->toBe('')->and($figures['reconciled_cash_contribution']['status'])->toBe('NOT AVAILABLE')->and($sections['inputs'] ?? [])->toBe([])

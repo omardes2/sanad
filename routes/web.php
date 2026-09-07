@@ -23,6 +23,10 @@ use App\Livewire\Dashboard\Finance\CloseDetail as FinanceCloseDetail;
 use App\Livewire\Dashboard\Finance\CostInvoiceDetail as FinanceCostInvoiceDetail;
 use App\Livewire\Dashboard\Finance\CostInvoices as FinanceCostInvoices;
 use App\Livewire\Dashboard\Finance\Fx as FinanceFx;
+use App\Livewire\Dashboard\Finance\FxConversions as FinanceFxConversions;
+use App\Livewire\Dashboard\Finance\FxConversionScopeDetail as FinanceFxConversionScopeDetail;
+use App\Livewire\Dashboard\Finance\FxRates as FinanceFxRates;
+use App\Livewire\Dashboard\Finance\FxRateScopeDetail as FinanceFxRateScopeDetail;
 use App\Livewire\Dashboard\Finance\PaymentDetail as FinancePaymentDetail;
 use App\Livewire\Dashboard\Finance\Payments as FinancePayments;
 use App\Livewire\Dashboard\Finance\PeriodClose as FinancePeriodClose;
@@ -120,8 +124,12 @@ Route::middleware(['auth', 'admin'])
         Route::get('/finance/reconciliation', FinanceReconciliation::class)->middleware('permission:finance.reconcile')->name('dashboard.finance.reconciliation');
         Route::get('/finance/reconciliation/new', FinanceReconciliationScopeDetail::class)->middleware('permission:finance.reconcile')->name('dashboard.finance.reconciliation.new');
         Route::get('/finance/reconciliation/{scope}', FinanceReconciliationScopeDetail::class)->middleware('permission:finance.reconcile')->whereNumber('scope')->name('dashboard.finance.reconciliation.show');
-        // Phase E3 — manual FX quotes, frozen reporting conversions, reporting currency (finance.fx.manage).
+        // Phase E3 → E5.2c — manual FX quotes, frozen reporting conversions, reporting currency (finance.fx.manage on every page and every write).
         Route::get('/finance/fx', FinanceFx::class)->middleware('permission:finance.fx.manage')->name('dashboard.finance.fx');
+        Route::get('/finance/fx/rates', FinanceFxRates::class)->middleware('permission:finance.fx.manage')->name('dashboard.finance.fx.rates');
+        Route::get('/finance/fx/rates/{scope}', FinanceFxRateScopeDetail::class)->middleware('permission:finance.fx.manage')->whereNumber('scope')->name('dashboard.finance.fx.rates.show');
+        Route::get('/finance/fx/conversions', FinanceFxConversions::class)->middleware('permission:finance.fx.manage')->name('dashboard.finance.fx.conversions');
+        Route::get('/finance/fx/conversions/{scope}', FinanceFxConversionScopeDetail::class)->middleware('permission:finance.fx.manage')->whereNumber('scope')->name('dashboard.finance.fx.conversions.show');
         // Phase E4 — period close: finance.view reads preflight/history; close/reopen re-check finance.close_period (super_admin only).
         Route::get('/finance/close', FinancePeriodClose::class)->middleware('permission:finance.view')->name('dashboard.finance.close');
         // Phase E5.1 — read-only reporting: frozen close detail (finance.view) and CSV exports (finance.export; re-checked in the controller).

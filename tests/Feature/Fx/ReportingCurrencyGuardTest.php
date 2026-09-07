@@ -14,6 +14,7 @@ use App\Support\Audit\AuditActions;
 use App\Support\Rbac\Role;
 use App\Support\Settings\SettingsRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -72,8 +73,8 @@ it('refuses the managed-writer path itself without the typed confirmation or wit
             ->and(fn () => $repo->setManaged(RC, 'ILS', 'bypass', 'ils'))->toThrow(TypedConfirmationRequiredException::class)
             ->and(fn () => $repo->setManaged(RC, 'ILS', 'bypass', 'USD'))->toThrow(TypedConfirmationRequiredException::class)
             ->and(fn () => $repo->setManaged(RC, 'ILS', 'bypass', ''))->toThrow(TypedConfirmationRequiredException::class)
-            ->and(fxRule(fn () => app(ReportingCurrencyService::class)->change('ILS', 'ils')))->toBe('typed_confirmation')
-            ->and(fxRule(fn () => app(ReportingCurrencyService::class)->change('ILS', 'ILS ')))->toBe('typed_confirmation');
+            ->and(fxRule(fn () => app(ReportingCurrencyService::class)->change('ILS', 'ils', 'USD')))->toBe('typed_confirmation')
+            ->and(fxRule(fn () => app(ReportingCurrencyService::class)->change('ILS', 'ILS ', 'USD')))->toBe('typed_confirmation');
     }
 
     expect(rcRows())->toBe(0)->and(rcAudits())->toBe(0)->and(app(ReportingCurrencyService::class)->current())->toBe('USD');
@@ -84,7 +85,7 @@ it('writes exactly one row and one settings audit plus one FX audit when the cod
     $finance = userWithRole(Role::Finance);
 
     Livewire::actingAs($finance)->test(FxPage::class)->assertOk()
-        ->set('rcCode', 'ILS')->set('rcTyped', 'ils')->call('setReportingCurrency')->assertHasErrors(['reporting_currency'])
+        ->set('rcCode', 'ILS')->set('rcTyped', 'ils')->call('setReportingCurrency')->assertHasErrors(['currency.rule'])
         ->set('rcTyped', 'ILS')->call('setReportingCurrency')->assertHasNoErrors()->assertSee('عملة التقرير الآن ILS');
 
     expect(rcRows())->toBe(1)
@@ -95,9 +96,9 @@ it('writes exactly one row and one settings audit plus one FX audit when the cod
 
     // super_admin: permission alone is not enough — the typed code is still required.
     $this->actingAs(userWithRole(Role::SuperAdmin));
-    expect(fxRule(fn () => app(ReportingCurrencyService::class)->change('EUR', 'eur')))->toBe('typed_confirmation')
+    expect(fxRule(fn () => app(ReportingCurrencyService::class)->change('EUR', 'eur', 'USD')))->toBe('typed_confirmation')
         ->and(rcRows())->toBe(1)->and(AuditLog::where('action', AuditActions::SettingsUpdated)->count())->toBe(1);
-    app(ReportingCurrencyService::class)->change('EUR', 'EUR');
+    rcSet('EUR');
     expect(app(ReportingCurrencyService::class)->current())->toBe('EUR')->and(rcRows())->toBe(1) // same row updated, never a second row
         ->and(AuditLog::where('action', AuditActions::SettingsUpdated)->count())->toBe(2);
 });
@@ -112,4 +113,44 @@ it('has no other writer of the key in the codebase', function () {
     }
 
     expect($writers)->toBe(['Services/Fx/ReportingCurrencyService.php']);
+});
+
+it('no caller can bypass the concurrency contract: change() requires the currency the caller saw, and the setting is still writable only through it (E5.2c)', function () {
+    $change = new ReflectionMethod(ReportingCurrencyService::class, 'change');
+    $required = array_values(array_filter($change->getParameters(), fn (ReflectionParameter $p) => ! $p->isOptional()));
+
+    expect(array_map(fn (ReflectionParameter $p) => $p->getName(), $required))->toBe(['currency', 'typedConfirmation', 'expectedCurrentCurrency'])
+        ->and($change->getParameters()[2]->allowsNull())->toBeFalse(); // never "unknown", never last-writer-wins
+});
+
+it('claiming the key materialises ONLY its current effective value, changes nothing, audits nothing, and disappears with a rolled-back transaction (E5.2c)', function () {
+    config(['billing.cost_currency' => 'USD']);
+    $repository = app(SettingsRepository::class);
+    $audits = rcAudits();
+
+    expect(rcRows())->toBe(0);
+
+    DB::transaction(function () use ($repository): void {
+        expect($repository->lockManaged(RC))->toBeNull() // nothing was stored before this transaction
+            ->and(AppSetting::query()->where('key', RC)->value('value'))->toBe('USD') // the claim carries the value already in effect
+            ->and($repository->get(RC))->toBe('USD');
+    });
+
+    // The claim is not a change: same effective value, no audit, and the row is only the lock target.
+    expect(rcRows())->toBe(1)->and(rcAudits())->toBe($audits)->and(app(ReportingCurrencyService::class)->current())->toBe('USD');
+
+    AppSetting::query()->where('key', RC)->delete();
+    $repository->cacheFlush();
+
+    try {
+        DB::transaction(function () use ($repository): void {
+            $repository->lockManaged(RC);
+            throw new RuntimeException('roll back');
+        });
+    } catch (RuntimeException) {
+        // expected
+    }
+
+    $repository->cacheFlush();
+    expect(rcRows())->toBe(0)->and(rcAudits())->toBe($audits); // a rolled-back attempt leaves nothing behind
 });

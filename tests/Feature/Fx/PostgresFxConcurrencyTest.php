@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 use App\Enums\FxSubjectType;
 use App\Models\AiProvider;
+use App\Models\AppSetting;
 use App\Models\AuditLog;
 use App\Models\CostInvoice;
 use App\Models\CostInvoiceAllocation;
 use App\Models\CostReconciliation;
 use App\Models\CostReconciliationScope;
-use App\Models\CustomerPayment;
 use App\Models\FxConversion;
 use App\Models\FxConversionScope;
 use App\Models\FxPair;
@@ -17,6 +17,8 @@ use App\Models\FxRate;
 use App\Models\FxRateScope;
 use App\Models\User;
 use App\Services\Fx\ReportingConversionService;
+use App\Services\Fx\ReportingCurrencyService;
+use App\Services\Settings\SettingsRepository;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\Process\Process;
@@ -44,63 +46,6 @@ beforeEach(function () {
         $this->markTestSkipped('PostgreSQL is not reachable.');
     }
 });
-
-function fxRun(array $args): Process
-{
-    $p = new Process(['php', 'artisan', 'sanad:fx-probe', ...$args], base_path());
-    $p->start();
-
-    return $p;
-}
-
-/** @return list<string> */
-function fxOutcomes(array $processes): array
-{
-    $outcomes = [];
-    foreach ($processes as $p) {
-        $p->wait();
-        expect($p->getExitCode())->toBe(0, $p->getOutput().$p->getErrorOutput());
-        $outcomes[] = trim($p->getOutput());
-    }
-
-    return $outcomes;
-}
-
-/** Two synthetic currency codes nobody else uses, so cleanup touches only this test's rows. */
-function fxCodes(): array
-{
-    $letters = static fn (): string => chr(random_int(65, 90)).chr(random_int(65, 90));
-    $a = 'X'.$letters();
-    $b = 'Y'.$letters();
-
-    return [$a, $b];
-}
-
-function fxCleanup(array $codes, ?User $user = null): void
-{
-    $pairIds = FxPair::query()->whereIn('base_currency', $codes)->orWhereIn('quote_currency', $codes)->pluck('id');
-    $rateIds = FxRate::query()->whereIn('fx_pair_id', $pairIds)->pluck('id');
-    $convIds = FxConversion::query()->whereIn('fx_rate_id', $rateIds)->pluck('id');
-    $convScopeIds = FxConversion::query()->whereIn('id', $convIds)->pluck('scope_id');
-    DB::table('fx_conversion_scopes')->whereIn('id', $convScopeIds)->update(['current_conversion_id' => null]);
-    DB::table('fx_conversions')->whereIn('id', $convIds)->delete();
-    DB::table('fx_conversion_scopes')->whereIn('id', $convScopeIds)->delete();
-    DB::table('cost_invoice_allocations')->whereIn('fx_rate_id', $rateIds)->delete();
-    DB::table('fx_rate_scopes')->whereIn('fx_pair_id', $pairIds)->update(['current_rate_id' => null]);
-    DB::table('fx_rates')->whereIn('id', $rateIds)->delete();
-    AuditLog::where('subject_type', (new FxRateScope)->getMorphClass())->whereIn('subject_id', FxRateScope::query()->whereIn('fx_pair_id', $pairIds)->pluck('id'))->delete();
-    DB::table('fx_rate_scopes')->whereIn('fx_pair_id', $pairIds)->delete();
-    AuditLog::where('subject_type', (new FxPair)->getMorphClass())->whereIn('subject_id', $pairIds)->delete();
-    DB::table('fx_pairs')->whereIn('id', $pairIds)->delete();
-
-    if ($user !== null) {
-        $paymentIds = CustomerPayment::query()->where('subscriber_id', $user->id)->pluck('id');
-        DB::table('customer_payment_events')->whereIn('customer_payment_id', $paymentIds)->delete();
-        AuditLog::where('subject_type', (new CustomerPayment)->getMorphClass())->whereIn('subject_id', $paymentIds)->delete();
-        DB::table('customer_payments')->whereIn('id', $paymentIds)->delete();
-        $user->delete();
-    }
-}
 
 it('of 6 concurrent creations of USD/ILS and ILS/USD exactly one canonical pair exists', function () {
     [$a, $b] = fxCodes();
@@ -258,5 +203,64 @@ it('freezes the exact rate a cross-currency reconciliation named even while the 
         DB::table('cost_invoices')->where('id', $invoice->id)->delete();
         fxCleanup([$a, $b]);
         DB::table('ai_providers')->where('key', $cp)->delete();
+    }
+});
+
+/** Remove every trace of a reporting-currency race so the shared PostgreSQL database is left exactly as it was. */
+function rcCleanup(): void
+{
+    DB::table('app_settings')->where('key', 'finance.reporting_currency')->delete();
+    AuditLog::whereIn('action', ['finance.reporting_currency_changed'])->delete();
+    AuditLog::where('action', 'settings.updated')->where('subject_type', (new AppSetting)->getMorphClass())->delete();
+    app(SettingsRepository::class)->cacheFlush();
+}
+
+it('of 6 concurrent reporting-currency changes with NO setting row yet exactly one wins: one row, one value, one FX audit, five stale (E5.2c)', function () {
+    rcCleanup(); // the key starts with no stored row at all: this is the first-write race
+    $before = app(ReportingCurrencyService::class)->current();
+    $target = $before === 'EUR' ? 'GBP' : 'EUR';
+
+    try {
+        $processes = [];
+        for ($i = 0; $i < 6; $i++) {
+            $processes[] = fxRun(['set-reporting-currency', $target, $before]);
+        }
+        $outcomes = fxOutcomes($processes);
+        app(SettingsRepository::class)->cacheFlush();
+
+        expect(array_filter($outcomes, fn ($o) => $o === 'ok:'.$target))->toHaveCount(1)
+            ->and(array_filter($outcomes, fn ($o) => $o === 'stale'))->toHaveCount(5) // never last-writer-wins, never "unchanged"
+            ->and(DB::table('app_settings')->where('key', 'finance.reporting_currency')->count())->toBe(1)
+            ->and(app(ReportingCurrencyService::class)->current())->toBe($target)
+            ->and(AuditLog::where('action', 'finance.reporting_currency_changed')->count())->toBe(1)
+            ->and(AuditLog::where('action', 'finance.reporting_currency_changed')->first()->metadata['changes']['reporting_currency'])->toBe(['from' => $before, 'to' => $target])
+            ->and(AuditLog::where('action', 'settings.updated')->where('subject_type', (new AppSetting)->getMorphClass())->count())->toBe(1);
+    } finally {
+        rcCleanup();
+    }
+});
+
+it('of 6 concurrent reporting-currency changes on an EXISTING row exactly one wins: one value, one FX audit, five stale (E5.2c)', function () {
+    rcCleanup();
+    $start = app(ReportingCurrencyService::class)->current() === 'EUR' ? 'GBP' : 'EUR';
+    rcSet($start); // the row now exists — the FOR UPDATE lock is the serialising point
+    $target = $start === 'EUR' ? 'GBP' : 'EUR';
+
+    try {
+        $processes = [];
+        for ($i = 0; $i < 6; $i++) {
+            $processes[] = fxRun(['set-reporting-currency', $target, $start]);
+        }
+        $outcomes = fxOutcomes($processes);
+        app(SettingsRepository::class)->cacheFlush();
+
+        expect(array_filter($outcomes, fn ($o) => $o === 'ok:'.$target))->toHaveCount(1)
+            ->and(array_filter($outcomes, fn ($o) => $o === 'stale'))->toHaveCount(5)
+            ->and(DB::table('app_settings')->where('key', 'finance.reporting_currency')->count())->toBe(1)
+            ->and(app(ReportingCurrencyService::class)->current())->toBe($target)
+            ->and(AuditLog::where('action', 'finance.reporting_currency_changed')->count())->toBe(2) // the setup change + exactly one winner
+            ->and(AuditLog::where('action', 'finance.reporting_currency_changed')->latest('id')->first()->metadata['changes']['reporting_currency'])->toBe(['from' => $start, 'to' => $target]);
+    } finally {
+        rcCleanup();
     }
 });

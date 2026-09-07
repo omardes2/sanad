@@ -1,11 +1,11 @@
-@props(['blocking' => [], 'warnings' => [], 'info' => [], 'frozen' => false, 'testid' => 'banners'])
+@props(['blocking' => [], 'warnings' => [], 'info' => [], 'frozen' => false, 'testid' => 'banners', 'actions' => []])
 {{-- Shared blocker / warning / info banners (Phase E5.1). The wording is the
      service condition itself (code + detail) — never rephrased, never a number.
      `frozen` marks conditions recorded WITH a historical close (they never change). --}}
 @if ($blocking !== [] || $warnings !== [] || $info !== [])
     <div class="mb-4 space-y-1" data-testid="{{ $testid }}" dir="ltr">
         @foreach ($blocking as $item)
-            <div class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-900" data-banner="blocking">BLOCKING · {{ $item }}</div>
+            <div class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-900" data-banner="blocking">BLOCKING · {{ $item }}@isset($actions[$item]) · <a class="underline" href="{{ $actions[$item]['href'] }}" data-banner-link="{{ $item }}">{{ $actions[$item]['label'] }}</a>@endisset</div>
         @endforeach
         @foreach ($warnings as $item)
             <div class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900" data-banner="warning">WARNING · {{ $item }}</div>

@@ -17,6 +17,7 @@ use App\Support\Settings\PromptTemplate;
 use App\Support\Settings\SettingDefinition;
 use App\Support\Settings\SettingsRegistry;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -100,6 +101,45 @@ class SettingsRepository
     public function set(string $key, mixed $value, ?string $reason = null): EffectiveSetting
     {
         return $this->write($key, $value, $reason, false);
+    }
+
+    /**
+     * Serialise the dedicated writers of ONE managed key (Phase E5.2c) and
+     * return the value they must decide on — the STORED value, or null when
+     * this transaction is the first writer of the key.
+     *
+     * With a row present the FOR UPDATE lock does the serialising. With NO row
+     * there is nothing to lock, and a plain read would let two first writers
+     * both pass their expectation check and the second one overwrite the first
+     * (last-writer-wins). So the key is CLAIMED instead: the row is inserted
+     * with the key's CURRENT EFFECTIVE value (its default) inside a savepoint,
+     * and the unique index on `key` decides the race — the loser blocks until
+     * the winner commits, then re-reads the winner's value under the lock and
+     * is refused by its caller as stale. The claim stores the value that was
+     * already in effect, so no effective value changes and nothing is audited
+     * for it; the real change and its audit follow in the same transaction,
+     * and a rollback removes the claim with them.
+     */
+    public function lockManaged(string $key): mixed
+    {
+        $definition = $this->registry->require($key);
+        $locked = static fn (): ?AppSetting => AppSetting::query()->where('key', $key)->lockForUpdate()->first();
+        $row = $locked();
+
+        if ($row !== null) {
+            return $row->value;
+        }
+
+        try {
+            DB::transaction(fn () => AppSetting::query()->create([
+                'key' => $key, 'value' => $definition->default(), 'updated_by' => Auth::id(), 'updated_by_ref' => $this->actorRef(),
+            ]));
+
+            return null; // this transaction claimed the key: nothing was stored before it
+        } catch (UniqueConstraintViolationException) {
+            // Another first writer got there first; we waited for its commit — decide on ITS value.
+            return $locked()?->value;
+        }
     }
 
     /**

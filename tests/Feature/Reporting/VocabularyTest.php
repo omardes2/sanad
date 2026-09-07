@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Models\FxConversionScope;
+use App\Models\FxRateScope;
 use App\Support\Rbac\Role;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,6 +31,7 @@ const ALLOWED_STATUS_PHRASES = [
     'no Revenue Recognition policy',
     'Revenue Recognition بعد',
     'Gross Profit / Margin / Revenue Recognition: <strong>NOT AVAILABLE</strong>',
+    'Revenue Recognition / Gross Profit: <strong>NOT AVAILABLE</strong>',
     'not a currency, never revenue',
     'Not revenue.',
     'revenue_history_unavailable',
@@ -87,7 +90,9 @@ it('overview, close history and close detail carry no forbidden metric name outs
 });
 
 it('source level: the finance views name no card or column after a forbidden term', function () {
-    foreach (['livewire/dashboard/finance.blade.php', 'livewire/dashboard/finance/period-close.blade.php', 'livewire/dashboard/finance/close-detail.blade.php', 'components/finance/banners.blade.php'] as $view) {
+    foreach (['livewire/dashboard/finance.blade.php', 'livewire/dashboard/finance/period-close.blade.php', 'livewire/dashboard/finance/close-detail.blade.php', 'components/finance/banners.blade.php',
+        'livewire/dashboard/finance/fx.blade.php', 'livewire/dashboard/finance/fx-rates.blade.php', 'livewire/dashboard/finance/fx-rate-scope-detail.blade.php',
+        'livewire/dashboard/finance/fx-conversions.blade.php', 'livewire/dashboard/finance/fx-conversion-scope-detail.blade.php'] as $view) {
         $src = file_get_contents(resource_path('views/'.$view));
         preg_match_all('/<p class="text-\[11px\] text-slate-500">([^<{]+)<\/p>|<th[^>]*>([^<{]+)<\/th>/u', $src, $m);
         foreach ([...$m[1], ...$m[2]] as $label) {
@@ -96,5 +101,35 @@ it('source level: the finance views name no card or column after a forbidden ter
             }
         }
         expect(preg_match('/data-testid="gross-margin"/', $src))->toBe(0);
+    }
+});
+
+it('the E5.2c FX pages carry no forbidden metric name, no PII and only UTC dates', function () {
+    $fx = closableMonth();
+    $rateScope = FxRateScope::query()->firstOrFail();
+    $conversionScope = FxConversionScope::query()->firstOrFail();
+    $subscriber = $fx['subscriber'];
+    $user = userWithRole(Role::Finance);
+
+    $pages = [
+        'fx landing' => route('dashboard.finance.fx'),
+        'fx rates' => route('dashboard.finance.fx.rates', ['from' => '2026-08-01', 'to' => '2026-08-31']),
+        'fx rate scope' => route('dashboard.finance.fx.rates.show', $rateScope->id),
+        'fx conversions' => route('dashboard.finance.fx.conversions'),
+        'fx conversion scope' => route('dashboard.finance.fx.conversions.show', $conversionScope->id),
+    ];
+
+    foreach ($pages as $name => $url) {
+        $response = $this->actingAs($user)->get($url)->assertOk();
+        $html = $response->getContent();
+
+        expect(forbiddenOccurrences($html))->toBe([], $name);
+        $response->assertDontSee($subscriber->email)->assertDontSee($subscriber->name)->assertSee('UTC');
+
+        foreach (metricLabels($html) as $label) {
+            foreach (FORBIDDEN_TERMS as $term) {
+                expect(stripos($label, $term))->toBeFalse($name.' label: '.$label);
+            }
+        }
     }
 });

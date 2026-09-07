@@ -129,9 +129,28 @@ final class PeriodCloseService
         });
     }
 
-    public function reopen(int $closeId, ?int $expectedCurrentCloseId, string $reasonCode, string $evidenceRef, string $typedConfirmation): FinancePeriodClose
+    /**
+     * Reopen the CURRENT close of a month — idempotent (Phase E5.2c).
+     *
+     * The caller owns the idempotency key. Same key + the same facts (the
+     * reopened close, its scope, reason, evidence, typed confirmation) ⇒ the
+     * recorded reopen row itself, with NO new row, NO audit and — decisively —
+     * NO pointer move: a historical replay long after the month was re-closed
+     * can never drag the scope's current close backwards. Same key + any
+     * different fact ⇒ idempotency_conflict. The unique index on
+     * idempotency_key is the authority; the insert runs in a savepoint and a
+     * violation is resolved by re-reading the row under that key.
+     *
+     * @throws CloseRuleException|StaleCloseException
+     */
+    public function reopen(int $closeId, ?int $expectedCurrentCloseId, string $reasonCode, string $evidenceRef, string $typedConfirmation, string $idempotencyKey): FinancePeriodClose
     {
         FinanceAuthorization::assertCan(Permission::FinanceClosePeriod);
+        $key = trim($idempotencyKey);
+
+        if ($key === '' || mb_strlen($key) > 191) {
+            throw CloseRuleException::of('idempotency_key', 'مفتاح idempotency إلزامي (حتى 191 حرفًا).');
+        }
 
         try {
             $reason = ReconciliationRules::requiredRef($reasonCode, 32, 'reason_code');
@@ -140,13 +159,23 @@ final class PeriodCloseService
             throw CloseRuleException::of($e->rule, $e->getMessage());
         }
 
-        return DB::transaction(function () use ($closeId, $expectedCurrentCloseId, $reason, $evidence, $typedConfirmation): FinancePeriodClose {
+        return DB::transaction(function () use ($closeId, $expectedCurrentCloseId, $reason, $evidence, $typedConfirmation, $key): FinancePeriodClose {
             $close = FinancePeriodClose::query()->whereKey($closeId)->first() ?? throw CloseRuleException::of('close', 'سجل الإقفال غير موجود.');
-            $scope = FinancePeriodCloseScope::query()->whereKey($close->scope_id)->lockForUpdate()->firstOrFail();
-            $monthKey = $scope->month();
+            $monthKey = $close->month();
 
             if ($typedConfirmation !== "REOPEN {$monthKey}") {
                 throw CloseRuleException::of('typed_confirmation', "اكتب REOPEN {$monthKey} حرفيًا لتأكيد إعادة الفتح.");
+            }
+
+            // Replay BEFORE the pointer is read: the recorded reopen is returned as it stands, whatever the scope became since.
+            if (($replay = $this->reopenReplay($key, $close, $reason, $evidence, $typedConfirmation)) !== null) {
+                return $replay;
+            }
+
+            $scope = FinancePeriodCloseScope::query()->whereKey($close->scope_id)->lockForUpdate()->firstOrFail();
+
+            if (($replay = $this->reopenReplay($key, $close, $reason, $evidence, $typedConfirmation)) !== null) {
+                return $replay; // committed by a concurrent request while we waited for the lock
             }
 
             if ($scope->current_close_id !== $expectedCurrentCloseId) {
@@ -158,24 +187,59 @@ final class PeriodCloseService
             }
 
             $now = CarbonImmutable::now();
-            $record = FinancePeriodClose::query()->create([
-                'scope_id' => $scope->id, 'period_start' => $close->period_start, 'period_end' => $close->period_end, 'reporting_currency' => $close->reporting_currency,
-                'status' => PeriodCloseStatus::Reopened->value, 'revision' => $close->revision, 'previous_close_id' => $close->id, 'reopened_close_id' => $close->id,
-                'idempotency_key' => 'reopen:'.$close->id.':'.$now->format('YmdHisu'),
-                'conditions' => [], 'inputs_snapshot' => ['reopened_close_id' => $close->id, 'reopened_input_hash' => $close->input_hash], 'input_hash' => null,
-                'typed_confirmation' => $typedConfirmation, 'reason_code' => $reason, 'evidence_ref' => $evidence,
-                'closed_at' => $now, 'actor_ref' => FinanceAuthorization::actorRef(), 'created_at' => $now,
-            ]);
 
-            $scope->forceFill(['state' => 'open', 'current_close_id' => $record->id, 'version' => $scope->version + 1, 'updated_by_ref' => FinanceAuthorization::actorRef()])->save();
+            try {
+                return DB::transaction(function () use ($scope, $close, $monthKey, $reason, $evidence, $typedConfirmation, $key, $now): FinancePeriodClose { // savepoint: row + pointer + audit, or none of them
+                    $record = FinancePeriodClose::query()->create([
+                        'scope_id' => $scope->id, 'period_start' => $close->period_start, 'period_end' => $close->period_end, 'reporting_currency' => $close->reporting_currency,
+                        'status' => PeriodCloseStatus::Reopened->value, 'revision' => $close->revision, 'previous_close_id' => $close->id, 'reopened_close_id' => $close->id,
+                        'idempotency_key' => $key,
+                        'conditions' => [], 'inputs_snapshot' => ['reopened_close_id' => $close->id, 'reopened_input_hash' => $close->input_hash], 'input_hash' => null,
+                        'typed_confirmation' => $typedConfirmation, 'reason_code' => $reason, 'evidence_ref' => $evidence,
+                        'closed_at' => $now, 'actor_ref' => FinanceAuthorization::actorRef(), 'created_at' => $now,
+                    ]);
 
-            $this->audit->record(AuditActions::FinancePeriodReopened, $scope, [
-                'current_close_id' => ['from' => $close->id, 'to' => $record->id],
-                'state' => ['from' => 'closed', 'to' => 'open'],
-            ], ['month' => $monthKey, 'reopened_close_id' => $close->id, 'reopened_input_hash' => $close->input_hash, 'reason_code' => $reason, 'evidence_ref' => $evidence, 'typed_confirmation' => $typedConfirmation]);
+                    $scope->forceFill(['state' => 'open', 'current_close_id' => $record->id, 'version' => $scope->version + 1, 'updated_by_ref' => FinanceAuthorization::actorRef()])->save();
 
-            return $record;
+                    $this->audit->record(AuditActions::FinancePeriodReopened, $scope, [
+                        'current_close_id' => ['from' => $close->id, 'to' => $record->id],
+                        'state' => ['from' => 'closed', 'to' => 'open'],
+                    ], ['month' => $monthKey, 'reopened_close_id' => $close->id, 'reopened_input_hash' => $close->input_hash, 'reason_code' => $reason, 'evidence_ref' => $evidence, 'typed_confirmation' => $typedConfirmation, 'idempotency_key' => $key]);
+
+                    return $record;
+                });
+            } catch (UniqueConstraintViolationException) {
+                return $this->reopenReplay($key, $close, $reason, $evidence, $typedConfirmation)
+                    ?? throw CloseRuleException::of('idempotency_conflict', "مفتاح idempotency [{$key}] مستخدم لسجل آخر. لم يُكتب شيء.");
+            }
         });
+    }
+
+    /**
+     * The reopen already recorded under this idempotency key, when it is the SAME
+     * request: the same reopened close, scope, reason, evidence and typed
+     * confirmation. Anything else under the same key is a conflict.
+     */
+    private function reopenReplay(string $key, FinancePeriodClose $close, string $reason, string $evidence, string $typed): ?FinancePeriodClose
+    {
+        $existing = FinancePeriodClose::query()->where('idempotency_key', $key)->first();
+
+        if ($existing === null) {
+            return null;
+        }
+
+        $same = $existing->status === PeriodCloseStatus::Reopened
+            && $existing->reopened_close_id === $close->id
+            && $existing->scope_id === $close->scope_id
+            && $existing->reason_code === $reason
+            && $existing->evidence_ref === $evidence
+            && $existing->typed_confirmation === $typed;
+
+        if (! $same) {
+            throw CloseRuleException::of('idempotency_conflict', "مفتاح idempotency [{$key}] مستخدم لسجل مختلف (#{$existing->id}). لم يُكتب شيء.");
+        }
+
+        return $existing;
     }
 
     /**

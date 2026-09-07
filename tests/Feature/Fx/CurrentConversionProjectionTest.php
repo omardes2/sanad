@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use App\Models\FxConversion;
 use App\Models\FxConversionScope;
-use App\Services\Fx\ReportingCurrencyService;
 use App\Services\Fx\ReportingView;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Events\QueryExecuted;
@@ -33,7 +32,7 @@ function currentCash(): array
 
 it('shows only the CURRENT conversion revision: v1 = 365 stays after the rate is corrected, v2 = 370 replaces it only when explicitly recorded, v1 remains as history', function () {
     $payment = e1Payment(billingSubscriber(), ['amount' => '100.00', 'currency' => 'USD', 'receivedAt' => CarbonImmutable::parse('2026-08-10 09:00:00', 'UTC')]);
-    app(ReportingCurrencyService::class)->change('ILS', 'ILS');
+    rcSet('ILS');
     $x = fxRate(['rate' => '3.65', 'rateDate' => '2026-08-10']);
 
     // 3) v1 with rate X ⇒ 365 ILS.
@@ -62,7 +61,7 @@ it('shows only the CURRENT conversion revision: v1 = 365 stays after the rate is
 
 it('reads fx_conversions only by the ids taken from the scope projection — no ORDER BY, no LIMIT, no created_at, no MAX(id)', function () {
     $payment = e1Payment(billingSubscriber(), ['amount' => '100.00', 'currency' => 'USD', 'receivedAt' => CarbonImmutable::parse('2026-08-10 09:00:00', 'UTC')]);
-    app(ReportingCurrencyService::class)->change('ILS', 'ILS');
+    rcSet('ILS');
     $x = fxRate(['rate' => '3.65', 'rateDate' => '2026-08-10']);
     $v1 = fxConvert('customer_payment', $payment->id, 'ILS', $x->id);
     $v2 = fxConvert('customer_payment', $payment->id, 'ILS', $x->id, ['expectedCurrentConversionId' => $v1->id, 'reasonCode' => 'redo']);
