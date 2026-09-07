@@ -20,17 +20,18 @@ it('adds and removes cost_invoices_period_start_id_idx reversibly without touchi
     $e2Indexes = ['cost_invoices_scope_idx', 'cost_invoices_status_idx', 'cost_invoices_counterparty_ref_unique', 'cost_invoices_idempotency_key_unique'];
     $invoice = e2Invoice();
 
-    expect($files)->toHaveCount(59)
-        ->and(basename(end($files)))->toBe('2026_09_06_001303_add_period_start_index_to_cost_invoices_table.php')
+    expect($files)->toHaveCount(60)
+        ->and(basename($files[count($files) - 2]))->toBe('2026_09_06_001303_add_period_start_index_to_cost_invoices_table.php')
         ->and(Schema::hasIndex('cost_invoices', 'cost_invoices_period_start_id_idx'))->toBeTrue()
         ->and(Schema::hasIndex('cost_invoices', ['period_start', 'id']))->toBeTrue();
 
-    Artisan::call('migrate:rollback', ['--step' => 1, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 2, '--force' => true]); // the F1 migration sits on top of this one
 
     expect(Schema::hasTable('cost_invoices'))->toBeTrue()
         ->and(Schema::hasIndex('cost_invoices', 'cost_invoices_period_start_id_idx'))->toBeFalse()
         ->and(DB::table('cost_invoices')->where('id', $invoice->id)->exists())->toBeTrue() // rows untouched
-        ->and(Schema::hasColumn('cost_adjustments', 'idempotency_key'))->toBeTrue(); // the first E5.2b migration is untouched
+        ->and(Schema::hasColumn('cost_adjustments', 'idempotency_key'))->toBeTrue() // the first E5.2b migration is untouched
+        ->and(Schema::hasTable('tool_consents'))->toBeFalse(); // the F1 migration came off with it and comes back below
     foreach ($e2Indexes as $index) {
         expect(Schema::hasIndex('cost_invoices', $index))->toBeTrue($index);
     }
@@ -38,7 +39,8 @@ it('adds and removes cost_invoices_period_start_id_idx reversibly without touchi
     Artisan::call('migrate', ['--force' => true]);
 
     expect(Schema::hasIndex('cost_invoices', 'cost_invoices_period_start_id_idx'))->toBeTrue()
-        ->and(DB::table('migrations')->count())->toBe(59)
+        ->and(DB::table('migrations')->count())->toBe(60)
+        ->and(Schema::hasTable('tool_consents'))->toBeTrue()
         ->and(DB::table('cost_invoices')->count())->toBe(1);
     foreach ($e2Indexes as $index) {
         expect(Schema::hasIndex('cost_invoices', $index))->toBeTrue($index);

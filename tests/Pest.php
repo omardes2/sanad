@@ -990,3 +990,19 @@ function fxCleanup(array $codes, ?User $user = null): void
         $user->delete();
     }
 }
+
+// ---- Tools (Phase F1) ------------------------------------------------------------------
+
+use App\Exceptions\Tools\ToolRuleException;
+
+/** The rule name a tool service refuses with, or "none". */
+function toolRule(callable $fn): string
+{
+    try {
+        $fn();
+    } catch (ToolRuleException $e) {
+        return $e->rule;
+    }
+
+    return 'none';
+}

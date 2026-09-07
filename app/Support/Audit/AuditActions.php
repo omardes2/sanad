@@ -122,4 +122,10 @@ final class AuditActions
 
     /** Phase E4 — a closed month was reopened by a new record (the old close untouched). */
     public const FinancePeriodReopened = 'finance.period_reopened';
+
+    /** Phase F1 — a subscriber's capability consent was granted (never implied, never defaulted). */
+    public const ToolConsentGranted = 'tool.consent_granted';
+
+    /** Phase F1 — a subscriber's capability consent was revoked (effective immediately). */
+    public const ToolConsentRevoked = 'tool.consent_revoked';
 }
