@@ -159,7 +159,7 @@ it('realistic PostgreSQL EXPLAIN on the page\'s own pagination SQL (6,000 invoic
 
     // BEFORE: without the E5.2b index (rolled back inside this transaction) the count scans the whole table and the page walks the
     // primary key backwards discarding thousands of newer rows before it finds 25 of the requested month — neither uses an index on the window
-    Artisan::call('migrate:rollback', ['--step' => 2, '--force' => true]); // the F1 tool_consents migration sits on top of the index one
+    Artisan::call('migrate:rollback', ['--step' => 4, '--force' => true]); // the F1 tool_consents migration and the two F2 invocation ones sit on top of the index one
     DB::statement('ANALYZE cost_invoices');
     expect(Schema::hasIndex('cost_invoices', 'cost_invoices_period_start_id_idx'))->toBeFalse();
     $beforeCount = $plan($statements[0]);

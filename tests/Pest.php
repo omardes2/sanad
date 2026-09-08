@@ -1006,3 +1006,87 @@ function toolRule(callable $fn): string
 
     return 'none';
 }
+
+// ---- Tool invocations (Phase F2) -------------------------------------------------------
+
+use App\Models\Conversation;
+use App\Models\Message;
+use App\Models\ToolInvocation;
+use App\Services\Tools\ReadToolExecutor;
+use App\Services\Tools\ToolInvocationStore;
+use App\Support\Tools\ToolCallPlan;
+
+/** A stored inbound message of one subscriber — the persisted fact an invocation identity is derived from. */
+function f2Message(User $subscriber): Message
+{
+    return Message::factory()->create([
+        'conversation_id' => Conversation::factory()->create(['user_id' => $subscriber->id])->id,
+        'user_id' => $subscriber->id,
+    ]);
+}
+
+function f2Executor(): ReadToolExecutor
+{
+    return app(ReadToolExecutor::class);
+}
+
+function f2Store(): ToolInvocationStore
+{
+    return app(ToolInvocationStore::class);
+}
+
+function f2Plan(): ToolCallPlan
+{
+    return app(ToolCallPlan::class);
+}
+
+/** The audit rows of one invocation, oldest first. */
+function f2Audits(ToolInvocation $row)
+{
+    return AuditLog::query()->where('subject_type', $row->getMorphClass())->where('subject_id', $row->id)->orderBy('id')->get();
+}
+
+/** The ledger rows linked to one invocation, by its persisted identity. */
+function f2Usage(ToolInvocation $row)
+{
+    return DB::table('usage_events')->where('tool_invocation_ref', (string) $row->id)->get();
+}
+
+/** One probe process (separate PHP, no shared transaction). */
+function f2Run(array $args): Process
+{
+    $p = new Process(['php', 'artisan', 'sanad:tool-invocation-probe', ...$args], base_path());
+    $p->start();
+
+    return $p;
+}
+
+/** @return list<string> */
+function f2Outcomes(array $processes): array
+{
+    $outcomes = [];
+
+    foreach ($processes as $p) {
+        $p->wait();
+        expect($p->getExitCode())->toBe(0, $p->getOutput().$p->getErrorOutput());
+        $outcomes[] = trim($p->getOutput());
+    }
+
+    return $outcomes;
+}
+
+/** Remove everything one race created, so the shared PostgreSQL database stays clean. */
+function f2Cleanup(User $subscriber): void
+{
+    $ids = ToolInvocation::query()->where('subscriber_id', $subscriber->id)->pluck('id');
+    DB::table('tool_invocation_events')->whereIn('tool_invocation_id', $ids)->delete();
+    AuditLog::query()->where('subject_type', (new ToolInvocation)->getMorphClass())->whereIn('subject_id', $ids)->delete();
+    DB::table('usage_events')->whereIn('tool_invocation_ref', $ids->map(fn ($id) => (string) $id))->delete();
+    DB::table('tool_invocations')->whereIn('id', $ids)->delete();
+    DB::table('tool_consents')->where('subscriber_id', $subscriber->id)->delete();
+    DB::table('memories')->where('user_id', $subscriber->id)->delete();
+    DB::table('messages')->where('user_id', $subscriber->id)->delete();
+    DB::table('conversations')->where('user_id', $subscriber->id)->delete();
+    DB::table('usage_events')->where('user_id', $subscriber->id)->delete();
+    $subscriber->delete();
+}

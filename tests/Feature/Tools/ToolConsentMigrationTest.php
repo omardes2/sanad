@@ -22,11 +22,11 @@ uses(RefreshDatabase::class);
  * rebuilds it with its unique identity and its index. No other table, column
  * or index of E0–E5 is touched.
  */
-it('is the 60th migration, creates tool_consents with its identity and index, and rolls back and forward cleanly', function () {
+it('is the 60th of 62 migrations, creates tool_consents with its identity and index, and rolls back and forward cleanly', function () {
     $files = glob(database_path('migrations/*.php'));
 
-    expect($files)->toHaveCount(60)
-        ->and(basename(end($files)))->toBe('2026_09_07_000101_create_tool_consents_table.php')
+    expect($files)->toHaveCount(62)
+        ->and(basename($files[count($files) - 3]))->toBe('2026_09_07_000101_create_tool_consents_table.php')
         ->and(Schema::hasTable('tool_consents'))->toBeTrue()
         ->and(Schema::hasIndex('tool_consents', 'tool_consents_subscriber_capability_unique'))->toBeTrue()
         ->and(Schema::hasIndex('tool_consents', 'tool_consents_capability_status_idx'))->toBeTrue();
@@ -40,7 +40,7 @@ it('is the 60th migration, creates tool_consents with its identity and index, an
     app(ToolConsentService::class)->grant($user->id, ToolCapability::TasksWrite, 0, ToolConsentReason::SubscriberRequest, EvidenceRef::of('message:1'));
     expect(DB::table('tool_consents')->count())->toBe(1);
 
-    Artisan::call('migrate:rollback', ['--step' => 1, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 3, '--force' => true]); // the two F2 invocation migrations sit on top of this one
 
     expect(Schema::hasTable('tool_consents'))->toBeFalse()
         // Everything the previous phases created is still there.
@@ -56,7 +56,7 @@ it('is the 60th migration, creates tool_consents with its identity and index, an
     expect(Schema::hasTable('tool_consents'))->toBeTrue()
         ->and(Schema::hasIndex('tool_consents', 'tool_consents_subscriber_capability_unique'))->toBeTrue()
         ->and(DB::table('tool_consents')->count())->toBe(0) // the table comes back empty, as a dropped table must
-        ->and(DB::table('migrations')->count())->toBe(60);
+        ->and(DB::table('migrations')->count())->toBe(62);
 
     app(ToolConsentService::class)->grant($user->id, ToolCapability::TasksWrite, 0, ToolConsentReason::SubscriberRequest, EvidenceRef::of('message:2'));
     expect(DB::table('tool_consents')->count())->toBe(1);

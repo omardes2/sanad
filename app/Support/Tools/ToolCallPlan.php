@@ -1,0 +1,81 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Support\Tools;
+
+use App\Data\Tools\ToolCallRequest;
+use App\Exceptions\Tools\ToolDefinitionException;
+use App\Exceptions\Tools\ToolRuleException;
+use App\Models\Message;
+use App\Models\User;
+
+/**
+ * The deterministic, ordered plan of the tool calls of ONE stored message
+ * (Phase F2) — the single production authority that assigns a call index and
+ * therefore an invocation identity.
+ *
+ * The plan is a pure function of (the message row, the ordered list of intended
+ * calls): position 1 is always position 1, so re-processing the same message
+ * with the same plan derives the same keys byte for byte. There is no provider
+ * tool-calling in F2, so the caller is Sanad's own orchestration and the order
+ * is whatever it deterministically produced.
+ *
+ * Ownership is taken from the message and from nothing else: the subscriber is
+ * the message's user and the conversation is the message's conversation, so a
+ * payload that names another subscriber, another conversation, a capability or
+ * a permission is simply not consulted — those fields do not exist in any tool
+ * schema, and `ToolSchema::validate()` would refuse them anyway.
+ */
+final class ToolCallPlan
+{
+    public function __construct(private readonly ToolRegistry $registry) {}
+
+    /**
+     * @param  list<array{key: string, arguments: array<string, mixed>}>  $calls  in their deterministic order
+     * @return list<ToolCallRequest>
+     *
+     * @throws ToolRuleException|ToolDefinitionException
+     */
+    public function of(Message $message, array $calls): array
+    {
+        if ($message->getKey() === null) {
+            throw ToolRuleException::of('message', 'الخطة تحتاج رسالة مخزَّنة، لا رسالة غير محفوظة.');
+        }
+
+        $subscriber = $message->user()->first();
+
+        if (! $subscriber instanceof User) {
+            throw ToolRuleException::of('subscriber', 'الرسالة لا تعود إلى مشترك قائم.');
+        }
+
+        $requests = [];
+        $index = 0;
+
+        foreach ($calls as $call) {
+            $index++;
+            $definition = $this->registry->requireKey($call['key']);
+
+            $requests[] = new ToolCallRequest(
+                message: $message,
+                subscriber: $subscriber,
+                definition: $definition,
+                callIndex: $index,
+                input: CanonicalInput::of($definition->input, $call['arguments']),
+                key: InvocationKey::of((int) $message->getKey(), $definition->key, $index),
+            );
+        }
+
+        return $requests;
+    }
+
+    /**
+     * The single-call turn: the same derivation, at position 1.
+     *
+     * @param  array<string, mixed>  $arguments
+     */
+    public function one(Message $message, string $key, array $arguments): ToolCallRequest
+    {
+        return $this->of($message, [['key' => $key, 'arguments' => $arguments]])[0];
+    }
+}

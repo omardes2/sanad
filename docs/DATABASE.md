@@ -181,6 +181,20 @@
 موافقة المشترك على **قدرة** (لا على أداة): `(subscriber_id, capability)` **فريدة** — قرار واحد يغطي كل نسخ الأدوات التي تحتاج القدرة. الأعمدة: `status` (`granted|revoked`) · `granted_at?`/`revoked_at?` · `reason_code` (قائمة مغلقة) · `evidence_ref?` (**مرجع آلي مبهم** `message|conversation|admin_action:<id>` أو `policy:<code>`، ASCII بلا فراغات وبحدّ 64؛ لا نص بشري ولا بريد ولا هاتف — وغيابه `NULL`) · `version` (عقد التزامن: المستدعي يذكر النسخة التي رآها، وعدم التطابق stale بلا كتابة) · `updated_by_ref` · timestamps. فهرس `(capability, status)`. على PostgreSQL: CHECK للحالة، وتلازم `granted_at`/`revoked_at` مع الحالة، و`version ≥ 1`.
 **لا صف = NOT GRANTED** (نسخة 0): لا منح ضمني ولا افتراضي ولا موروث من دور أو خطة. الكاتب الوحيد `ToolConsentService` (قفل الصف، أو إدراج داخل savepoint في الكتابة الأولى حيث يحكم الفهرس الفريد)؛ **المنح للمشترك نفسه فقط بفعل مصادَق**، والسحب له أو لمشغّل مخوَّل أو لتشغيل console أعلن نفسه إداريًا باسم محدود يُسجَّل `console_admin:<ref>`، وaudit واحد داخل المعاملة نفسها؛ التاريخ الكامل في `audit_logs` (`tool.consent_granted` / `tool.consent_revoked`) فلا جدول أحداث في هذه المرحلة. لا بيانات شخصية في الصف ولا في الـaudit.
 
+### `tool_invocations` + `tool_invocation_events` (F2)
+
+**`tool_invocations`** هو الإسقاط الحالي لاستدعاء واحد، وهويته `idempotency_key` **فريد** يولّده الخادم من حقائق مخزَّنة (`msg:<message_id>:tool:<name>@<version>:call:<n>`) — لا نموذج ولا مزوّد ولا مستدعٍ يختاره، ولا يُسكّ مفتاح بديل أبدًا. الأعمدة: `subscriber_id` · `tool_key` + `tool_version` (+ لقطة `capability` و`side_effect`) · `input_hash` (sha256 للصيغة القانونية) + `input` (وسائط الأداة بعد التحقّق) · `status` · `message_id?`/`conversation_id?` (nullOnDelete، فحذف رسالة لا يمحو التاريخ) + `call_index` (يُكتب مرة ولا يُحدَّث) · `output?` · `failure_kind?` · `refusal_reason?` · `duration_ms?`/`started_at?`/`finished_at?` · `version` (عقد التزامن **وعدد الانتقالات المخزَّنة**) · timestamps.
+**لا عمود `timeout_ms`**: المهلة خاصية النسخة الثابتة في سجل الكود فتبقى قابلة للاسترجاع الحتمي؛ ما يُخزَّن هو ما حدث فعلًا.
+الفهارس: فريد `idempotency_key` (حَكَم السباق) · `(subscriber_id, created_at)` (تاريخ المشترك) · `(status, created_at)` (كنس العالق). على PostgreSQL: CHECK لقائمة الحالات المغلقة (**لا `cancelled` في F2**) و`version ≥ 1` و`call_index ≥ 1`، وتلازم النجاح مع مخرجه وطوابعه، والفشل/انتهاء المهلة مع `failure_kind`، والرفض مع سببه وبلا `started_at` وبلا مخرج.
+
+**`tool_invocation_events`** هو التاريخ **append-only**: صف لكل انتقال مخزَّن، يُكتب في المعاملة نفسها التي تحرّك الإسقاط، بـ`(tool_invocation_id, seq)` **فريد**، و`from_status?`/`to_status`/`reason_code?`/`actor_ref`/`detail?`/`occurred_at`/`created_at` — **بلا `updated_at`** وبلا أي مسار تحديث أو حذف في التطبيق. الأول وحده بلا `from_status`. `detail` حقائق آلية محدودة فقط.
+
+الكاتب الوحيد للجدولين `ToolInvocationStore`: المطالبة تُدرج `planned` داخل savepoint فيحكم الفهرس الفريد، وكل انتقال يقفل `FOR UPDATE` ويتحقّق من جدول الانتقالات في الكود ويرفع `version` ويلحق حدثًا واحدًا؛ والانتقال النهائي يكتب أيضًا **audit واحدًا** و — إن كان الاستدعاء قد دخل `running` — **صف usage واحدًا**، في المعاملة نفسها. الحالة النهائية لا تقبل أي انتقال، فالتسوية تحدث مرة واحدة مهما تسابق العاملون والكنس.
+لا بيانات شخصية: المدخل والمخرج محدودان بالمخطط المغلق، والـaudit يحمل بصمة لا محتوى.
+
+### `usage_events` (F2، بلا تغيير في المخطط)
+تكلفة تنفيذ الأداة تمرّ عبر الدفتر القائم فقط: بُعد `tool_action`، و`operation = tool:<key>@<version>`، و`tool_invocation_ref = ` **معرّف الاستدعاء المخزَّن** (لا مفتاح الـidempotency: المفتاح هوية إزالة تكرار الطلب لا هوية مجال، ولا تُسرَّب بنية الرسالة/الأداة/النداء إلى الربط المالي). صف واحد على الأكثر لكل استدعاء بفضل `usage_events.idempotency_key` الفريد القائم (`tool_invocation:<id>`). **لا جدول تكلفة جديد، ولا عمود مالي تغيّر، ولا migration على الدفتر.**
+
 ### `audit_logs`
 سجل تدقيق **append-only**.
 - `user_id?` → `users` (**nullOnDelete**)
