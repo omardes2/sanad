@@ -61,7 +61,6 @@ class ReminderDispatchProbe extends Command
 
     private function deliver(ReminderDispatcher $dispatcher, int $id): int
     {
-        $before = Reminder::query()->find($id)?->attempts ?? 0;
         $dispatcher->deliver($id);
         $reminder = Reminder::query()->find($id);
 
@@ -71,17 +70,17 @@ class ReminderDispatchProbe extends Command
             return self::SUCCESS;
         }
 
-        // "skipped" = this process was not allowed to dispatch: no request left
-        // it, and the attempt counter is untouched.
-        $line = $reminder->attempts === $before
-            ? 'skipped:'.$reminder->attempts
-            : match ($reminder->status->value) {
-                'sent' => 'sent:'.$reminder->attempts,
-                'failed' => 'failed:'.(string) $reminder->last_error,
-                default => 'processing:'.$reminder->attempts,
-            };
+        // Whether THIS process sent is not inferred from the row — another
+        // process may have moved it between reads. The faked client records
+        // every request this process made, which is the authoritative fact.
+        $requests = count(Http::recorded());
 
-        $this->line($line);
+        $this->line(match (true) {
+            $requests === 0 => 'nosend:'.$reminder->status->value,
+            $reminder->status->value === 'sent' => 'sent:'.$reminder->attempts,
+            $reminder->status->value === 'failed' => 'dispatched:failed:'.(string) $reminder->last_error,
+            default => 'dispatched:'.$reminder->status->value,
+        });
 
         return self::SUCCESS;
     }

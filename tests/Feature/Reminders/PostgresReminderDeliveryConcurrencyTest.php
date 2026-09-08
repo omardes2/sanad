@@ -158,11 +158,13 @@ it('of 6 concurrent workers holding ONE claim only one dispatches a physical req
         ));
 
         $reminder->refresh();
+        $report = implode(' | ', $outcomes);
 
-        expect(array_filter($outcomes, fn (string $o): bool => $o === 'sent:1'))->toHaveCount(1)
-            // Everyone else is refused by the claim, not by luck.
-            ->and(array_filter($outcomes, fn (string $o): bool => str_starts_with($o, 'skipped:')))->toHaveCount(5)
-            ->and($reminder->attempts)->toBe(1)
+        // Exactly one process made a request; the other five were refused by
+        // the claim, not by luck.
+        expect(array_filter($outcomes, fn (string $o): bool => $o === 'sent:1'))->toHaveCount(1, $report)
+            ->and(array_filter($outcomes, fn (string $o): bool => str_starts_with($o, 'nosend:')))->toHaveCount(5, $report)
+            ->and($reminder->attempts)->toBe(1, $report)
             ->and($reminder->status)->toBe(ReminderStatus::Sent)
             // One outbound message, one ledger row for the one real send.
             ->and(DB::table('messages')->where('reminder_id', $reminder->id)->count())->toBe(1)
@@ -184,9 +186,13 @@ it('with one attempt already spent, racing sweepers and workers produce at most 
         expect($reminder->attempts)->toBe(1)
             ->and($reminder->status)->toBe(ReminderStatus::Processing);
 
-        // Age the claim past its lease, then let sweepers and workers race.
-        DB::table('reminders')->where('id', $reminder->id)
-            ->update(['claimed_at' => CarbonImmutable::now()->subSeconds(600)]);
+        // Age the row as real elapsed time would: a lease expires only after the
+        // dispatch it covered, so BOTH timestamps move back together. Then let
+        // sweepers and workers race for the one remaining attempt.
+        DB::table('reminders')->where('id', $reminder->id)->update([
+            'claimed_at' => CarbonImmutable::now()->subSeconds(600),
+            'dispatched_at' => CarbonImmutable::now()->subSeconds(590),
+        ]);
 
         $processes = [];
         for ($i = 0; $i < 3; $i++) {
@@ -198,12 +204,14 @@ it('with one attempt already spent, racing sweepers and workers produce at most 
         $claimers = rdOutcomes(array_map(fn () => rdRun(['claim', '10']), range(1, 3)));
         expect(array_filter($claimers, fn (string $o): bool => $o === 'claimed:'.$reminder->id))->toHaveCount(1);
 
-        rdOutcomes(array_map(fn () => rdRun(['deliver', (string) $reminder->id]), range(1, 4)));
+        $second = rdOutcomes(array_map(fn () => rdRun(['deliver', (string) $reminder->id]), range(1, 4)));
+        $report = implode(' | ', $second);
 
         $reminder->refresh();
 
-        // The ceiling holds: two physical sends, never a third.
-        expect($reminder->attempts)->toBe(2)
+        // The ceiling holds: the ONE permitted retry, and never a third send.
+        expect(array_filter($second, fn (string $o): bool => str_starts_with($o, 'sent:')))->toHaveCount(1, $report)
+            ->and($reminder->attempts)->toBe(2, $report)
             ->and($reminder->attempts)->toBeLessThanOrEqual(ReminderDispatcher::MAX_ATTEMPTS)
             ->and($reminder->status)->toBe(ReminderStatus::Sent)
             ->and(DB::table('messages')->where('reminder_id', $reminder->id)->count())->toBe(1)
@@ -226,8 +234,10 @@ it('never resets an accepted reminder and sends it again', function () {
 
         // Age the row as if the lease had expired, then race sweepers and
         // workers against the settled reminder.
-        DB::table('reminders')->where('id', $reminder->id)
-            ->update(['claimed_at' => CarbonImmutable::now()->subSeconds(600)]);
+        DB::table('reminders')->where('id', $reminder->id)->update([
+            'claimed_at' => CarbonImmutable::now()->subSeconds(600),
+            'dispatched_at' => CarbonImmutable::now()->subSeconds(590),
+        ]);
 
         $processes = array_map(fn () => rdRun(['sweep']), range(1, 3));
         $processes[] = rdRun(['claim', '10']);
