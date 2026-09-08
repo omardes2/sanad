@@ -194,3 +194,36 @@ it('derives invocation identity deterministically — never from existing rows',
         // A genuinely new invocation is a different but equally stable key.
         ->and(UsageKeys::invocation(UsageDimension::AiReply, $correlation, 2))->toBe('ai_reply:message:7#2');
 });
+
+it('separates the LOGICAL quota identity from the PHYSICAL provider-request identity', function () {
+    $correlation = UsageKeys::correlationForMessage(7);
+
+    // The quota key is scoped to the message: whatever the infrastructure had
+    // to retry, the subscriber's allowance is consumed once.
+    expect(UsageKeys::invocation(UsageDimension::AiReply, $correlation))->toBe('ai_reply:message:7#1');
+
+    // The provider key names one PHYSICAL request: a logical call position plus
+    // the real attempt that sent it. Both are pure functions of their inputs.
+    expect(UsageKeys::providerAttempt(UsageDimension::AiReply, $correlation, 1, 1))
+        ->toBe('ai_reply:message:7:call:1:attempt:1')
+        // A second round-trip in the SAME attempt — a different logical call.
+        ->and(UsageKeys::providerAttempt(UsageDimension::AiReply, $correlation, 2, 1))
+        ->toBe('ai_reply:message:7:call:2:attempt:1')
+        // The queue retried and physically re-sent call 1 — real money, and a
+        // key of its own, so it can never be deduplicated into the first row.
+        ->and(UsageKeys::providerAttempt(UsageDimension::AiReply, $correlation, 1, 2))
+        ->toBe('ai_reply:message:7:call:1:attempt:2')
+        // ...and never collides with the quota key.
+        ->and(UsageKeys::providerAttempt(UsageDimension::AiReply, $correlation, 1, 1))
+        ->not->toBe(UsageKeys::invocation(UsageDimension::AiReply, $correlation));
+
+    // The ledger accepts every distinct physical request as its own row.
+    foreach ([[1, 1], [2, 1], [1, 2]] as [$call, $attempt]) {
+        recorder()->record(usageRecord([
+            'correlationId' => $correlation,
+            'idempotencyKey' => UsageKeys::providerAttempt(UsageDimension::AiReply, $correlation, $call, $attempt),
+        ]));
+    }
+
+    expect(UsageEvent::where('correlation_id', $correlation)->count())->toBe(3);
+});

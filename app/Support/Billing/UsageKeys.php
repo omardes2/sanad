@@ -43,4 +43,25 @@ final class UsageKeys
 
         return "{$operation}:{$correlationId}#{$sequence}";
     }
+
+    /**
+     * ONE PHYSICAL provider request.
+     *
+     * `$call` is the logical position in the turn (call 1, 2 or 3) and `$attempt`
+     * is which real attempt at the message made it — the queue's own attempt
+     * number, never a count of existing rows. The two together are what the
+     * PROVIDER actually charged for: a queue retry re-sends call 1, and that
+     * second request gets its own key and its own ledger row instead of being
+     * deduplicated into the first.
+     *
+     * Quota is a different question and keeps using invocation() above: a
+     * subscriber's allowance is consumed once per user-facing reply, however
+     * many physical requests it took to produce.
+     */
+    public static function providerAttempt(UsageDimension|string $operation, string $correlationId, int $call, int $attempt): string
+    {
+        $operation = $operation instanceof UsageDimension ? $operation->value : $operation;
+
+        return "{$operation}:{$correlationId}:call:{$call}:attempt:{$attempt}";
+    }
 }

@@ -39,6 +39,7 @@ final class ToolInputPersistence
         // and tells an operator nothing the output does not already say.
         'memory.read@1' => [],
         'task.create@1' => [],
+        'task.list@1' => [],
         'task.complete@1' => [],
         'reminder.create@1' => [],
         'reminder.create@2' => [],

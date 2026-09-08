@@ -57,6 +57,7 @@ it('ships exactly the declared contracts, each one metadata only', function () {
     expect(array_keys($registry->all()))->toBe([
         'memory.read@1',
         'task.create@1',
+        'task.list@1',
         'task.complete@1',
         'reminder.cancel@1',
         'reminder.create@1',

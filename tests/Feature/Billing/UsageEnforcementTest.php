@@ -18,7 +18,6 @@ use App\Models\UsageEvent;
 use App\Models\User;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
-use App\Services\Billing\UsageRecorder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 
@@ -35,7 +34,6 @@ function metered(): MeteredAgentOrchestrator
         app(AiAgentOrchestrator::class),
         app(UsageEngine::class),
         app(UsageLimitResponder::class),
-        app(UsageRecorder::class),
     );
 }
 
@@ -166,7 +164,7 @@ it('keeps the cost event when the quota race is lost at the boundary (cost incur
         }
     };
 
-    $reply = (new MeteredAgentOrchestrator($inner, app(UsageEngine::class), app(UsageLimitResponder::class), app(UsageRecorder::class)))
+    $reply = (new MeteredAgentOrchestrator($inner, app(UsageEngine::class), app(UsageLimitResponder::class)))
         ->handle($subscriber, $conversation, $message);
 
     expect($reply->metadata['usage']['denied'])->toBe('limit_reached')

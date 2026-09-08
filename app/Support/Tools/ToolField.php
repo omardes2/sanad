@@ -22,6 +22,9 @@ final readonly class ToolField
 
     public const MAX_STRING = 2000;
 
+    /** A list is bounded in rows as well as in shape. */
+    public const MAX_ROWS = 50;
+
     /**
      * @param  list<string>  $options  the closed list for an enum field
      */
@@ -31,12 +34,14 @@ final readonly class ToolField
         public bool $required,
         public int $max,
         public array $options,
+        /** The closed row shape of a `list_of_rows` field; null for every scalar. */
+        public ?ToolSchema $items = null,
     ) {}
 
     /**
      * @param  list<string>  $options
      */
-    public static function of(string $name, ToolFieldType $type, bool $required = true, int $max = 191, array $options = []): self
+    public static function of(string $name, ToolFieldType $type, bool $required = true, int $max = 191, array $options = [], ?ToolSchema $items = null): self
     {
         if (preg_match(self::NAME, $name) !== 1) {
             throw ToolDefinitionException::of("Tool field [{$name}] is not a valid lower-case identifier.");
@@ -44,6 +49,25 @@ final readonly class ToolField
 
         if ($max < 1 || ($type === ToolFieldType::String && $max > self::MAX_STRING)) {
             throw ToolDefinitionException::of("Tool field [{$name}] needs a bound between 1 and ".self::MAX_STRING.'.');
+        }
+
+        if ($type === ToolFieldType::ListOfRows) {
+            if ($items === null) {
+                throw ToolDefinitionException::of("Tool field [{$name}] is a list and needs a declared row shape.");
+            }
+
+            if ($max > self::MAX_ROWS) {
+                throw ToolDefinitionException::of("Tool field [{$name}] is a list and is bounded to ".self::MAX_ROWS.' rows.');
+            }
+
+            // Depth is one, always: a row is scalars only.
+            foreach ($items->fields as $field) {
+                if (! $field->type->isScalar()) {
+                    throw ToolDefinitionException::of("Tool field [{$name}] declares a row containing a list; lists never nest.");
+                }
+            }
+        } elseif ($items !== null) {
+            throw ToolDefinitionException::of("Tool field [{$name}] is not a list and must not declare a row shape.");
         }
 
         if ($type === ToolFieldType::Enum) {
@@ -60,7 +84,7 @@ final readonly class ToolField
             throw ToolDefinitionException::of("Tool field [{$name}] is not an enum and must not declare options.");
         }
 
-        return new self($name, $type, $required, $max, array_values($options));
+        return new self($name, $type, $required, $max, array_values($options), $items);
     }
 
     /**
@@ -79,7 +103,38 @@ final readonly class ToolField
             ToolFieldType::Date => $this->temporal($value, '!Y-m-d', 'YYYY-MM-DD'),
             ToolFieldType::DateTime => $this->temporal($value, '!Y-m-d\TH:i', 'YYYY-MM-DDTHH:MM'),
             ToolFieldType::Enum => $this->enum($value),
+            ToolFieldType::ListOfRows => $this->rows($value),
         };
+    }
+
+    /**
+     * A bounded list of rows, each validated against the declared row shape.
+     * An undeclared key inside a row is refused exactly as it is at the top
+     * level — the contract is closed all the way down.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function rows(mixed $value): array
+    {
+        if (! is_array($value) || array_is_list($value) === false) {
+            throw $this->refuse('must be a list of rows');
+        }
+
+        if (count($value) > $this->max) {
+            throw $this->refuse('must hold at most '.$this->max.' rows');
+        }
+
+        $out = [];
+
+        foreach ($value as $row) {
+            if (! is_array($row)) {
+                throw $this->refuse('must hold rows, each an object of declared fields');
+            }
+
+            $out[] = $this->items->validate($row);
+        }
+
+        return $out;
     }
 
     private function string(mixed $value): string

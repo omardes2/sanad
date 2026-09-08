@@ -310,6 +310,7 @@ abstract class OpenAICompatibleChatProvider implements ReportsCredentialState, S
             durationMs: $durationMs,
             toolCalls: $toolCalls,
             provider: $this->name,
+            requestId: $this->stringOrNull($response->json('id')),
         );
     }
 

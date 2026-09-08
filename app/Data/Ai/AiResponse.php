@@ -29,6 +29,8 @@ final readonly class AiResponse
         public ?int $durationMs = null,
         public array $toolCalls = [],
         public ?string $provider = null,
+        /** The provider's own reference for this request. Diagnostics only — never an identity. */
+        public ?string $requestId = null,
     ) {}
 
     public function hasToolCalls(): bool

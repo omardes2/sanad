@@ -7,7 +7,6 @@ namespace App\Agents;
 use App\Contracts\AgentOrchestrator;
 use App\Data\AgentResponseData;
 use App\Data\Billing\UsageDecision;
-use App\Data\Billing\UsageRecord;
 use App\Enums\MessageType;
 use App\Enums\UsageDimension;
 use App\Models\Conversation;
@@ -15,25 +14,30 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
-use App\Services\Billing\UsageRecorder;
 use App\Support\Billing\UsageKeys;
 
 /**
  * Wraps the real AgentOrchestrator with metering, so the AI orchestrator itself
- * stays free of billing and channel concerns. Two independent, idempotent
- * steps run after a real AI response:
+ * stays free of billing and channel concerns. This class owns exactly ONE of
+ * the two accounting questions:
  *
- *  RECORD (always) — UsageRecorder writes the cost/usage ledger row for what the
- *      provider consumed. Runs whether billing.enforce is on or off.
- *  ENFORCE (only when billing.enforce) — UsageEngine::check() BEFORE calling AI
- *      (never call the provider when already over the limit), and
- *      UsageEngine::charge() AFTER, consuming quota atomically. Losing the
- *      boundary race returns the limit message — but the cost we incurred stays
- *      recorded, because the ledger never depends on quota accounting.
+ *  QUOTA (here, only when billing.enforce) — UsageEngine::check() BEFORE
+ *      calling AI (never call the provider when already over the limit), and
+ *      UsageEngine::charge() AFTER, consuming quota atomically. The key is
+ *      scoped to the MESSAGE, so however many provider round-trips or queue
+ *      retries one answer took, the subscriber's allowance is consumed once.
+ *  PROVIDER COST (not here) — recorded per PHYSICAL provider request by
+ *      ProviderUsageRecorder, the moment each response comes back inside the
+ *      turn. A queue retry that re-sends a call is real money and gets its own
+ *      ledger row.
+ *
+ * The two are deliberately independent and separately idempotent: losing the
+ * quota boundary race returns the limit message, but the cost we already
+ * incurred stays recorded, because the ledger never depends on quota
+ * accounting.
  *
  * A failed AI call (fallback reply) consumed nothing billable → nothing is
- * recorded and nothing is charged. Keys: one correlation_id per inbound
- * message, one idempotency_key per billable invocation (see UsageKeys).
+ * charged. Keys: one correlation_id per inbound message (see UsageKeys).
  */
 class MeteredAgentOrchestrator implements AgentOrchestrator
 {
@@ -43,7 +47,6 @@ class MeteredAgentOrchestrator implements AgentOrchestrator
         private readonly AgentOrchestrator $inner,
         private readonly UsageEngine $usage,
         private readonly UsageLimitResponder $responder,
-        private readonly UsageRecorder $recorder,
     ) {}
 
     public function handle(User $user, Conversation $conversation, Message $message): AgentResponseData
@@ -61,29 +64,21 @@ class MeteredAgentOrchestrator implements AgentOrchestrator
             return $reply;
         }
 
-        $ai = $reply->metadata['ai'] ?? [];
-        $correlationId = UsageKeys::correlationForMessage($message);
-        $idempotencyKey = UsageKeys::invocation(self::DIMENSION, $correlationId);
+        // The quota key is scoped to the MESSAGE, not to a physical attempt: an
+        // infrastructure retry must never consume the subscriber's allowance a
+        // second time for the same reply.
+        $idempotencyKey = UsageKeys::invocation(self::DIMENSION, UsageKeys::correlationForMessage($message));
 
-        // 1) Ledger — always.
-        $this->recorder->record(new UsageRecord(
-            subscriber: $user,
-            dimension: self::DIMENSION,
-            idempotencyKey: $idempotencyKey,
-            correlationId: $correlationId,
-            operation: $ai['operation'] ?? null,
-            provider: (string) ($ai['provider'] ?? 'internal'),
-            model: $ai['model'] ?? null,
-            routedModel: $ai['routed_model'] ?? null,
-            channel: $conversation->channelAccount?->channel?->value,
-            inputUnits: (int) ($ai['prompt_tokens'] ?? 0),
-            outputUnits: (int) ($ai['completion_tokens'] ?? 0),
-            cachedUnits: (int) ($ai['cached_tokens'] ?? 0),
-            durationMs: isset($ai['duration_ms']) ? (int) $ai['duration_ms'] : null,
-            metadata: ['message_id' => $message->id, 'conversation_id' => $conversation->id],
-        ));
-
-        // 2) Quota — only when enforcement is on (charge() itself is gated).
+        // 1) Provider cost is NOT recorded here. Every physical provider request
+        //    is metered by ProviderUsageRecorder the moment it returns, inside
+        //    the turn — so a request that was served and billed is recorded even
+        //    when the turn later fails and the queue retries, and the retry's own
+        //    re-send gets its own row instead of being deduplicated into it.
+        // 2) Quota — ONE charge per user-facing reply, whatever it took to
+        //    produce it, and whatever the queue had to retry. The dimension is
+        //    `ai_reply`: a subscriber's allowance counts answers, not the
+        //    provider round-trips behind one, and an infrastructure retry must
+        //    never consume it twice — which the message-scoped key guarantees.
         $charge = $this->usage->charge($user, self::DIMENSION, $idempotencyKey);
 
         // Lost the boundary race: the allowance was exhausted concurrently.

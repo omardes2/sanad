@@ -140,6 +140,28 @@ class ToolRegistry
                 ]),
             ),
             ToolDefinition::of(
+                key: 'task.list', version: 1,
+                title: 'قائمة المهام',
+                summary: 'يعرض مهام المشترك نفسه ضمن نطاق معلن وبعدد محدود. قراءة فقط: لا يكتب ولا يرسل شيئًا.',
+                capability: ToolCapability::TasksWrite,
+                sideEffect: ToolSideEffect::Read,
+                input: ToolSchema::of([
+                    ToolField::of('scope', ToolFieldType::Enum, required: false, options: ['open', 'today', 'overdue', 'completed']),
+                    ToolField::of('limit', ToolFieldType::Integer, required: false, max: 20),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('tasks', ToolFieldType::ListOfRows, required: true, max: 20, items: ToolSchema::of([
+                        ToolField::of('task_id', ToolFieldType::Integer, required: true, max: 999999999),
+                        ToolField::of('title', ToolFieldType::String, required: true, max: 60),
+                        ToolField::of('status', ToolFieldType::Enum, required: true, options: ['pending', 'in_progress', 'completed', 'cancelled']),
+                        ToolField::of('due_on', ToolFieldType::String, required: false, max: 10),
+                    ])),
+                    ToolField::of('total', ToolFieldType::Integer, required: true, max: 999999),
+                    ToolField::of('truncated', ToolFieldType::Boolean, required: true),
+                ]),
+                maxRetries: 2,
+            ),
+            ToolDefinition::of(
                 key: 'task.complete', version: 1,
                 title: 'إنهاء مهمة',
                 summary: 'يضع مهمة المشترك نفسه في حالة «منجزة». تغيير محلي قابل للتراجع، وتكراره لا يغيّر شيئًا.',
