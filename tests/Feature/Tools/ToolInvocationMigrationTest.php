@@ -140,9 +140,11 @@ it('on PostgreSQL keeps the lifecycle coherent as a database constraint, not onl
     ];
 
     foreach ($refused as $label => $overrides) {
-        expect(fn () => DB::transaction(fn () => DB::table('tool_invocations')->insert(
-            $base + $overrides + ['idempotency_key' => 'k:'.md5($label)]
-        )))->toThrow(QueryException::class, 'check', $label);
+        // array_merge, not `+`: the overrides must win over the valid baseline.
+        $row = array_merge($base, $overrides, ['idempotency_key' => 'k:'.md5($label)]);
+
+        expect(fn () => DB::transaction(fn () => DB::table('tool_invocations')->insert($row)))
+            ->toThrow(QueryException::class, 'check');
     }
 
     expect(DB::table('tool_invocations')->count())->toBe(0);
