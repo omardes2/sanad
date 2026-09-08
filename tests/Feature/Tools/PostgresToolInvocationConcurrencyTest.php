@@ -105,11 +105,14 @@ it('of the same identity with DIFFERENT inputs one canonical input wins and the 
 
         // One invocation, one stored input, and the three callers whose input
         // differs from the winner's are refused as a CONFLICT — never executed.
+        $hash = fn (string $q): string => hash('sha256', json_encode(['query' => $q], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
         expect(ToolInvocation::query()->where('subscriber_id', $subscriber->id)->count())->toBe(1)
             ->and(array_filter($outcomes, fn (string $o): bool => str_starts_with($o, 'claimed:')))->toHaveCount(1)
             ->and(array_filter($outcomes, fn (string $o): bool => str_starts_with($o, 'conflict:')))->toHaveCount(3)
-            ->and(in_array($row->input['query'], ['coffee', 'tea'], true))->toBeTrue()
-            ->and($row->input_hash)->toBe(hash('sha256', json_encode(['query' => $row->input['query']], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)))
+            // The raw words are not stored; the hash of the winner is, and it is one of the two.
+            ->and($row->input)->toBe([])
+            ->and(in_array($row->input_hash, [$hash('coffee'), $hash('tea')], true))->toBeTrue()
             ->and($row->status)->toBe(ToolInvocationStatus::Succeeded)
             ->and(ToolInvocationEvent::query()->where('tool_invocation_id', $row->id)->count())->toBe(4)
             ->and(f2Audits($row))->toHaveCount(1)
@@ -241,6 +244,39 @@ it('never adds a second usage row or a second audit entry however many times the
             ->and(f2Audits($row))->toHaveCount(1)
             ->and(f2Usage($row))->toHaveCount(1)
             ->and(f2Usage($row)->first()->tool_invocation_ref)->toBe((string) $row->id);
+    } finally {
+        f2Cleanup($subscriber);
+    }
+});
+
+it('holds ONE slot against concurrent claims that propose DIFFERENT tools for it', function () {
+    [$subscriber, $message] = f2Subject();
+
+    try {
+        // Six processes racing for the same slot `msg:<id>:call:1`: three propose
+        // memory.read@1, three propose a different version of the contract.
+        $processes = [];
+        for ($i = 0; $i < 6; $i++) {
+            $processes[] = f2Run(['claim', (string) $subscriber->id, (string) $message->id, 'memory.read', $i % 2 === 0 ? '1' : '2', 'coffee']);
+        }
+
+        $outcomes = f2Outcomes($processes);
+        $rows = ToolInvocation::query()->where('subscriber_id', $subscriber->id)->get();
+        $row = $rows->firstOrFail();
+
+        // ONE invocation for the slot; the three that proposed the other version
+        // conflicted against the stored claim facts and wrote nothing.
+        expect($rows)->toHaveCount(1)
+            ->and($row->idempotency_key)->toBe('msg:'.$message->id.':call:1')
+            ->and(array_filter($outcomes, fn (string $o): bool => str_starts_with($o, 'claimed:')))->toHaveCount(1)
+            ->and(array_filter($outcomes, fn (string $o): bool => str_starts_with($o, 'conflict:')))->toHaveCount(3)
+            ->and(array_unique(array_map(fn (string $o): string => explode(':', $o)[1], $outcomes)))->toEqual([(string) $row->id])
+            ->and(in_array($row->tool_version, [1, 2], true))->toBeTrue()
+            ->and($row->status)->toBe(ToolInvocationStatus::Planned)
+            // A claim is a claim: one event, and nothing terminal happened.
+            ->and(ToolInvocationEvent::query()->where('tool_invocation_id', $row->id)->count())->toBe(1)
+            ->and(f2Audits($row))->toHaveCount(0)
+            ->and(f2Usage($row))->toHaveCount(0);
     } finally {
         f2Cleanup($subscriber);
     }

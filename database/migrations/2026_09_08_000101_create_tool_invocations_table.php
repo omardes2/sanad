@@ -18,6 +18,14 @@ use Illuminate\Support\Facades\Schema;
  * it instead — replaying its recorded result, reporting it as in flight, or
  * reporting a CONFLICT when the canonical input hash differs.
  *
+ * The identity is the SERVER-OWNED CALL SLOT, not the tool: one message and one
+ * call index is one invocation, whatever tool the model proposed for it. The
+ * claim facts (`tool_key`, `tool_version`, `input_hash`) are stored ON the slot,
+ * so proposing a different tool, a different version or a different input at a
+ * slot that already exists is a CONFLICT — never a second row for the same
+ * logical call. `UNIQUE(message_id, call_index)` is the database's own statement
+ * of that rule, alongside the unique identity string.
+ *
  * The row snapshots `tool_key` + `tool_version` (and, for readability, the
  * capability and side-effect class of that version). Because a shipped tool
  * version is immutable, every policy of that version — its timeout above all —
@@ -25,8 +33,20 @@ use Illuminate\Support\Facades\Schema;
  * duplicated into this table: what is stored here is what actually HAPPENED
  * (when it started, when it finished, how long it took, how it ended).
  *
- * No personal data: the input is the tool's own bounded, schema-validated
- * arguments, and everything else is an id, a code or a hash.
+ * NO RAW TOOL ARGUMENTS. A validated argument is not a safe argument:
+ * `memory.read@1.query` is subscriber-authored text and may legally contain a
+ * name, a phone number, an email or a private sentence. F2 never retries a read
+ * after a crash, so it needs no raw input to recover: the canonical value lives
+ * only in memory for the duration of the call, and what is persisted is the
+ * `input_hash` plus safe structural metadata (`input_fields`) and whatever a
+ * per-field policy explicitly marks persistable (`ToolInputPersistence`, empty
+ * for every tool shipped so far).
+ *
+ * DURABLE HISTORY. `subscriber_id` is a historical reference WITHOUT a foreign
+ * key — the same pattern `customer_payments`, `subscription_events` and
+ * `usage_events` already use: deleting the account cascades the live rows away,
+ * it never erases the execution history that `usage_events.tool_invocation_ref`
+ * points at. `message_id` / `conversation_id` are live links that null out.
  */
 return new class extends Migration
 {
@@ -34,7 +54,9 @@ return new class extends Migration
     {
         Schema::create('tool_invocations', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('subscriber_id')->constrained('users')->cascadeOnDelete();
+            // Immutable attribution snapshot, deliberately NOT a foreign key:
+            // the history outlives the account (see the class docblock).
+            $table->unsignedBigInteger('subscriber_id');
 
             // The exact contract this invocation was claimed against.
             $table->string('tool_key', 64);
@@ -45,7 +67,11 @@ return new class extends Migration
             // Identity and input.
             $table->string('idempotency_key', 191);
             $table->char('input_hash', 64);
+            // The persistable subset of the canonical input — empty for every
+            // tool shipped so far — plus the names (never the values) of the
+            // declared fields the call actually carried.
             $table->json('input');
+            $table->json('input_fields');
 
             $table->string('status', 16);
 
@@ -69,6 +95,9 @@ return new class extends Migration
             $table->timestamps();
 
             $table->unique('idempotency_key', 'tool_invocations_idempotency_key_unique');
+            // The call slot itself, as a database integrity rule: one message
+            // and one call index can hold exactly one invocation.
+            $table->unique(['message_id', 'call_index'], 'tool_invocations_message_call_unique');
             // A subscriber's invocation history, newest first.
             $table->index(['subscriber_id', 'created_at'], 'tool_invocations_subscriber_created_idx');
             // The stale-running sweep, and any operational read by state.

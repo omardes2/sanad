@@ -21,6 +21,11 @@ use App\Models\User;
  * tool-calling in F2, so the caller is Sanad's own orchestration and the order
  * is whatever it deterministically produced.
  *
+ * The identity of a call is its SLOT — `msg:<id>:call:<n>` — and never the tool
+ * proposed for it. Which tool and which version were claimed are facts stored on
+ * the invocation, so a plan that puts a different tool at an existing slot
+ * conflicts with the stored one instead of minting a second identity.
+ *
  * Ownership is taken from the message and from nothing else: the subscriber is
  * the message's user and the conversation is the message's conversation, so a
  * payload that names another subscriber, another conversation, a capability or
@@ -62,7 +67,7 @@ final class ToolCallPlan
                 definition: $definition,
                 callIndex: $index,
                 input: CanonicalInput::of($definition->input, $call['arguments']),
-                key: InvocationKey::of((int) $message->getKey(), $definition->key, $index),
+                key: InvocationKey::of((int) $message->getKey(), $index),
             );
         }
 

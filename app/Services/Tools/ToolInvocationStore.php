@@ -19,6 +19,7 @@ use App\Services\Audit\AuditLogger;
 use App\Services\Billing\UsageRecorder;
 use App\Support\Audit\AuditActions;
 use App\Support\Tools\ToolAuthorization;
+use App\Support\Tools\ToolInputPersistence;
 use App\Support\Tools\ToolInvocationTransitions;
 use Carbon\CarbonImmutable;
 use Closure;
@@ -28,14 +29,19 @@ use Illuminate\Support\Facades\DB;
 /**
  * The ONLY writer of `tool_invocations` and `tool_invocation_events` (Phase F2).
  *
- * CLAIM — the identity `idempotency_key` is unique, so the first writer creates
- * the `planned` row inside a savepoint and the index arbitrates the race. Every
- * later writer with the same key OBSERVES the row and mutates nothing:
- *   same input + terminal      ⇒ REPLAY   (the recorded result stands)
- *   same input + non-terminal  ⇒ IN FLIGHT (returned immediately; never waits)
- *   different input            ⇒ CONFLICT  (the stored invocation stays authoritative)
- * None of the three appends an event, writes an audit entry, writes a usage row
- * or executes anything, and no replacement key is ever minted.
+ * CLAIM — the identity is the server-owned CALL SLOT (`msg:<id>:call:<n>`),
+ * unique in the database, so the first writer creates the `planned` row inside a
+ * savepoint and the index arbitrates the race. Every later writer at the same
+ * slot OBSERVES the row and mutates nothing. What it is compared against is the
+ * full set of claim facts — TOOL KEY, TOOL VERSION and INPUT HASH — not the hash
+ * alone:
+ *   same tool + same version + same input + terminal      ⇒ REPLAY   (the recorded result stands)
+ *   same tool + same version + same input + non-terminal  ⇒ IN FLIGHT (returned immediately; never waits)
+ *   different tool, version OR input                      ⇒ CONFLICT  (the stored invocation stays authoritative)
+ * A slot therefore holds exactly one invocation and at most one execution,
+ * whatever tool a later plan proposes for it. None of the three outcomes appends
+ * an event, writes an audit entry, writes a usage row or executes anything, and
+ * no replacement key is ever minted.
  *
  * TRANSITION — every persisted move locks the projection `FOR UPDATE`, checks
  * the code transition table, bumps `version`, and appends exactly ONE event
@@ -63,7 +69,7 @@ final class ToolInvocationStore
             $existing = $this->locked($request->key->value);
 
             if ($existing !== null) {
-                return $this->observe($existing, $request->input->hash);
+                return $this->observe($existing, $request);
             }
 
             try {
@@ -77,15 +83,25 @@ final class ToolInvocationStore
                     throw ToolRuleException::of('idempotency_key', 'تعذّر قراءة الاستدعاء الفائز بعد تصادم الهوية.');
                 }
 
-                return $this->observe($winner, $request->input->hash);
+                return $this->observe($winner, $request);
             }
         });
     }
 
-    /** An existing identity, read and reported — never changed. */
-    private function observe(ToolInvocation $row, string $hash): ToolClaim
+    /**
+     * An existing slot, read and reported — never changed.
+     *
+     * All three claim facts must match. A different tool at the slot, a
+     * different version of the same tool, or a different canonical input are
+     * each a CONFLICT: the invocation already recorded there stays
+     * authoritative and nothing runs a second time.
+     */
+    private function observe(ToolInvocation $row, ToolCallRequest $request): ToolClaim
     {
-        if (! hash_equals($row->input_hash, $hash)) {
+        $sameTool = $row->tool_key === $request->definition->key->name
+            && $row->tool_version === $request->definition->key->version->value;
+
+        if (! $sameTool || ! hash_equals($row->input_hash, $request->input->hash)) {
             return ToolClaim::conflict($row);
         }
 
@@ -104,7 +120,10 @@ final class ToolInvocationStore
             'side_effect' => $request->definition->sideEffect->value,
             'idempotency_key' => $request->key->value,
             'input_hash' => $request->input->hash,
-            'input' => $request->input->values,
+            // Raw arguments are never stored: only what the per-field policy
+            // explicitly allows, plus the NAMES of the fields that were present.
+            'input' => ToolInputPersistence::filter($request->definition->key, $request->input->values),
+            'input_fields' => ToolInputPersistence::fields($request->input->values),
             'status' => ToolInvocationTransitions::initial()->value,
             'message_id' => $request->message->getKey(),
             'conversation_id' => $request->message->conversation_id,

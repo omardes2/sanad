@@ -17,8 +17,14 @@ use Illuminate\Support\Facades\Schema;
  * `(tool_invocation_id, seq)` is unique, so two writers can never record the
  * same step twice.
  *
- * There is no `updated_at` and no update or delete path in the application. A
- * claim outcome that changed nothing — replay, in flight, conflict — writes no
+ * Append-only is enforced the way this repository already enforces it on its
+ * immutable records: the model uses `ImmutableFinancialRecord` (any update or
+ * delete throws), there is no `updated_at` to move, and `ToolInvocationStore` is
+ * the only writer. At the database layer `restrictOnDelete` means the invocation
+ * itself cannot be deleted while its history exists — history is never removed
+ * merely because the projection is.
+ *
+ * A claim outcome that changed nothing — replay, in flight, conflict — writes no
  * row here at all, because no state moved.
  *
  * `detail` carries bounded machine facts only (codes, ids, hashes); never a
@@ -30,7 +36,7 @@ return new class extends Migration
     {
         Schema::create('tool_invocation_events', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('tool_invocation_id')->constrained('tool_invocations')->cascadeOnDelete();
+            $table->foreignId('tool_invocation_id')->constrained('tool_invocations')->restrictOnDelete();
             $table->unsignedInteger('seq');
             $table->string('from_status', 16)->nullable();
             $table->string('to_status', 16);

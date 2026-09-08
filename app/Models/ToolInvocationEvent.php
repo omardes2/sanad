@@ -5,23 +5,29 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\ToolInvocationStatus;
+use App\Support\Payments\ImmutableFinancialRecord;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * One PERSISTED status transition of an invocation (Phase F2) — append-only.
  *
- * There is no `updated_at` and no code path that updates or deletes a row: a
- * transition is written once, in the same transaction as the projection it
- * describes, and `(tool_invocation_id, seq)` is unique so two writers can never
- * record the same step twice.
+ * Append-only, enforced the way this repository already enforces it:
+ * `ImmutableFinancialRecord` makes any update or delete through the model throw,
+ * there is no `updated_at` to move, `ToolInvocationStore` is the only writer,
+ * and `(tool_invocation_id, seq)` is unique so two writers can never record the
+ * same step twice. At the database layer the invocation itself is
+ * `restrictOnDelete`, so history is never removed just because the projection
+ * would be.
  *
  * Claim outcomes that changed nothing — replay, in-flight, conflict — write NO
  * event, because no state moved.
  */
 class ToolInvocationEvent extends Model
 {
-    public $timestamps = false;
+    use ImmutableFinancialRecord;
+
+    public const UPDATED_AT = null;
 
     /**
      * @var list<string>

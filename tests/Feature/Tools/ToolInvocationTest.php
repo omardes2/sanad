@@ -73,7 +73,7 @@ it('derives the identity from persisted facts only, byte for byte, and a changed
     $again = $plan->one($this->message, 'memory.read@1', ['query' => 'coffee']);
 
     // Same stored message, same ordered plan ⇒ identical key AND identical input hash.
-    expect($first->key->value)->toBe('msg:'.$this->message->id.':tool:memory.read@1:call:1')
+    expect($first->key->value)->toBe('msg:'.$this->message->id.':call:1')
         ->and($again->key->value)->toBe($first->key->value)
         ->and($again->input->hash)->toBe($first->input->hash)
         ->and($first->callIndex)->toBe(1)
@@ -89,15 +89,18 @@ it('derives the identity from persisted facts only, byte for byte, and a changed
     expect($pair[1]->key->value)->toEndWith(':call:2')
         ->and($pair[1]->key->value)->not->toBe($pair[0]->key->value);
 
-    // A DIFFERENT call at the same index keeps the same key on purpose, so the input hash reports it.
+    // A DIFFERENT call at the same index keeps the same key on purpose, so the claim facts report it.
     $changed = $plan->one($this->message, 'memory.read@1', ['query' => 'tea']);
     expect($changed->key->value)->toBe($first->key->value)
         ->and($changed->input->hash)->not->toBe($first->input->hash);
 
     // Nothing but persisted facts: no clock, no randomness.
-    expect(InvocationKey::of(7, $definition->key, 3)->value)->toBe('msg:7:tool:memory.read@1:call:3')
-        ->and(fn () => InvocationKey::of(0, $definition->key, 1))->toThrow(ToolRuleException::class)
-        ->and(fn () => InvocationKey::of(7, $definition->key, 0))->toThrow(ToolRuleException::class);
+    expect(InvocationKey::of(7, 3)->value)->toBe('msg:7:call:3')
+        ->and(fn () => InvocationKey::of(0, 1))->toThrow(ToolRuleException::class)
+        ->and(fn () => InvocationKey::of(7, 0))->toThrow(ToolRuleException::class)
+        // The identity is the SLOT: the tool is a claim fact, never part of the name.
+        ->and($first->key->value)->not->toContain('memory.read')
+        ->and($definition->key->value())->toBe('memory.read@1');
 });
 
 it('canonicalises input to stable bytes: key order, explicit null vs absent, Unicode form and no floats', function () {
@@ -139,7 +142,9 @@ it('walks planned → authorized → running → succeeded, one event per transi
         ->and($result->executed)->toBeTrue()
         ->and($row->status)->toBe(ToolInvocationStatus::Succeeded)
         ->and($row->output)->toBe(['matches' => 3, 'truncated' => false])
-        ->and($row->input)->toBe(['query' => 'coffee'])
+        // Raw arguments are never stored: the hash and the field NAMES are.
+        ->and($row->input)->toBe([])
+        ->and($row->input_fields)->toBe(['query'])
         ->and($row->tool_key)->toBe('memory.read')
         ->and($row->tool_version)->toBe(1)
         ->and($row->call_index)->toBe(1)
@@ -219,7 +224,7 @@ it('replays a terminal identity and conflicts on a different input, without chan
     expect($conflict->claim)->toBe(ToolClaimOutcome::Conflict)
         ->and($conflict->executed)->toBeFalse()
         ->and($conflict->invocation->id)->toBe($row->id)
-        ->and($conflict->invocation->input)->toBe(['query' => 'coffee']);
+        ->and($conflict->invocation->input_hash)->toBe($row->input_hash);
 
     $after = $row->fresh();
     expect(ToolInvocation::count())->toBe(1)
@@ -497,7 +502,8 @@ it('will not derive an identity without a stored message, and stores only the ar
 
     // What is persisted is exactly the validated arguments of THIS contract —
     // no provider metadata blob, no orchestration fields, nothing undeclared.
-    expect(array_diff(array_keys($row->input), $declared->input->names()))->toBe([])
+    expect($row->input)->toBe([])   // nothing this contract declares is persistable
+        ->and(array_diff($row->input_fields, $declared->input->names()))->toBe([])
         ->and(array_diff(array_keys($row->output), $declared->output->names()))->toBe([])
         // Ownership on the row came from the message, and matches its conversation's owner.
         ->and($row->subscriber_id)->toBe($this->message->user_id)

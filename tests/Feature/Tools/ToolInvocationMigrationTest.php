@@ -37,7 +37,7 @@ it('is the 61st and 62nd migration, creates both tables with their identity and 
     sort($columns);
     expect($columns)->toBe([
         'call_index', 'capability', 'conversation_id', 'created_at', 'duration_ms', 'failure_kind',
-        'finished_at', 'id', 'idempotency_key', 'input', 'input_hash', 'message_id', 'output',
+        'finished_at', 'id', 'idempotency_key', 'input', 'input_fields', 'input_hash', 'message_id', 'output',
         'refusal_reason', 'side_effect', 'started_at', 'status', 'subscriber_id', 'tool_key',
         'tool_version', 'updated_at', 'version',
     ]);
@@ -98,7 +98,7 @@ it('enforces one invocation per identity at the database level', function () {
         'subscriber_id' => $subscriber->id, 'tool_key' => 'memory.read', 'tool_version' => 1,
         'capability' => 'memory.read', 'side_effect' => 'read',
         'idempotency_key' => $row->idempotency_key, 'input_hash' => str_repeat('a', 64),
-        'input' => '{}', 'status' => 'planned', 'call_index' => 1, 'version' => 1,
+        'input' => '{}', 'input_fields' => '[]', 'status' => 'planned', 'call_index' => 1, 'version' => 1,
         'created_at' => now(), 'updated_at' => now(),
     ]);
 
@@ -125,7 +125,8 @@ it('on PostgreSQL keeps the lifecycle coherent as a database constraint, not onl
     $base = [
         'subscriber_id' => $subscriber->id, 'tool_key' => 'memory.read', 'tool_version' => 1,
         'capability' => 'memory.read', 'side_effect' => 'read', 'input_hash' => str_repeat('a', 64),
-        'input' => '{}', 'call_index' => 1, 'version' => 1, 'created_at' => now(), 'updated_at' => now(),
+        'input' => '{}', 'input_fields' => '[]', 'call_index' => 1, 'version' => 1,
+        'created_at' => now(), 'updated_at' => now(),
     ];
 
     $refused = [

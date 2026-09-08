@@ -7,38 +7,43 @@ namespace App\Support\Tools;
 use App\Exceptions\Tools\ToolRuleException;
 
 /**
- * The SERVER-GENERATED identity of one tool invocation (Phase F2, decision D2).
+ * The SERVER-OWNED CALL SLOT that identifies one invocation (Phase F2, D2).
  *
- *     msg:<message_id>:tool:<name>@<version>:call:<n>
+ *     msg:<message_id>:call:<n>
  *
- * Every part is a persisted fact: the id of the stored message being answered,
- * the tool key and version resolved from the code registry, and the 1-based
- * position of this call in that message's deterministic plan. There is no
- * random component, no clock and no caller-supplied text, so re-processing the
- * same stored message with the same ordered plan derives BYTE-IDENTICAL keys.
+ * The identity is the SLOT, deliberately not the tool. Which tool the model
+ * proposed for a slot is a claim FACT stored on the invocation, not part of its
+ * name — if the tool were in the key, proposing `task.create@1` where
+ * `memory.read@1` ran would mint a second identity and a second invocation for
+ * the same logical call, which is exactly what must never happen. With the slot
+ * as the identity, a different tool, a different version or a different input
+ * at an existing slot is a CONFLICT against the stored facts, and there is
+ * never a second row.
  *
- * The model, the provider and the tool input can influence none of it. A
- * replacement key is never minted: if the call at position `n` is not the call
- * that was executed there before, the identity collides on purpose and the
- * input hash reports a CONFLICT rather than quietly running something new.
+ * Both parts are persisted facts: the id of the stored message being answered,
+ * and the 1-based position of this call in that message's deterministic plan.
+ * No clock, no randomness, no caller text — so re-planning the same message
+ * derives byte-identical keys. `ToolCallPlan` is the only production authority
+ * that assigns the index, and nothing a model, a provider or a tool input says
+ * can influence either part. A replacement key is never minted.
  *
- * The format is internal. Nothing outside the platform may send one in, and it
+ * The format is internal: nothing outside the platform may send one in, and it
  * is never used as a foreign-domain identity (the ledger links to the
- * invocation's own id).
+ * invocation's own numeric id).
  */
 final readonly class InvocationKey
 {
     public const MAX = 191;
 
-    /** A message id, and a call index inside that message. */
-    private const MAX_CALL_INDEX = 999;
+    /** A message holds at most this many intended tool calls. */
+    public const MAX_CALL_INDEX = 999;
 
     private function __construct(public string $value) {}
 
     /**
      * @throws ToolRuleException
      */
-    public static function of(int $messageId, ToolKey $tool, int $callIndex): self
+    public static function of(int $messageId, int $callIndex): self
     {
         if ($messageId < 1) {
             throw ToolRuleException::of('message', 'الاستدعاء يشتقّ هويته من رسالة مخزَّنة؛ معرّف الرسالة يجب أن يكون موجبًا.');
@@ -48,7 +53,7 @@ final readonly class InvocationKey
             throw ToolRuleException::of('call_index', 'ترتيب النداء داخل الرسالة يجب أن يكون بين 1 و'.self::MAX_CALL_INDEX.'.');
         }
 
-        $value = 'msg:'.$messageId.':tool:'.$tool->value().':call:'.$callIndex;
+        $value = 'msg:'.$messageId.':call:'.$callIndex;
 
         if (strlen($value) > self::MAX) {
             throw ToolRuleException::of('idempotency_key', 'هوية الاستدعاء تجاوزت الحدّ المسموح.');
