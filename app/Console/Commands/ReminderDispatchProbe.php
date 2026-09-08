@@ -31,8 +31,15 @@ class ReminderDispatchProbe extends Command
 
     protected $hidden = true;
 
-    public function handle(ReminderDispatcher $dispatcher): int
+    public function handle(): int
     {
+        // Configure BEFORE resolving anything: WhatsAppConfig is injected into
+        // the policy, so a container resolution that happened first would carry
+        // the environment's (disabled) channel configuration.
+        $this->prepare();
+
+        $dispatcher = app(ReminderDispatcher::class);
+
         /** @var list<string> $args */
         $args = (array) $this->argument('args');
 
@@ -54,8 +61,6 @@ class ReminderDispatchProbe extends Command
 
     private function deliver(ReminderDispatcher $dispatcher, int $id): int
     {
-        $this->fakeProvider();
-
         $before = Reminder::query()->find($id)?->attempts ?? 0;
         $dispatcher->deliver($id);
         $reminder = Reminder::query()->find($id);
@@ -98,9 +103,24 @@ class ReminderDispatchProbe extends Command
         return self::SUCCESS;
     }
 
-    /** Never a live call: the race under test is the claim, not the network. */
-    private function fakeProvider(): void
+    /**
+     * Deterministic settings and a faked provider: the race under test is the
+     * claim, not the network, and a separate process must not depend on the
+     * environment holding real WhatsApp credentials.
+     */
+    private function prepare(): void
     {
+        config([
+            'whatsapp.enabled' => true,
+            'whatsapp.access_token' => 'PROBE_TOKEN',
+            'whatsapp.phone_number_id' => 'PROBE_PNID',
+            'whatsapp.graph_base_url' => 'https://graph.facebook.com',
+            'whatsapp.graph_version' => 'v21.0',
+            'reminders.enabled' => true,
+            'reminders.max_lateness_minutes' => 600,
+            'reminders.lease_seconds' => 300,
+        ]);
+
         Http::fake([
             'graph.facebook.com/*' => match ((string) $this->option('outcome')) {
                 // 5xx: the provider may have accepted before failing to answer,

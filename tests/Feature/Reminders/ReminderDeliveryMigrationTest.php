@@ -88,8 +88,10 @@ it('enforces at most one outbound message per reminder at the database level', f
 
     DB::table('messages')->insert($row);
 
-    // Not a service rule: the database itself refuses the second message.
-    expect(fn () => DB::table('messages')->insert($row))
+    // Not a service rule: the database itself refuses the second message. The
+    // duplicate runs in a SAVEPOINT (nested transaction) so PostgreSQL's
+    // aborted-transaction state rolls back with it and the test can continue.
+    expect(fn () => DB::transaction(fn () => DB::table('messages')->insert($row)))
         ->toThrow(UniqueConstraintViolationException::class);
 
     // And NULL is unconstrained, so ordinary messages are unaffected.
