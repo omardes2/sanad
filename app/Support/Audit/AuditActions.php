@@ -128,4 +128,16 @@ final class AuditActions
 
     /** Phase F1 — a subscriber's capability consent was revoked (effective immediately). */
     public const ToolConsentRevoked = 'tool.consent_revoked';
+
+    /** Phase F2 — a tool invocation finished successfully (one entry per invocation, on its terminal move). */
+    public const ToolInvocationSucceeded = 'tool.invocation_succeeded';
+
+    /** Phase F2 — a tool invocation that had started did not succeed. */
+    public const ToolInvocationFailed = 'tool.invocation_failed';
+
+    /** Phase F2 — a tool invocation was refused before anything ran (no execution, no usage). */
+    public const ToolInvocationRefused = 'tool.invocation_refused';
+
+    /** Phase F2 — a running invocation passed the timeout declared by its tool version. */
+    public const ToolInvocationTimedOut = 'tool.invocation_timed_out';
 }

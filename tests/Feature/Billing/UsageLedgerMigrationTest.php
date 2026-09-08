@@ -31,7 +31,7 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
     // migration (app_settings), the two C0 migrations (audit context, permission
     // tables), the four B2 migrations (pricing refs, model_prices, ai_models,
     // ai_providers) and the two B1 migrations (usage_charges, ledger).
-    Artisan::call('migrate:rollback', ['--step' => 40, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 42, '--force' => true]);
 
     expect(Schema::hasTable('tool_consents'))->toBeFalse()
         ->and(Schema::hasTable('finance_period_close_inputs'))->toBeFalse()
