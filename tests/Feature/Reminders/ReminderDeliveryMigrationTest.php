@@ -16,15 +16,16 @@ use Illuminate\Support\Facades\Schema;
 uses(RefreshDatabase::class);
 
 /**
- * Reminder delivery ships exactly ONE migration, and it is additive: two
- * nullable columns and an index on `reminders`, one nullable unique FK on
- * `messages`, and nothing else in E0–E5 or F1–F4 touched.
+ * Reminder delivery ships exactly ONE migration, and it is additive: the claim
+ * token, two nullable timestamps and an index on `reminders`, one nullable
+ * unique FK on `messages`, and nothing else in E0–E5 or F1–F4 touched.
  */
 it('is the 63rd and last migration, adds only the delivery columns, and rolls back and forward cleanly', function () {
     $files = glob(database_path('migrations/*.php'));
 
     expect($files)->toHaveCount(63)
         ->and(basename($files[62]))->toBe('2026_09_09_000101_add_reminder_delivery_to_reminders_and_messages.php')
+        ->and(Schema::hasColumn('reminders', 'claim_token'))->toBeTrue()
         ->and(Schema::hasColumn('reminders', 'claimed_at'))->toBeTrue()
         ->and(Schema::hasColumn('reminders', 'dispatched_at'))->toBeTrue()
         ->and(Schema::hasColumn('messages', 'reminder_id'))->toBeTrue()
@@ -35,9 +36,9 @@ it('is the 63rd and last migration, adds only the delivery columns, and rolls ba
     $columns = collect(Schema::getColumns('reminders'))->pluck('name')->all();
     sort($columns);
     expect($columns)->toBe([
-        'attempts', 'channel', 'claimed_at', 'created_at', 'dispatched_at', 'id', 'last_error',
-        'remind_at', 'sent_at', 'source_message_id', 'status', 'task_id', 'timezone', 'title',
-        'updated_at', 'user_id',
+        'attempts', 'channel', 'claim_token', 'claimed_at', 'created_at', 'dispatched_at', 'id',
+        'last_error', 'remind_at', 'sent_at', 'source_message_id', 'status', 'task_id', 'timezone',
+        'title', 'updated_at', 'user_id',
     ]);
 
     $user = User::factory()->create();
@@ -52,7 +53,8 @@ it('is the 63rd and last migration, adds only the delivery columns, and rolls ba
 
     Artisan::call('migrate:rollback', ['--step' => 1, '--force' => true]);
 
-    expect(Schema::hasColumn('reminders', 'claimed_at'))->toBeFalse()
+    expect(Schema::hasColumn('reminders', 'claim_token'))->toBeFalse()
+        ->and(Schema::hasColumn('reminders', 'claimed_at'))->toBeFalse()
         ->and(Schema::hasColumn('reminders', 'dispatched_at'))->toBeFalse()
         ->and(Schema::hasColumn('messages', 'reminder_id'))->toBeFalse()
         // Every earlier phase survives, and so does the reminder itself.
@@ -65,7 +67,8 @@ it('is the 63rd and last migration, adds only the delivery columns, and rolls ba
 
     Artisan::call('migrate', ['--force' => true]);
 
-    expect(Schema::hasColumn('reminders', 'claimed_at'))->toBeTrue()
+    expect(Schema::hasColumn('reminders', 'claim_token'))->toBeTrue()
+        ->and(Schema::hasColumn('reminders', 'claimed_at'))->toBeTrue()
         ->and(Schema::hasIndex('messages', 'messages_reminder_id_unique'))->toBeTrue()
         ->and(DB::table('reminders')->count())->toBe(1)
         ->and(DB::table('migrations')->count())->toBe(63);

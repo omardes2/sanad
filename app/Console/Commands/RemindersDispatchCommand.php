@@ -19,9 +19,10 @@ class RemindersDispatchCommand extends Command
         $limit = (int) ($this->option('limit') ?? config('reminders.batch', 100));
         $claimed = $dispatcher->claimDue($limit);
 
-        // Claiming counts no attempt and sends nothing; the job does the work.
-        foreach ($claimed as $reminderId) {
-            DeliverReminder::dispatch($reminderId)->afterCommit();
+        // Claiming counts no attempt and sends nothing; the job does the work,
+        // carrying the claim identity it must still hold to be allowed to send.
+        foreach ($claimed as $claim) {
+            DeliverReminder::dispatch($claim->reminderId, $claim->token)->afterCommit();
         }
 
         $this->info(sprintf('Claimed %d due reminder(s).', count($claimed)));

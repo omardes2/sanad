@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Data\Reminders\ReminderClaim;
 use App\Services\Reminders\ReminderDispatcher;
 use App\Support\SafeError;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -23,6 +24,10 @@ use Throwable;
  *
  * A job that dies leaves the reminder `processing`, which the sweeper recovers
  * with full knowledge of whether a request was ever authorised.
+ *
+ * The claim token travels WITH the job. A job that sat in the queue while its
+ * claim was swept and re-issued arrives holding an identity the row no longer
+ * recognises, and the dispatcher refuses it before anything is written.
  */
 class DeliverReminder implements ShouldBeUnique, ShouldQueue
 {
@@ -32,7 +37,7 @@ class DeliverReminder implements ShouldBeUnique, ShouldQueue
 
     public int $uniqueFor = 300;
 
-    public function __construct(public int $reminderId)
+    public function __construct(public int $reminderId, public string $claimToken)
     {
         $this->onQueue('reminders');
     }
@@ -44,7 +49,7 @@ class DeliverReminder implements ShouldBeUnique, ShouldQueue
 
     public function handle(ReminderDispatcher $dispatcher): void
     {
-        $dispatcher->deliver($this->reminderId);
+        $dispatcher->deliver(new ReminderClaim($this->reminderId, $this->claimToken));
     }
 
     public function failed(?Throwable $exception): void

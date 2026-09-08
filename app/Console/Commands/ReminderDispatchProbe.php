@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Data\Reminders\ReminderClaim;
 use App\Models\Reminder;
 use App\Services\Reminders\ReminderDispatcher;
 use Illuminate\Console\Command;
@@ -14,10 +15,13 @@ use Illuminate\Support\Facades\Http;
  * machine-readable line, so the PostgreSQL races run in genuinely separate
  * processes with no shared transaction.
  *
- *   claim   <limit>   → claimed:<id>,<id>,…  |  claimed:
- *   deliver <id>      → sent:<attempts> | processing:<attempts> | failed:<reason> | skipped:<attempts>
- *   sweep             → swept:<recovered>:<failed>
- *   state   <id>      → <status>:<attempts>
+ *   claim   <limit>       → claimed:<id>:<token>,…  |  claimed:
+ *   deliver <id> <token>  → sent:<attempts> | dispatched:<…> | nosend:<status>
+ *   sweep                 → swept:<recovered>:<failed>
+ *   state   <id>          → <status>:<attempts>
+ *
+ * `deliver` takes the token because a worker with no claim identity could not
+ * be fenced out — which is the whole point of the stale-worker race.
  *
  * The provider call is FAKED here: this probe exercises the claim/dispatch
  * concurrency, never a live network. `--outcome` chooses what the fake provider
@@ -45,7 +49,7 @@ class ReminderDispatchProbe extends Command
 
         return match ((string) $this->argument('op')) {
             'claim' => $this->claim($dispatcher, (int) ($args[0] ?? 10)),
-            'deliver' => $this->deliver($dispatcher, (int) ($args[0] ?? 0)),
+            'deliver' => $this->deliver($dispatcher, (int) ($args[0] ?? 0), (string) ($args[1] ?? '')),
             'sweep' => $this->sweep($dispatcher),
             'state' => $this->state((int) ($args[0] ?? 0)),
             default => self::FAILURE,
@@ -54,14 +58,19 @@ class ReminderDispatchProbe extends Command
 
     private function claim(ReminderDispatcher $dispatcher, int $limit): int
     {
-        $this->line('claimed:'.implode(',', $dispatcher->claimDue($limit)));
+        $claims = array_map(
+            static fn (ReminderClaim $c): string => $c->reminderId.':'.$c->token,
+            $dispatcher->claimDue($limit),
+        );
+
+        $this->line('claimed:'.implode(',', $claims));
 
         return self::SUCCESS;
     }
 
-    private function deliver(ReminderDispatcher $dispatcher, int $id): int
+    private function deliver(ReminderDispatcher $dispatcher, int $id, string $token): int
     {
-        $dispatcher->deliver($id);
+        $dispatcher->deliver(new ReminderClaim($id, $token));
         $reminder = Reminder::query()->find($id);
 
         if ($reminder === null) {

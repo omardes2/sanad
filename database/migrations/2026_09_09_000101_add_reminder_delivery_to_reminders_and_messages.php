@@ -17,24 +17,29 @@ use Illuminate\Support\Facades\Schema;
  *     a second message. Recurrence, when it comes, produces one reminder row
  *     per occurrence, so this key stays correct.
  *
- * `reminders.claimed_at`    — when the current claim was taken.
- * `reminders.dispatched_at` — when a physical send was last authorised.
+ * `reminders.claim_token`   — the FENCING TOKEN of the current claim.
+ * `reminders.claimed_at`    — when that claim was taken.
+ * `reminders.dispatched_at` — the dispatch authorised under that claim, if any.
  *
- * Those two timestamps together are the whole crash-window contract:
+ * `claim_token` is the ownership identity, and it is deliberately NOT a
+ * timestamp. A worker carries the token it was handed at claim time and may act
+ * only while the stored token still equals it. A worker whose claim was swept
+ * and replaced holds a token nobody recognises any more, so it is structurally
+ * unable to send or to touch the row — no matter how close the two claims were
+ * in time, how coarse the timestamp columns are, or how the two engines
+ * serialise them. Ordering timestamps can never be an ownership test.
  *
- *   dispatched_at IS NULL or dispatched_at < claimed_at
- *       ⇒ nothing has left the platform under THIS claim. Recovery is free of
- *         duplicate risk, and one claim can authorise at most one physical
- *         send (the second worker sees dispatched_at >= claimed_at and stops).
- *         Whole-second precision is sufficient and the >= is deliberate: a
- *         dispatch inside the same second as its claim compares equal, which
- *         correctly stops a second worker, and a later claim always lands at
- *         least one lease-length after the dispatch it supersedes.
+ * `dispatched_at` is cleared by every claim, so within a claim it reads as a
+ * plain fact with no comparison at all:
  *
- *   dispatched_at >= claimed_at
- *       ⇒ a request was authorised and may or may not have reached the
- *         provider. Sanad cannot prove accepted or rejected, so it is never
- *         recorded as either.
+ *   NULL     ⇒ this claim has authorised nothing; nothing has left the
+ *              platform under it. Recovery is free of duplicate risk.
+ *   NOT NULL ⇒ this claim authorised a request, which may or may not have
+ *              reached the provider. Sanad can prove neither, so it records
+ *              neither. A second worker on the same claim sees it and stops.
+ *
+ * The count of real dispatches lives in `attempts`, which no claim ever
+ * resets — that, not a timestamp, is what bounds the retry budget.
  *
  * `attempts` and `last_error` already exist (Sprint 0) and finally get a
  * writer; `attempts` counts PHYSICAL dispatch attempts only, never claims.
@@ -47,7 +52,10 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('reminders', function (Blueprint $table) {
-            $table->timestamp('claimed_at')->nullable()->after('sent_at');
+            // Ownership identity, not a lock: opaque, server-generated, and new
+            // on every claim, so a stale worker's token can never match.
+            $table->string('claim_token', 36)->nullable()->after('sent_at');
+            $table->timestamp('claimed_at')->nullable()->after('claim_token');
             $table->timestamp('dispatched_at')->nullable()->after('claimed_at');
 
             $table->index(['status', 'claimed_at'], 'reminders_status_claimed_idx');
@@ -75,7 +83,7 @@ return new class extends Migration
 
         Schema::table('reminders', function (Blueprint $table) {
             $table->dropIndex('reminders_status_claimed_idx');
-            $table->dropColumn(['claimed_at', 'dispatched_at']);
+            $table->dropColumn(['claim_token', 'claimed_at', 'dispatched_at']);
         });
     }
 };

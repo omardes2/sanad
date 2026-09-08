@@ -65,9 +65,10 @@
 
 ### `reminders`
 - `user_id` → `users` (**cascade**) · `task_id?` → `tasks` (**nullOnDelete**) · `source_message_id?` → `messages` (**nullOnDelete**)
-- `title` · `remind_at` (UTC) · `timezone` · `channel` enum `ChannelType` · `status` enum `ReminderStatus` · `sent_at?` · `claimed_at?` · `dispatched_at?` · `attempts` (default 0) · `last_error?`
+- `title` · `remind_at` (UTC) · `timezone` · `channel` enum `ChannelType` · `status` enum `ReminderStatus` · `sent_at?` · `claim_token?` · `claimed_at?` · `dispatched_at?` · `attempts` (default 0) · `last_error?`
 - **index (`status`,`remind_at`)** لخدمة الـScheduler في جلب التذكيرات المستحقة، + (`user_id`,`status`) + **(`status`,`claimed_at`)** لكنس المُعلَّق في `processing`.
-- `claimed_at` وقت المطالبة الحالية، و`dispatched_at` وقت آخر طلب **مأذون** به. المقارنة بينهما هي العقد كلّه: `dispatched_at IS NULL` أو `< claimed_at` تعني أن شيئًا لم يغادر تحت هذه المطالبة (استعادة بلا خطر تكرار)، و`>= claimed_at` تعني أن طلبًا أُذن به وقد يكون وصل أو لا. لذلك تأذن المطالبة الواحدة **بطلب واحد** فقط.
+- **`claim_token` هو هوية المِلكية، ولا شيء غيره.** رمز مبهم يولّده الخادم عند كل مطالبة، يحمله العامل معه (عبر الطابور) حتى لحظة الإرسال، ولا يُسمح له بأي كتابة إلا ما دام الرمز المخزَّن يساويه. هكذا يُستبعَد العامل المتأخّر بنيويًا: مطالبة A كُنِست واستُبدلت بمطالبة B، فيستيقظ A حاملًا هوية لم يعد أحد يعرفها — فلا يزيد `attempts` ولا يرسل ولا يسوّي الصف، **مهما تقاربت المطالبتان زمنيًا، ومهما كانت دقّة الأعمدة، ومهما اختلف تمثيل الوقت بين المحرّكين**. `status = processing` تقول إن أحدًا يعمل عليه لا إنه أنت، وترتيب طابعين زمنيين لا يجيب عن «مَن» أصلًا.
+- `claimed_at` وقت المطالبة الحالية. `dispatched_at` **تُمسح مع كل مطالبة**، فتصير داخل المطالبة حقيقة بسيطة بلا أي مقارنة: `NULL` تعني أن شيئًا لم يغادر تحتها (استعادة بلا خطر تكرار)، وغير `NULL` تعني أن طلبًا أُذن به وقد يكون وصل أو لا — والعامل الثاني على المطالبة نفسها يقرأها ويتوقّف. لذلك تأذن المطالبة الواحدة **بطلب واحد** فقط.
 - `attempts` تَعُدّ **المحاولات الفيزيائية** حصرًا — لا تزيدها المطالبة أبدًا — والسقف **2** لكل تذكير ولا ثالثة. `last_error` رمز مُغلق من `ReminderFailureReason` فقط، ولا يحمل عنوانًا ولا رقمًا ولا نصّ رسالة؛ و`unknown` وحدها ليست نهائية.
 
 ### `memories`

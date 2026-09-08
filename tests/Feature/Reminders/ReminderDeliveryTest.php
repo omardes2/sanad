@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Data\Reminders\ReminderClaim;
 use App\Enums\ChannelAccountStatus;
 use App\Enums\ChannelType;
 use App\Enums\MessageDeliveryStatus;
@@ -105,7 +106,12 @@ it('claims a due reminder without counting a physical attempt', function () {
     $claimed = app(ReminderDispatcher::class)->claimDue(10);
     $reminder->refresh();
 
-    expect($claimed)->toBe([$reminder->id])
+    expect($claimed)->toHaveCount(1)
+        ->and($claimed[0]->reminderId)->toBe($reminder->id)
+        // A fresh, server-owned identity the worker must carry to be allowed
+        // to dispatch — never a timestamp, never merely `processing`.
+        ->and($claimed[0]->token)->toBe($reminder->claim_token)
+        ->and($claimed[0]->token)->not->toBeEmpty()
         ->and($reminder->status)->toBe(ReminderStatus::Processing)
         ->and($reminder->claimed_at)->not->toBeNull()
         // A claim is bookkeeping. Nothing left the platform.
@@ -200,15 +206,17 @@ it('refuses a dispatch once the budget is spent, even if a worker asks directly'
     Http::fake(['graph.facebook.com/*' => Http::response(reminderAccepted(), 200)]);
     $dispatcher = app(ReminderDispatcher::class);
 
-    // Hand-place the reminder at the ceiling under a fresh claim.
+    // Hand-place the reminder at the ceiling under a fresh claim this worker
+    // genuinely holds — so what refuses it is the budget, not the fencing.
     $reminder->forceFill([
         'status' => ReminderStatus::Processing->value,
         'attempts' => ReminderDispatcher::MAX_ATTEMPTS,
+        'claim_token' => 'token-at-the-ceiling',
         'claimed_at' => CarbonImmutable::now(),
-        'dispatched_at' => CarbonImmutable::now()->subMinute(),
+        'dispatched_at' => null,
     ])->save();
 
-    $dispatcher->deliver($reminder->id);
+    $dispatcher->deliver(new ReminderClaim($reminder->id, 'token-at-the-ceiling'));
 
     expect($reminder->fresh()->attempts)->toBe(ReminderDispatcher::MAX_ATTEMPTS);
     Http::assertNothingSent();
@@ -219,12 +227,12 @@ it('lets one claim authorise only one physical send', function () {
     Http::fake(['graph.facebook.com/*' => Http::response(reminderAccepted(), 200)]);
     $dispatcher = app(ReminderDispatcher::class);
 
-    $id = $dispatcher->claimDue(10)[0];
+    $claim = $dispatcher->claimDue(10)[0];
 
-    // Two workers act on the SAME claim. The first dispatches; the second
-    // reads dispatched_at >= claimed_at and stops without sending.
-    $dispatcher->deliver($id);
-    $dispatcher->deliver($id);
+    // Two workers act on the SAME claim. The first dispatches; the second sees
+    // this claim has already dispatched and stops without sending.
+    $dispatcher->deliver($claim);
+    $dispatcher->deliver($claim);
 
     expect($reminder->fresh()->attempts)->toBe(1);
     Http::assertSentCount(1);
@@ -291,15 +299,18 @@ it('records a second cost row when a second physical send is genuinely accepted'
     $reminder->refresh();
 
     // Force the reminder back for a second REAL send, as the sweeper would
-    // after an unproven attempt.
+    // after an unproven attempt: a new claim means a new identity and a cleared
+    // dispatch marker.
     $reminder->forceFill([
         'status' => ReminderStatus::Processing->value,
+        'claim_token' => 'second-claim-token',
         'claimed_at' => CarbonImmutable::now()->addSecond(),
+        'dispatched_at' => null,
         'sent_at' => null,
     ])->save();
     $this->travelTo(CarbonImmutable::now()->addSeconds(2));
 
-    $dispatcher->deliver($reminder->id);
+    $dispatcher->deliver(new ReminderClaim($reminder->id, 'second-claim-token'));
     $reminder->refresh();
 
     // Two real sends were served and billed, so there are two rows. They are
@@ -591,7 +602,7 @@ it('never re-selects a terminal reminder', function () {
     $dispatcher = app(ReminderDispatcher::class);
 
     foreach ([ReminderStatus::Sent, ReminderStatus::Failed, ReminderStatus::Cancelled] as $terminal) {
-        $reminder->forceFill(['status' => $terminal->value, 'claimed_at' => null])->save();
+        $reminder->forceFill(['status' => $terminal->value, 'claim_token' => null, 'claimed_at' => null])->save();
         expect($dispatcher->claimDue(10))->toBe([]);
     }
 });
@@ -680,4 +691,109 @@ it('stores only closed-enum reason codes in last_error', function () {
         // outcome is neither proven nor disproven.
         ->and(ReminderFailureReason::Unknown->isTerminal())->toBeFalse()
         ->and(ReminderFailureReason::TooLate->isTerminal())->toBeTrue();
+});
+
+// ---------------------------------------------------------------------------
+// Claim fencing — a stale worker can never act under someone else's claim
+// ---------------------------------------------------------------------------
+
+it('fences out a worker whose claim was swept and replaced while it stalled', function () {
+    [, , , $reminder] = reminderSubject();
+    Http::fake(['graph.facebook.com/*' => Http::response(reminderAccepted(), 200)]);
+    $dispatcher = app(ReminderDispatcher::class);
+
+    // 1. Worker A claims. 2. A stalls, holding its claim.
+    $claimA = $dispatcher->claimDue(10)[0];
+
+    // 3. The lease expires and the sweeper returns the reminder to pending.
+    $this->travelTo(CarbonImmutable::now()->addSeconds(400));
+    expect($dispatcher->sweep())->toBe(['recovered' => 1, 'failed' => 0])
+        ->and($reminder->fresh()->claim_token)->toBeNull();
+
+    // 4. Worker B claims it and gets a DIFFERENT identity.
+    $claimB = $dispatcher->claimDue(10)[0];
+    expect($claimB->reminderId)->toBe($claimA->reminderId)
+        ->and($claimB->token)->not->toBe($claimA->token);
+
+    // 5. Worker A wakes up and tries to deliver under its dead claim.
+    $dispatcher->deliver($claimA);
+
+    $reminder->refresh();
+    expect($reminder->status)->toBe(ReminderStatus::Processing)
+        // A could not increment the budget…
+        ->and($reminder->attempts)->toBe(0)
+        // …could not settle the row someone else owns…
+        ->and($reminder->last_error)->toBeNull()
+        ->and($reminder->claim_token)->toBe($claimB->token);
+    // …and above all could not send.
+    Http::assertNothingSent();
+
+    // B, the only valid owner, delivers exactly once.
+    $dispatcher->deliver($claimB);
+
+    $reminder->refresh();
+    expect($reminder->status)->toBe(ReminderStatus::Sent)
+        ->and($reminder->attempts)->toBe(1)
+        ->and(Message::query()->where('reminder_id', $reminder->id)->count())->toBe(1)
+        ->and(DB::table('usage_events')->where('correlation_id', UsageKeys::correlationForReminder($reminder))->count())->toBe(1);
+    Http::assertSentCount(1);
+});
+
+it('fences a stale worker even when both claims carry an identical claimed_at', function () {
+    [, , , $reminder] = reminderSubject();
+    Http::fake(['graph.facebook.com/*' => Http::response(reminderAccepted(), 200)]);
+    $dispatcher = app(ReminderDispatcher::class);
+
+    $claimA = $dispatcher->claimDue(10)[0];
+    $stamp = $reminder->fresh()->claimed_at;
+
+    // The sweeper releases and B re-claims. Then force BOTH claims to share the
+    // very same claimed_at: no ordering, no precision and no engine difference
+    // can distinguish them — only the token can.
+    $this->travelTo(CarbonImmutable::now()->addSeconds(400));
+    $dispatcher->sweep();
+    $claimB = $dispatcher->claimDue(10)[0];
+    $reminder->forceFill(['claimed_at' => $stamp])->save();
+
+    expect($reminder->fresh()->claimed_at->equalTo($stamp))->toBeTrue();
+
+    $dispatcher->deliver($claimA);
+
+    expect($reminder->fresh()->attempts)->toBe(0);
+    Http::assertNothingSent();
+
+    $dispatcher->deliver($claimB);
+    expect($reminder->fresh()->attempts)->toBe(1);
+    Http::assertSentCount(1);
+});
+
+it('refuses a fabricated claim token outright', function () {
+    [, , , $reminder] = reminderSubject();
+    Http::fake(['graph.facebook.com/*' => Http::response(reminderAccepted(), 200)]);
+    $dispatcher = app(ReminderDispatcher::class);
+
+    $dispatcher->claimDue(10);
+    $dispatcher->deliver(new ReminderClaim($reminder->id, 'not-the-real-token'));
+
+    expect($reminder->fresh()->attempts)->toBe(0)
+        ->and($reminder->fresh()->status)->toBe(ReminderStatus::Processing);
+    Http::assertNothingSent();
+});
+
+it('releases the claim identity whenever the reminder reaches a terminal state', function () {
+    [, , , $sent] = reminderSubject();
+    Http::fake(['graph.facebook.com/*' => Http::response(reminderAccepted(), 200)]);
+    $dispatcher = app(ReminderDispatcher::class);
+
+    $dispatcher->deliver($dispatcher->claimDue(10)[0]);
+    expect($sent->fresh()->status)->toBe(ReminderStatus::Sent)
+        ->and($sent->fresh()->claim_token)->toBeNull();
+
+    // And on the failure path too: nothing terminal is owned by anyone.
+    [, , , $failed] = reminderSubject(['remind_at' => CarbonImmutable::now()->subMinutes(90)]);
+    $dispatcher->deliver($dispatcher->claimDue(10)[0]);
+
+    expect($failed->fresh()->status)->toBe(ReminderStatus::Failed)
+        ->and($failed->fresh()->last_error)->toBe('too_late')
+        ->and($failed->fresh()->claim_token)->toBeNull();
 });

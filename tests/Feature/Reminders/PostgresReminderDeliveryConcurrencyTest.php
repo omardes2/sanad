@@ -131,7 +131,7 @@ it('of 6 concurrent claims of one due reminder exactly one wins, and no claim co
     try {
         $outcomes = rdOutcomes(array_map(fn () => rdRun(['claim', '10']), range(1, 6)));
 
-        $winners = array_filter($outcomes, fn (string $o): bool => $o === 'claimed:'.$reminder->id);
+        $winners = array_filter($outcomes, fn (string $o): bool => str_starts_with($o, 'claimed:'.$reminder->id.':'));
 
         $reminder->refresh();
         expect($winners)->toHaveCount(1)
@@ -150,10 +150,10 @@ it('of 6 concurrent workers holding ONE claim only one dispatches a physical req
     [$user, $reminder] = rdSubject();
 
     try {
-        app(ReminderDispatcher::class)->claimDue(10);
+        $claim = app(ReminderDispatcher::class)->claimDue(10)[0];
 
         $outcomes = rdOutcomes(array_map(
-            fn () => rdRun(['deliver', (string) $reminder->id]),
+            fn () => rdRun(['deliver', (string) $reminder->id, $claim->token]),
             range(1, 6),
         ));
 
@@ -179,20 +179,17 @@ it('with one attempt already spent, racing sweepers and workers produce at most 
 
     try {
         // Attempt 1 leaves an unproven outcome: dispatched, still processing.
-        app(ReminderDispatcher::class)->claimDue(10);
-        rdOutcomes([rdRun(['deliver', (string) $reminder->id, '--outcome=unknown'])]);
+        $first = app(ReminderDispatcher::class)->claimDue(10)[0];
+        rdOutcomes([rdRun(['deliver', (string) $reminder->id, $first->token, '--outcome=unknown'])]);
 
         $reminder->refresh();
         expect($reminder->attempts)->toBe(1)
             ->and($reminder->status)->toBe(ReminderStatus::Processing);
 
-        // Age the row as real elapsed time would: a lease expires only after the
-        // dispatch it covered, so BOTH timestamps move back together. Then let
-        // sweepers and workers race for the one remaining attempt.
-        DB::table('reminders')->where('id', $reminder->id)->update([
-            'claimed_at' => CarbonImmutable::now()->subSeconds(600),
-            'dispatched_at' => CarbonImmutable::now()->subSeconds(590),
-        ]);
+        // Age the claim past its lease, then let sweepers and workers race for
+        // the one remaining attempt.
+        DB::table('reminders')->where('id', $reminder->id)
+            ->update(['claimed_at' => CarbonImmutable::now()->subSeconds(600)]);
 
         $processes = [];
         for ($i = 0; $i < 3; $i++) {
@@ -200,11 +197,13 @@ it('with one attempt already spent, racing sweepers and workers produce at most 
         }
         rdOutcomes($processes);
 
-        // Whoever holds it now, several workers try to send.
+        // Whoever holds it now, several workers try to send under that claim.
         $claimers = rdOutcomes(array_map(fn () => rdRun(['claim', '10']), range(1, 3)));
-        expect(array_filter($claimers, fn (string $o): bool => $o === 'claimed:'.$reminder->id))->toHaveCount(1);
+        $won = array_values(array_filter($claimers, fn (string $o): bool => str_starts_with($o, 'claimed:'.$reminder->id.':')));
+        expect($won)->toHaveCount(1);
+        $token = explode(':', $won[0])[2];
 
-        $second = rdOutcomes(array_map(fn () => rdRun(['deliver', (string) $reminder->id]), range(1, 4)));
+        $second = rdOutcomes(array_map(fn () => rdRun(['deliver', (string) $reminder->id, $token]), range(1, 4)));
         $report = implode(' | ', $second);
 
         $reminder->refresh();
@@ -227,21 +226,19 @@ it('never resets an accepted reminder and sends it again', function () {
     [$user, $reminder] = rdSubject();
 
     try {
-        app(ReminderDispatcher::class)->claimDue(10);
-        rdOutcomes([rdRun(['deliver', (string) $reminder->id])]);
+        $claim = app(ReminderDispatcher::class)->claimDue(10)[0];
+        rdOutcomes([rdRun(['deliver', (string) $reminder->id, $claim->token])]);
 
         expect($reminder->fresh()->status)->toBe(ReminderStatus::Sent);
 
         // Age the row as if the lease had expired, then race sweepers and
         // workers against the settled reminder.
-        DB::table('reminders')->where('id', $reminder->id)->update([
-            'claimed_at' => CarbonImmutable::now()->subSeconds(600),
-            'dispatched_at' => CarbonImmutable::now()->subSeconds(590),
-        ]);
+        DB::table('reminders')->where('id', $reminder->id)
+            ->update(['claimed_at' => CarbonImmutable::now()->subSeconds(600)]);
 
         $processes = array_map(fn () => rdRun(['sweep']), range(1, 3));
         $processes[] = rdRun(['claim', '10']);
-        $processes[] = rdRun(['deliver', (string) $reminder->id]);
+        $processes[] = rdRun(['deliver', (string) $reminder->id, $claim->token]);
         rdOutcomes($processes);
 
         $reminder->refresh();
@@ -285,6 +282,50 @@ it('uses the (status, claimed_at) index for the stale sweep and (status, remind_
         expect($indexes)->toContain('status')
             ->and($indexes)->toContain('claimed_at')
             ->and($indexes)->toContain('remind_at');
+    } finally {
+        rdCleanup($user);
+    }
+});
+
+it('fences out a stale worker: A claims, is swept and replaced by B, then A and B race toward dispatch', function () {
+    [$user, $reminder] = rdSubject();
+
+    try {
+        // 1. Worker A claims and stalls, holding its identity.
+        $claimA = app(ReminderDispatcher::class)->claimDue(10)[0];
+
+        // 2. Its lease goes stale. 3. The sweeper returns it to pending.
+        DB::table('reminders')->where('id', $reminder->id)
+            ->update(['claimed_at' => CarbonImmutable::now()->subSeconds(600)]);
+        expect(rdOutcomes([rdRun(['sweep'])]))->toBe(['swept:1:0'])
+            ->and($reminder->fresh()->claim_token)->toBeNull();
+
+        // 4. Worker B claims the same reminder and gets a different identity.
+        $claimB = app(ReminderDispatcher::class)->claimDue(10)[0];
+        expect($claimB->token)->not->toBe($claimA->token);
+
+        // 5. A and B are released concurrently toward pre-dispatch. Two of each,
+        //    so a lost race cannot be mistaken for a fence.
+        $outcomes = rdOutcomes([
+            rdRun(['deliver', (string) $reminder->id, $claimA->token]),
+            rdRun(['deliver', (string) $reminder->id, $claimB->token]),
+            rdRun(['deliver', (string) $reminder->id, $claimA->token]),
+            rdRun(['deliver', (string) $reminder->id, $claimB->token]),
+        ]);
+
+        $reminder->refresh();
+        $report = implode(' | ', $outcomes);
+
+        // B's claim is the only valid dispatch owner, and it dispatched once.
+        expect(array_filter($outcomes, fn (string $o): bool => $o === 'sent:1'))->toHaveCount(1, $report)
+            ->and(array_filter($outcomes, fn (string $o): bool => str_starts_with($o, 'nosend:')))->toHaveCount(3, $report)
+            // A could not increment the budget and could not send: `attempts`
+            // reflects only B's one valid physical attempt.
+            ->and($reminder->attempts)->toBe(1, $report)
+            ->and($reminder->status)->toBe(ReminderStatus::Sent)
+            // One outbound message and no duplicate outbound usage.
+            ->and(DB::table('messages')->where('reminder_id', $reminder->id)->count())->toBe(1)
+            ->and(DB::table('usage_events')->where('correlation_id', 'reminder:'.$reminder->id)->count())->toBe(1);
     } finally {
         rdCleanup($user);
     }

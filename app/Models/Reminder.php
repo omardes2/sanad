@@ -30,6 +30,7 @@ class Reminder extends Model
         'channel',
         'status',
         'sent_at',
+        'claim_token',
         'claimed_at',
         'dispatched_at',
         'attempts',
@@ -71,16 +72,30 @@ class Reminder extends Model
     }
 
     /**
+     * Whether the worker carrying $token still holds this reminder's claim.
+     *
+     * This is the ONLY ownership test. `status === processing` says someone is
+     * working on it, not that it is still YOU; and no comparison of `claimed_at`
+     * against `dispatched_at` can answer the question either, whatever the
+     * column precision or the engine's serialisation — two claims taken close
+     * together are indistinguishable by time, and a stale worker would sail
+     * through. A token that is new on every claim is distinguishable always.
+     */
+    public function isClaimedBy(string $token): bool
+    {
+        return $this->claim_token !== null && hash_equals($this->claim_token, $token);
+    }
+
+    /**
      * Whether a physical send has already been authorised under the CURRENT
-     * claim. One claim authorises at most one request: a second worker holding
-     * the same claim sees this and stops, so a claim can never fan out into two
+     * claim. Every claim clears `dispatched_at`, so this is a plain fact about
+     * this claim with no timestamp comparison in it: a second worker holding
+     * the same token reads it and stops, and a claim can never fan out into two
      * unsolicited messages.
      */
     public function dispatchedUnderCurrentClaim(): bool
     {
-        return $this->claimed_at !== null
-            && $this->dispatched_at !== null
-            && $this->dispatched_at->greaterThanOrEqualTo($this->claimed_at);
+        return $this->dispatched_at !== null;
     }
 
     /**

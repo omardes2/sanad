@@ -7,6 +7,7 @@ namespace App\Services\Reminders;
 use App\Channels\ChannelRegistry;
 use App\Data\ChannelDeliveryResult;
 use App\Data\OutboundMessageData;
+use App\Data\Reminders\ReminderClaim;
 use App\Data\Reminders\ReminderDeliveryPlan;
 use App\Data\Reminders\ReminderRecipient;
 use App\Enums\MessageDeliveryStatus;
@@ -23,6 +24,7 @@ use App\Support\SafeError;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -42,18 +44,35 @@ use Throwable;
  * reminder and dies before the HTTP call has sent nothing, and must not be
  * charged an attempt for it.
  *
- *   claim      pending → processing, claimed_at = now.
- *              attempts UNCHANGED, dispatched_at UNTOUCHED.
+ *   claim      pending → processing, a NEW claim_token, claimed_at = now,
+ *              dispatched_at cleared. attempts UNCHANGED.
  *
  *   authorise  a short locked transaction immediately before the request:
- *              re-check the status, that this claim has not already dispatched,
- *              that the budget is unspent and that the reminder is still
- *              timely; then attempts + 1 and dispatched_at = now, and commit.
- *              ONLY after that commit may a request leave.
+ *              re-check the status, that the stored token still equals the
+ *              one this worker carries, that this claim has not already
+ *              dispatched, that the budget is unspent and that the reminder is
+ *              still timely; then attempts + 1 and dispatched_at = now, and
+ *              commit. ONLY after that commit may a request leave.
  *
- * `dispatched_at >= claimed_at` therefore means "a request was authorised under
- * the current claim", which is what makes one claim authorise exactly one
- * physical send: a second worker holding the same claim reads it and stops.
+ * FENCING — WHO OWNS THE CLAIM
+ * ----------------------------
+ * `claim_token` is the ownership identity, and nothing else is. A worker is
+ * handed the token at claim time and carries it (through the queue) to the
+ * dispatch; every mutating path re-reads the row and requires the stored token
+ * to equal the one it carries.
+ *
+ * That is what fences out the dangerous case: worker A claims, stalls, the
+ * sweeper decides A is stale and returns the reminder to `pending`, worker B
+ * claims it, and A finally wakes. A holds a token nobody recognises any more,
+ * so it cannot increment `attempts`, cannot send, and cannot settle the row —
+ * whatever the two claims' timestamps look like, however coarse the columns
+ * are, and however the engine serialises them. `status === processing` says
+ * only that SOMEONE owns it, and ordering two timestamps cannot say WHO; a
+ * token that is new on every claim can.
+ *
+ * Within a claim, `dispatched_at` (cleared by every claim) is the plain
+ * "already dispatched" marker, so one claim authorises exactly one physical
+ * send: a second worker holding the same token reads it and stops.
  *
  * THE CRASH WINDOWS
  * -----------------
@@ -95,7 +114,12 @@ final class ReminderDispatcher
      * and SQLite alike, needs no FOR UPDATE SKIP LOCKED, and does not depend on
      * the scheduler's overlap guard for correctness.
      *
-     * @return list<int> the ids this worker owns
+     * Each winner is handed a FRESH token — the identity it must carry to be
+     * allowed to dispatch later — and the previous claim's `dispatched_at` is
+     * cleared, so within this claim that column is a plain fact rather than
+     * something to compare.
+     *
+     * @return list<ReminderClaim> the claims this worker owns
      */
     public function claimDue(int $limit): array
     {
@@ -115,17 +139,21 @@ final class ReminderDispatcher
         $claimed = [];
 
         foreach ($candidates as $id) {
+            $token = (string) Str::uuid();
+
             $affected = DB::table('reminders')
                 ->where('id', $id)
                 ->where('status', ReminderStatus::Pending->value)
                 ->update([
                     'status' => ReminderStatus::Processing->value,
+                    'claim_token' => $token,
                     'claimed_at' => $now,
+                    'dispatched_at' => null,
                     'updated_at' => $now,
                 ]);
 
             if ($affected === 1) {
-                $claimed[] = (int) $id;
+                $claimed[] = new ReminderClaim((int) $id, $token);
             }
         }
 
@@ -135,12 +163,19 @@ final class ReminderDispatcher
     /**
      * Deliver one claimed reminder. Every exit is either a settled reminder or
      * a row the sweeper can safely recover.
+     *
+     * The FIRST thing checked is ownership, before any mutation at all: a
+     * worker whose claim was swept and replaced must not settle the reminder
+     * either — marking someone else's live claim `too_late` or `no_recipient`
+     * would be just as wrong as sending under it.
      */
-    public function deliver(int $reminderId): void
+    public function deliver(ReminderClaim $claim): void
     {
-        $reminder = Reminder::query()->find($reminderId);
+        $reminder = Reminder::query()->find($claim->reminderId);
 
-        if ($reminder === null || $reminder->status !== ReminderStatus::Processing) {
+        if ($reminder === null
+            || $reminder->status !== ReminderStatus::Processing
+            || ! $reminder->isClaimedBy($claim->token)) {
             return;
         }
 
@@ -174,12 +209,12 @@ final class ReminderDispatcher
         // a second message. It is savepoint-safe on PostgreSQL.
         $message = $this->outboundMessage($reminder, $recipient);
 
-        $authorised = $this->authoriseDispatch($reminder);
+        $authorised = $this->authoriseDispatch($claim);
 
         if ($authorised === null) {
-            // Another worker already dispatched under this claim, the budget is
-            // spent, or the reminder moved on. Nothing is sent and nothing is
-            // written: whatever owns it now decides its outcome.
+            // This claim is no longer ours, another worker already dispatched
+            // under it, the budget is spent, or the reminder moved on. Nothing
+            // is sent and nothing is written: whatever owns it now decides.
             return;
         }
 
@@ -233,16 +268,21 @@ final class ReminderDispatcher
      * The short locked transaction that turns "claimed" into "allowed to send
      * exactly one request". Returns the reminder with its incremented attempt,
      * or null when this worker may not send.
+     *
+     * Ownership is re-read here under the row lock and not trusted from the
+     * earlier check: between the two, a sweep and a re-claim can have happened,
+     * and this is the last moment before a real request leaves.
      */
-    private function authoriseDispatch(Reminder $reminder): ?Reminder
+    private function authoriseDispatch(ReminderClaim $claim): ?Reminder
     {
-        return DB::transaction(function () use ($reminder): ?Reminder {
+        return DB::transaction(function () use ($claim): ?Reminder {
             /** @var Reminder|null $locked */
-            $locked = Reminder::query()->whereKey($reminder->getKey())->lockForUpdate()->first();
+            $locked = Reminder::query()->whereKey($claim->reminderId)->lockForUpdate()->first();
 
             if ($locked === null
                 || $locked->status !== ReminderStatus::Processing
-                || $locked->claimed_at === null
+                // Fencing: still OUR claim, not merely someone's.
+                || ! $locked->isClaimedBy($claim->token)
                 // One claim authorises at most one request.
                 || $locked->dispatchedUnderCurrentClaim()
                 || $locked->attempts >= self::MAX_ATTEMPTS
@@ -335,6 +375,8 @@ final class ReminderDispatcher
                 'status' => ReminderStatus::Sent->value,
                 'sent_at' => $now,
                 'last_error' => null,
+                // The claim is over; a terminal reminder is owned by no one.
+                'claim_token' => null,
             ])->save();
         });
 
@@ -371,6 +413,8 @@ final class ReminderDispatcher
         $reminder->forceFill([
             'status' => ReminderStatus::Failed->value,
             'last_error' => $reason->value,
+            // The claim is over; a terminal reminder is owned by no one.
+            'claim_token' => null,
         ])->save();
 
         Log::warning('sanad.reminder.failed', [
@@ -381,9 +425,10 @@ final class ReminderDispatcher
     }
 
     /**
-     * Move a stale reminder, but only if it is still exactly as observed —
-     * `claimed_at` is the token, so a worker that legitimately re-claimed in
-     * the meantime is never robbed of its claim.
+     * Move a stale reminder, but only if it is still under exactly the claim
+     * the sweeper observed — the token is the compare-and-set, so a worker that
+     * legitimately re-claimed in the meantime is never robbed of its claim, and
+     * two sweepers can never both recover the same one.
      */
     private function settleStale(Reminder $reminder, ReminderStatus $to, ?ReminderFailureReason $reason): int
     {
@@ -392,8 +437,10 @@ final class ReminderDispatcher
         $attributes = ['status' => $to->value, 'updated_at' => $now];
 
         if ($to === ReminderStatus::Pending) {
-            // Released for another claim. dispatched_at is kept: it is the
-            // evidence that a request already went out under the old claim.
+            // Released. The claim is over, so its identity goes with it; the
+            // next claim issues a new token and clears `dispatched_at`. What
+            // survives is `attempts`, which is what bounds the retry budget.
+            $attributes['claim_token'] = null;
             $attributes['claimed_at'] = null;
         }
 
@@ -401,13 +448,17 @@ final class ReminderDispatcher
             $attributes['last_error'] = $reason->value;
         }
 
-        $affected = DB::table('reminders')
+        $query = DB::table('reminders')
             ->where('id', $reminder->getKey())
-            ->where('status', ReminderStatus::Processing->value)
-            ->where('claimed_at', $reminder->claimed_at)
-            ->update($attributes);
+            ->where('status', ReminderStatus::Processing->value);
 
-        return $affected === 1 ? 1 : 0;
+        // A row with no token is not owned by anyone; matching it needs IS NULL
+        // rather than `= NULL`, which never matches on either engine.
+        $query = $reminder->claim_token === null
+            ? $query->whereNull('claim_token')
+            : $query->where('claim_token', $reminder->claim_token);
+
+        return $query->update($attributes) === 1 ? 1 : 0;
     }
 
     /**
