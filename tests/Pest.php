@@ -1011,6 +1011,7 @@ function toolRule(callable $fn): string
 
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Models\ToolConsent;
 use App\Models\ToolInvocation;
 use App\Services\Tools\ReadToolExecutor;
 use App\Services\Tools\ToolInvocationStore;
@@ -1083,7 +1084,10 @@ function f2Cleanup(User $subscriber): void
     AuditLog::query()->where('subject_type', (new ToolInvocation)->getMorphClass())->whereIn('subject_id', $ids)->delete();
     DB::table('usage_events')->whereIn('tool_invocation_ref', $ids->map(fn ($id) => (string) $id))->delete();
     DB::table('tool_invocations')->whereIn('id', $ids)->delete();
-    DB::table('tool_consents')->where('subscriber_id', $subscriber->id)->delete();
+
+    $consentIds = DB::table('tool_consents')->where('subscriber_id', $subscriber->id)->pluck('id');
+    AuditLog::query()->where('subject_type', (new ToolConsent)->getMorphClass())->whereIn('subject_id', $consentIds)->delete();
+    DB::table('tool_consents')->whereIn('id', $consentIds)->delete();
     DB::table('memories')->where('user_id', $subscriber->id)->delete();
     DB::table('messages')->where('user_id', $subscriber->id)->delete();
     DB::table('conversations')->where('user_id', $subscriber->id)->delete();
