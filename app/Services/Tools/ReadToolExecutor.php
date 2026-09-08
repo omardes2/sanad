@@ -27,9 +27,15 @@ use Throwable;
  * The handler of a tool is resolved from the CODE ALLOWLIST below, keyed by
  * `name@version`. Nothing is ever resolved from registry metadata, from the
  * database or from a payload: a definition still cannot name a class, and this
- * map is the only place that says what actually runs. A definition whose
- * side-effect class is not `read` is not executable in this phase and is
- * refused before an invocation is even claimed.
+ * map is the only place that says what actually runs.
+ *
+ * The read-only boundary and the identity of a call are SEPARATE contracts and
+ * are answered in that order. A candidate whose side-effect class is not `read`
+ * is refused before an invocation is claimed at all — `side_effect_not_executable`
+ * — even when the slot it names is already owned and the store would have said
+ * CONFLICT; nothing is created, nothing existing is touched, nothing runs. A
+ * `read` candidate does reach the claim, so an owned slot answers on identity:
+ * a different read tool, or a different version of the same one, is a CONFLICT.
  *
  * What F2 guarantees, stated precisely:
  *   - EXACTLY ONCE for the invocation claim and for the terminal record
@@ -92,7 +98,14 @@ final class ReadToolExecutor
 
     public function execute(ToolCallRequest $request): ToolInvocationResult
     {
-        if ($request->definition->sideEffect !== ToolSideEffect::Read || ! array_key_exists($request->toolKey(), self::HANDLERS)) {
+        // TWO SEPARATE CONTRACTS, in this order, and never conflated:
+        //
+        // 1. F2 IS READ-ONLY. A candidate whose side-effect class is not `read`
+        //    fails closed here, BEFORE any claim: no row is created, an
+        //    invocation that already owns the slot is not read or touched, and
+        //    nothing executes. This holds even where the store would have
+        //    answered CONFLICT — the read-only boundary is decided first.
+        if ($request->definition->sideEffect !== ToolSideEffect::Read) {
             return ToolInvocationResult::refusedBeforeClaim(ToolInvocationRefusalReason::SideEffectNotExecutable);
         }
 
@@ -100,14 +113,27 @@ final class ReadToolExecutor
             return ToolInvocationResult::refusedBeforeClaim(ToolInvocationRefusalReason::SubscriberMissing);
         }
 
+        // 2. IDENTITY. A read candidate goes to the claim, so a slot that is
+        //    already owned answers on identity alone — a different read tool or
+        //    a different version of one is a CONFLICT, not a read-only refusal.
+        //    Replay, in flight and conflict all changed nothing and execute
+        //    nothing; none of them needs a handler.
         $claim = $this->store->claim($request);
 
-        // Replay, in flight and conflict all changed nothing and execute nothing.
         if (! $claim->isClaimed()) {
             return ToolInvocationResult::settled($claim->outcome, $claim->invocation, executed: false);
         }
 
         $invocation = $claim->invocation;
+
+        // A `read` the code allowlist cannot run is a wiring error, not a
+        // caller error: a test pins that every shipped read has a handler, so
+        // this is unreachable in production. If it ever happened, the slot it
+        // just claimed is refused terminally — never left dangling, and never
+        // executed.
+        if (! array_key_exists($request->toolKey(), self::HANDLERS)) {
+            return $this->settledResult($claim, $this->store->refuse($invocation, ToolInvocationRefusalReason::SideEffectNotExecutable), executed: false);
+        }
         $capability = $request->definition->capability;
         $subscriberId = (int) $request->subscriber->getKey();
 

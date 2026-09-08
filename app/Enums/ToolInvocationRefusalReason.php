@@ -26,14 +26,26 @@ enum ToolInvocationRefusalReason: string
 
     case InvalidInput = 'invalid_input';
 
-    /** F2 executes `read` tools only; anything else is not executable yet. */
+    /**
+     * F2 executes `read` tools only. Decided BEFORE any claim, so proposing a
+     * write tool for a slot never creates a row and never touches the
+     * invocation that already owns it.
+     */
     case SideEffectNotExecutable = 'side_effect_not_executable';
 
     case SubscriberMissing = 'subscriber_missing';
 
-    /** Is this reason decided after a claim, and therefore recorded on the invocation? */
+    /**
+     * Is this reason decided after a claim, and therefore recorded on the
+     * invocation? `side_effect_not_executable` appears on BOTH sides: it is the
+     * pre-claim answer for a non-read candidate (no row at all), and the
+     * terminal answer for the unreachable case of a `read` with no handler on a
+     * slot this process had just claimed.
+     */
     public function isPersisted(): bool
     {
-        return $this === self::NotGranted || $this === self::ConsentRevoked;
+        return $this === self::NotGranted
+            || $this === self::ConsentRevoked
+            || $this === self::SideEffectNotExecutable;
     }
 }

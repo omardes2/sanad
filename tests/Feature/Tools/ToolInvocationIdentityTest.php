@@ -7,6 +7,7 @@ use App\Enums\ToolCapability;
 use App\Enums\ToolClaimOutcome;
 use App\Enums\ToolConsentReason;
 use App\Enums\ToolFieldType;
+use App\Enums\ToolInvocationRefusalReason;
 use App\Enums\ToolInvocationStatus;
 use App\Enums\ToolSideEffect;
 use App\Models\Memory;
@@ -14,6 +15,7 @@ use App\Models\Message;
 use App\Models\ToolInvocation;
 use App\Models\ToolInvocationEvent;
 use App\Models\User;
+use App\Services\Tools\ReadToolExecutor;
 use App\Services\Tools\ToolConsentService;
 use App\Support\Tools\CanonicalInput;
 use App\Support\Tools\InvocationKey;
@@ -48,6 +50,47 @@ beforeEach(function () {
     app(ToolConsentService::class)->grant($this->subscriber->id, ToolCapability::MemoryRead, 0, ToolConsentReason::SubscriberRequest);
     auth()->forgetUser();
 });
+
+/** A real executor request for a READ contract at slot 1 of this message. */
+function readRequest(Message $message, User $subscriber, string $name, int $version, array $arguments, int $callIndex = 1): ToolCallRequest
+{
+    $definition = readDefinition($name, $version);
+
+    return new ToolCallRequest(
+        message: $message,
+        subscriber: $subscriber,
+        definition: $definition,
+        callIndex: $callIndex,
+        input: CanonicalInput::of($definition->input, $arguments),
+        key: InvocationKey::of((int) $message->getKey(), $callIndex),
+    );
+}
+
+/** The registry's contract when it ships one, otherwise the same read contract at another key. */
+function readDefinition(string $name, int $version): ToolDefinition
+{
+    $registry = app(ToolRegistry::class);
+
+    if ($registry->has($name, $version)) {
+        return $registry->require($name, $version);
+    }
+
+    return ToolDefinition::of(
+        key: $name, version: $version,
+        title: 'عقد قراءة اختباري',
+        summary: 'عقد قراءة آخر لإثبات أن الخانة المملوكة تُجيب بالهوية لا بحدّ القراءة.',
+        capability: ToolCapability::MemoryRead,
+        sideEffect: ToolSideEffect::Read,
+        input: ToolSchema::of([
+            ToolField::of('query', ToolFieldType::String, required: true, max: 200),
+            ToolField::of('limit', ToolFieldType::Integer, required: false, max: 50),
+        ]),
+        output: ToolSchema::of([
+            ToolField::of('matches', ToolFieldType::Integer, required: true, max: 50),
+            ToolField::of('truncated', ToolFieldType::Boolean, required: true),
+        ]),
+    );
+}
 
 /** A claim of ONE slot with an explicitly named tool, version and input. */
 function slotClaim(Message $message, User $subscriber, string $name, int $version, array $arguments, int $callIndex = 1)
@@ -133,6 +176,99 @@ it('claims a slot once and CONFLICTS on a different input, a different version a
         ->and(ToolInvocationEvent::query()->where('tool_invocation_id', $row->id)->count())->toBe(1)
         ->and(f2Audits($after))->toHaveCount(0)
         ->and(f2Usage($after))->toHaveCount(0);
+});
+
+/** Everything about a slot that a refused or conflicting call must leave untouched. */
+function slotSnapshot(int $invocationId): array
+{
+    $row = ToolInvocation::query()->findOrFail($invocationId);
+
+    return [
+        'invocations' => ToolInvocation::count(),
+        'status' => $row->status->value,
+        'version' => $row->version,
+        'tool' => $row->toolKeyValue(),
+        'hash' => $row->input_hash,
+        'output' => $row->output,
+        'updated_at' => (string) $row->updated_at,
+        'events' => ToolInvocationEvent::query()->where('tool_invocation_id', $row->id)->count(),
+        'audits' => f2Audits($row)->count(),
+        'usage' => f2Usage($row)->count(),
+    ];
+}
+
+it('THE EXECUTOR fails closed on a non-read candidate for an owned slot, before any claim and with no mutation at all', function () {
+    // A real, settled invocation owns slot 1 of this message.
+    $row = f2Executor()->call($this->message, 'memory.read@1', ['query' => 'coffee'])->invocation;
+    expect($row->status)->toBe(ToolInvocationStatus::Succeeded);
+
+    $before = slotSnapshot($row->id);
+
+    // A write tool proposed for the SAME slot. The read-only boundary answers
+    // first: `side_effect_not_executable`, decided before the claim — even
+    // though the store, asked directly, would have said CONFLICT.
+    $write = f2Executor()->call($this->message, 'task.create@1', ['title' => 'pay the bank']);
+
+    expect($write->invocation)->toBeNull()
+        ->and($write->claim)->toBeNull()          // it never reached a claim
+        ->and($write->executed)->toBeFalse()
+        ->and($write->status)->toBe(ToolInvocationStatus::Refused)
+        ->and($write->refusal)->toBe(ToolInvocationRefusalReason::SideEffectNotExecutable);
+
+    // No second row, existing invocation untouched, no event, no audit, no usage, no execution.
+    expect(slotSnapshot($row->id))->toBe($before);
+
+    // …and the store, asked directly about that same candidate, does say CONFLICT —
+    // the two contracts are separate, and the executor answers the read-only one first.
+    $direct = slotClaim($this->message, $this->subscriber, 'task.create', 1, ['title' => 'pay the bank']);
+
+    expect($direct->outcome)->toBe(ToolClaimOutcome::Conflict)
+        ->and($direct->invocation->id)->toBe($row->id)
+        ->and(slotSnapshot($row->id))->toBe($before);
+});
+
+it('THE EXECUTOR conflicts on a DIFFERENT READ tool or version for an owned slot, with no mutation at all', function () {
+    $row = f2Executor()->call($this->message, 'memory.read@1', ['query' => 'coffee'])->invocation;
+    expect($row->status)->toBe(ToolInvocationStatus::Succeeded);
+
+    $before = slotSnapshot($row->id);
+
+    // A READ candidate reaches the claim, so the owned slot answers on IDENTITY.
+    foreach ([
+        'different version of the same read tool' => ['memory.read', 2, ['query' => 'coffee']],
+        'a different read tool entirely' => ['notes.read', 1, ['query' => 'coffee']],
+        'the same read tool with a different input' => ['memory.read', 1, ['query' => 'tea']],
+    ] as $label => [$name, $version, $arguments]) {
+        $result = f2Executor()->execute(readRequest($this->message, $this->subscriber, $name, $version, $arguments));
+
+        expect($result->claim)->toBe(ToolClaimOutcome::Conflict, $label)
+            ->and($result->invocation->id)->toBe($row->id, $label)
+            ->and($result->executed)->toBeFalse($label)
+            ->and(slotSnapshot($row->id))->toBe($before, $label);
+    }
+});
+
+it('refuses a read the code allowlist cannot run terminally, rather than executing or dangling it', function () {
+    // Unreachable in production — every shipped read has a handler — but if it
+    // ever happened the claimed slot is settled, not left planned.
+    $result = f2Executor()->execute(readRequest($this->message, $this->subscriber, 'notes.read', 1, ['query' => 'coffee']));
+    $row = $result->invocation;
+
+    expect($result->claim)->toBe(ToolClaimOutcome::Claimed)
+        ->and($result->executed)->toBeFalse()
+        ->and($row->status)->toBe(ToolInvocationStatus::Refused)
+        ->and($row->refusal_reason)->toBe(ToolInvocationRefusalReason::SideEffectNotExecutable)
+        ->and($row->started_at)->toBeNull()
+        ->and($row->output)->toBeNull()
+        ->and($row->events()->pluck('to_status')->map->value->all())->toBe(['planned', 'refused'])
+        ->and(f2Usage($row))->toHaveCount(0);   // it never ran
+
+    // Every read the registry actually ships DOES have a handler.
+    foreach (app(ToolRegistry::class)->all() as $definition) {
+        if ($definition->sideEffect === ToolSideEffect::Read) {
+            expect(ReadToolExecutor::executableKeys())->toContain($definition->key->value());
+        }
+    }
 });
 
 it('executes a slot at most once even when the tool proposed for it changes', function () {
