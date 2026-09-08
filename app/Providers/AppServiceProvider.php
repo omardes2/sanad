@@ -21,6 +21,7 @@ use App\Support\Rbac\Role;
 use App\Support\Security\DnsHostResolver;
 use App\Support\Security\SecretRedactor;
 use App\Support\Security\SensitiveFieldRegistry;
+use App\Support\Tools\ToolRegistry;
 use App\Support\WhatsApp\WhatsAppConfig;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Gate;
@@ -45,6 +46,10 @@ class AppServiceProvider extends ServiceProvider
         // shared by the audit logger and the log channels.
         $this->app->singleton(SensitiveFieldRegistry::class);
         $this->app->singleton(SecretRedactor::class);
+
+        // The tool contracts (Phase F1): one registry per process, built and
+        // validated once — a definition is a frozen object, not a per-call copy.
+        $this->app->singleton(ToolRegistry::class);
 
         // Where the AI router reads its model catalog from: the resolver picks
         // the database catalog (Phase B2) when it has enabled models, else the

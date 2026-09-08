@@ -177,6 +177,10 @@
 ### `app_settings` (E5.2c، بلا تغيير في المخطط)
 `finance.reporting_currency` (managed + typed confirmation) صار له كاتب واحد race-safe: `SettingsRepository::lockManaged` يقفل صف المفتاح بـ`FOR UPDATE`، وعند غياب الصف (الكتابة الأولى) يطالب به بإدراج **قيمته السارية نفسها** داخل savepoint فيصير الفهرس الفريد على `key` هو الحكم — الخاسر ينتظر commit الفائز ثم يُرفض stale. المطالبة لا تغيّر أي قيمة فعّالة ولا تكتب audit وتختفي مع rollback المعاملة؛ `SettingsRepository` يبقى الكاتب الوحيد لهذا الجدول.
 
+### `tool_consents` (F1)
+موافقة المشترك على **قدرة** (لا على أداة): `(subscriber_id, capability)` **فريدة** — قرار واحد يغطي كل نسخ الأدوات التي تحتاج القدرة. الأعمدة: `status` (`granted|revoked`) · `granted_at?`/`revoked_at?` · `reason_code` (قائمة مغلقة) · `evidence_ref?` (**مرجع آلي مبهم** `message|conversation|admin_action:<id>` أو `policy:<code>`، ASCII بلا فراغات وبحدّ 64؛ لا نص بشري ولا بريد ولا هاتف — وغيابه `NULL`) · `version` (عقد التزامن: المستدعي يذكر النسخة التي رآها، وعدم التطابق stale بلا كتابة) · `updated_by_ref` · timestamps. فهرس `(capability, status)`. على PostgreSQL: CHECK للحالة، وتلازم `granted_at`/`revoked_at` مع الحالة، و`version ≥ 1`.
+**لا صف = NOT GRANTED** (نسخة 0): لا منح ضمني ولا افتراضي ولا موروث من دور أو خطة. الكاتب الوحيد `ToolConsentService` (قفل الصف، أو إدراج داخل savepoint في الكتابة الأولى حيث يحكم الفهرس الفريد)؛ **المنح للمشترك نفسه فقط بفعل مصادَق**، والسحب له أو لمشغّل مخوَّل أو لتشغيل console أعلن نفسه إداريًا باسم محدود يُسجَّل `console_admin:<ref>`، وaudit واحد داخل المعاملة نفسها؛ التاريخ الكامل في `audit_logs` (`tool.consent_granted` / `tool.consent_revoked`) فلا جدول أحداث في هذه المرحلة. لا بيانات شخصية في الصف ولا في الـaudit.
+
 ### `audit_logs`
 سجل تدقيق **append-only**.
 - `user_id?` → `users` (**nullOnDelete**)
