@@ -51,6 +51,25 @@ final readonly class AiRequest
     }
 
     /**
+     * The same request continued with more turns (immutable copy) — how a tool
+     * round is fed back to the model.
+     *
+     * @param  list<AiMessage>  $messages
+     */
+    public function withMessages(array $messages): self
+    {
+        return new self(
+            messages: $messages,
+            temperature: $this->temperature,
+            maxOutputTokens: $this->maxOutputTokens,
+            timeout: $this->timeout,
+            model: $this->model,
+            operation: $this->operation,
+            tools: $this->tools,
+        );
+    }
+
+    /**
      * @param  list<AiToolDefinition>  $tools
      */
     public function withTools(array $tools): self

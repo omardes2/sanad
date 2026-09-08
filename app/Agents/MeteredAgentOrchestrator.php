@@ -25,6 +25,9 @@ use App\Support\Billing\UsageKeys;
  *
  *  RECORD (always) — UsageRecorder writes the cost/usage ledger row for what the
  *      provider consumed. Runs whether billing.enforce is on or off.
+ *  LEDGER — one row per REAL PROVIDER CALL (a tool turn makes up to three),
+ *      keyed by the call's index within the message so a retry records nothing
+ *      twice and no synthesis call is lost.
  *  ENFORCE (only when billing.enforce) — UsageEngine::check() BEFORE calling AI
  *      (never call the provider when already over the limit), and
  *      UsageEngine::charge() AFTER, consuming quota atomically. Losing the
@@ -61,29 +64,39 @@ class MeteredAgentOrchestrator implements AgentOrchestrator
             return $reply;
         }
 
-        $ai = $reply->metadata['ai'] ?? [];
         $correlationId = UsageKeys::correlationForMessage($message);
         $idempotencyKey = UsageKeys::invocation(self::DIMENSION, $correlationId);
 
-        // 1) Ledger — always.
-        $this->recorder->record(new UsageRecord(
-            subscriber: $user,
-            dimension: self::DIMENSION,
-            idempotencyKey: $idempotencyKey,
-            correlationId: $correlationId,
-            operation: $ai['operation'] ?? null,
-            provider: (string) ($ai['provider'] ?? 'internal'),
-            model: $ai['model'] ?? null,
-            routedModel: $ai['routed_model'] ?? null,
-            channel: $conversation->channelAccount?->channel?->value,
-            inputUnits: (int) ($ai['prompt_tokens'] ?? 0),
-            outputUnits: (int) ($ai['completion_tokens'] ?? 0),
-            cachedUnits: (int) ($ai['cached_tokens'] ?? 0),
-            durationMs: isset($ai['duration_ms']) ? (int) $ai['duration_ms'] : null,
-            metadata: ['message_id' => $message->id, 'conversation_id' => $conversation->id],
-        ));
+        // 1) Ledger — always, and ONCE PER REAL PROVIDER CALL. A turn that used
+        //    tools makes up to three: charging only the first would silently lose
+        //    the cost of the synthesis calls. The sequence number comes from the
+        //    STRUCTURE of the turn (the call's index), so a retry of the same
+        //    message reproduces the same keys and records nothing twice.
+        foreach ($this->providerCalls($reply) as $ai) {
+            $sequence = (int) ($ai['sequence'] ?? 1);
 
-        // 2) Quota — only when enforcement is on (charge() itself is gated).
+            $this->recorder->record(new UsageRecord(
+                subscriber: $user,
+                dimension: self::DIMENSION,
+                idempotencyKey: UsageKeys::invocation(self::DIMENSION, $correlationId, $sequence),
+                correlationId: $correlationId,
+                operation: $ai['operation'] ?? null,
+                provider: (string) ($ai['provider'] ?? 'internal'),
+                model: $ai['model'] ?? null,
+                routedModel: $ai['routed_model'] ?? null,
+                channel: $conversation->channelAccount?->channel?->value,
+                inputUnits: (int) ($ai['prompt_tokens'] ?? 0),
+                outputUnits: (int) ($ai['completion_tokens'] ?? 0),
+                cachedUnits: (int) ($ai['cached_tokens'] ?? 0),
+                durationMs: isset($ai['duration_ms']) ? (int) $ai['duration_ms'] : null,
+                metadata: ['message_id' => $message->id, 'conversation_id' => $conversation->id],
+            ));
+        }
+
+        // 2) Quota — ONE charge per user-facing reply, whatever it took to produce
+        //    it. The dimension is `ai_reply`: a subscriber's allowance counts
+        //    answers, not the provider round-trips behind one. The ledger already
+        //    carries the true cost above, and never depends on quota accounting.
         $charge = $this->usage->charge($user, self::DIMENSION, $idempotencyKey);
 
         // Lost the boundary race: the allowance was exhausted concurrently.
@@ -92,6 +105,25 @@ class MeteredAgentOrchestrator implements AgentOrchestrator
         }
 
         return $reply;
+    }
+
+    /**
+     * Every real provider call of the turn, oldest first. A reply from before
+     * the tool loop existed carries only `ai`, and is recorded as one call.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function providerCalls(AgentResponseData $reply): array
+    {
+        $calls = $reply->metadata['ai_calls'] ?? null;
+
+        if (is_array($calls) && $calls !== []) {
+            return array_values($calls);
+        }
+
+        $ai = $reply->metadata['ai'] ?? [];
+
+        return $ai === [] ? [] : [$ai + ['sequence' => 1]];
     }
 
     private function deniedResponse(UsageDecision $decision): AgentResponseData

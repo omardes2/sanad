@@ -16,6 +16,7 @@ use App\Exceptions\Tools\ToolRuleException;
 use App\Models\Message;
 use App\Models\ToolInvocation;
 use App\Models\User;
+use App\Services\Tasks\TaskReader;
 use App\Services\Tools\Readers\MemoryReader;
 use App\Support\Tools\ReadOnlyQueryGuard;
 use App\Support\Tools\ToolCallPlan;
@@ -58,6 +59,7 @@ final class ReadToolExecutor
      */
     private const HANDLERS = [
         'memory.read@1' => [MemoryReader::class, 'read'],
+        'task.list@1' => [TaskReader::class, 'read'],
     ];
 
     public function __construct(

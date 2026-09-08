@@ -6,8 +6,13 @@ namespace App\Agents;
 
 use App\Contracts\AgentOrchestrator;
 use App\Contracts\Ai\SupportsChat;
+use App\Contracts\Ai\SupportsTools;
 use App\Data\AgentResponseData;
+use App\Data\Ai\AiMessage;
+use App\Data\Ai\AiRequest;
+use App\Data\Ai\AiResponse;
 use App\Data\Ai\Catalog\RoutingContext;
+use App\Data\Ai\ToolResult;
 use App\Enums\AiOperation;
 use App\Enums\MessageType;
 use App\Exceptions\Ai\AiConfigurationException;
@@ -17,9 +22,12 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Ai\PromptBuilder;
 use App\Services\Ai\SanadAiRouter;
+use App\Services\Ai\ToolTurnRunner;
 use App\Services\Settings\SettingsRepository;
 use App\Support\Ai\ContextRequest;
 use App\Support\SafeError;
+use App\Support\Tools\ToolCatalog;
+use App\Support\Tools\ToolTurnBudget;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -46,6 +54,8 @@ class AiAgentOrchestrator implements AgentOrchestrator
         private readonly SanadAiRouter $router,
         private readonly PromptBuilder $promptBuilder,
         private readonly SettingsRepository $settings,
+        private readonly ToolCatalog $catalog,
+        private readonly ToolTurnRunner $tools,
     ) {}
 
     public function handle(User $user, Conversation $conversation, Message $message): AgentResponseData
@@ -73,40 +83,123 @@ class AiAgentOrchestrator implements AgentOrchestrator
                 throw AiConfigurationException::unsupportedOperation($providerName, AiOperation::Chat);
             }
 
-            $response = $provider->chat($request->withModel($model));
+            return $this->runTurn($provider, $providerName, $request->withModel($model), $model, $routedModel, $conversation, $message);
         } catch (AiException $e) {
             return $this->onFailure($e, $providerName, $conversation, $message);
         }
+    }
 
-        $model = $response->model ?? $model;
+    /**
+     * The bounded turn: at most 3 provider calls, at most 2 tool rounds and at
+     * most 3 tool invocations for one inbound message — counters the server owns
+     * and nothing in a provider response can raise or reset.
+     *
+     *   call 1  the user's turn: answer, or propose tools
+     *   call 2  sees round-1 results: answer, or propose the second and LAST round
+     *   call 3  final synthesis only, tool calling DISABLED
+     *
+     * A proposed batch runs only if the WHOLE of it fits the remaining
+     * invocation budget; an oversized batch is refused entirely — never
+     * partially — and the turn falls through to a final call with tools off and
+     * the bounded reason `tool_budget_exceeded`, so the model answers honestly
+     * instead of pretending the tools ran.
+     *
+     * @throws AiException
+     */
+    private function runTurn(
+        SupportsChat $provider,
+        string $providerName,
+        AiRequest $request,
+        ?string $model,
+        ?string $routedModel,
+        Conversation $conversation,
+        Message $message,
+    ): AgentResponseData {
+        $budget = new ToolTurnBudget;
+        $offered = $provider instanceof SupportsTools ? $this->catalog->expose() : [];
+        $calls = [];
+        $response = null;
+
+        while ($budget->mayCallProvider()) {
+            $withTools = $offered !== [] && $budget->mayOfferTools();
+            $index = $budget->countProviderCall();
+            $response = $provider->chat($withTools ? $request->withTools($offered) : $request->withTools([]));
+            $model = $response->model ?? $model;
+            $calls[] = self::callFacts($index, $providerName, $model, $routedModel, $response, $withTools);
+
+            if (! $withTools || ! $response->hasToolCalls()) {
+                break;
+            }
+
+            $batch = $response->toolCalls;
+
+            if (! $budget->fits(count($batch))) {
+                // All-or-nothing: nothing is executed, and the model is told why.
+                $request = $request->withTools([])->withMessages(array_merge($request->messages, [
+                    AiMessage::assistantToolCalls($batch),
+                    ...array_map(static fn ($c) => ToolResult::failed($c, ToolTurnBudget::EXCEEDED)->toMessage(), $batch),
+                ]));
+
+                continue;
+            }
+
+            $results = $this->tools->run($message, $batch, $budget);
+            $budget->countRound(count($batch));
+
+            $request = $request->withMessages(array_merge($request->messages, [
+                AiMessage::assistantToolCalls($batch, $response->text),
+                ...array_map(static fn (ToolResult $r) => $r->toMessage(), $results),
+            ]));
+        }
 
         Log::info('sanad.ai.replied', [
             'provider' => $providerName,
             'conversation_id' => $conversation->id,
             'message_id' => $message->id,
             'model' => $model,
+            'provider_calls' => $budget->providerCalls(),
+            'tool_rounds' => $budget->toolRounds(),
+            'tool_invocations' => $budget->toolInvocations(),
+        ]);
+
+        $last = $calls[count($calls) - 1];
+
+        return new AgentResponseData(
+            text: $response?->text ?? '',
+            type: MessageType::Text,
+            metadata: [
+                // The LAST provider call, kept for every existing reader.
+                'ai' => $last,
+                // Every real provider call of this turn, so the ledger can record
+                // each one instead of silently losing the synthesis calls.
+                'ai_calls' => $calls,
+                'tools' => [
+                    'rounds' => $budget->toolRounds(),
+                    'invocations' => $budget->toolInvocations(),
+                ],
+            ],
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function callFacts(int $index, string $providerName, ?string $model, ?string $routedModel, AiResponse $response, bool $withTools): array
+    {
+        return [
+            'sequence' => $index,
+            'provider' => $providerName,
+            'model' => $model,
+            // What the router asked for — the ledger resolves aliases from
+            // the reported model first, then this.
+            'routed_model' => $routedModel,
+            'operation' => AiOperation::Chat->value,
             'prompt_tokens' => $response->promptTokens,
             'completion_tokens' => $response->completionTokens,
             'cached_tokens' => $response->cachedTokens,
             'duration_ms' => $response->durationMs,
-        ]);
-
-        return new AgentResponseData(
-            text: $response->text,
-            type: MessageType::Text,
-            metadata: ['ai' => [
-                'provider' => $providerName,
-                'model' => $model,
-                // What the router asked for — the ledger resolves aliases from
-                // the reported model first, then this.
-                'routed_model' => $routedModel,
-                'operation' => AiOperation::Chat->value,
-                'prompt_tokens' => $response->promptTokens,
-                'completion_tokens' => $response->completionTokens,
-                'cached_tokens' => $response->cachedTokens,
-                'duration_ms' => $response->durationMs,
-            ]],
-        );
+            'tools_offered' => $withTools,
+        ];
     }
 
     private function onFailure(

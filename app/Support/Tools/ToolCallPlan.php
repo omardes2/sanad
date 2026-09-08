@@ -75,12 +75,37 @@ final class ToolCallPlan
     }
 
     /**
-     * The single-call turn: the same derivation, at position 1.
+     * ONE call at an explicit slot of this message.
+     *
+     * The slot is stated by the caller because a turn may execute tools in more
+     * than one round: round two continues the numbering of round one, so the two
+     * rounds never claim the same slot. The index still comes from the
+     * deterministic structure of the turn — the position of the call in the
+     * ordered plan — and never from a provider, a clock or a counter of rows.
      *
      * @param  array<string, mixed>  $arguments
      */
-    public function one(Message $message, string $key, array $arguments): ToolCallRequest
+    public function one(Message $message, string $key, array $arguments, int $callIndex = 1): ToolCallRequest
     {
-        return $this->of($message, [['key' => $key, 'arguments' => $arguments]])[0];
+        if ($message->getKey() === null) {
+            throw ToolRuleException::of('message', 'الخطة تحتاج رسالة مخزَّنة، لا رسالة غير محفوظة.');
+        }
+
+        $subscriber = $message->user()->first();
+
+        if (! $subscriber instanceof User) {
+            throw ToolRuleException::of('subscriber', 'الرسالة لا تعود إلى مشترك قائم.');
+        }
+
+        $definition = $this->registry->requireKey($key);
+
+        return new ToolCallRequest(
+            message: $message,
+            subscriber: $subscriber,
+            definition: $definition,
+            callIndex: $callIndex,
+            input: CanonicalInput::of($definition->input, $arguments),
+            key: InvocationKey::of((int) $message->getKey(), $callIndex),
+        );
     }
 }

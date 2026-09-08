@@ -28,4 +28,18 @@ enum ToolFieldType: string
 
     /** One of a closed list declared with the field. */
     case Enum = 'enum';
+
+    /**
+     * A BOUNDED list of rows, each row itself a closed schema of SCALAR fields
+     * (Phase F4). Still no opaque blob: the row shape is declared, the row count
+     * has a maximum, and a list may never contain another list — so the depth is
+     * one, always, and the size of any payload stays provably bounded.
+     */
+    case ListOfRows = 'list_of_rows';
+
+    /** Can a nested row declare this type? A list may not contain a list. */
+    public function isScalar(): bool
+    {
+        return $this !== self::ListOfRows;
+    }
 }
