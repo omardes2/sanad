@@ -95,9 +95,13 @@ class ToolRegistry
     }
 
     /**
-     * The declarations themselves. Phase F1 ships three safe, NON-EXECUTING
-     * contracts so the registry, the capability model and the consent gate can
-     * be exercised end to end without any tool being able to do anything.
+     * The declarations themselves.
+     *
+     * Phase F1 shipped three contracts; F3-V1 adds the minimal write set the
+     * V1 launch scope names. A shipped version is frozen, so
+     * `reminder.create@1` (external_write + approval) stays exactly as it was
+     * and simply is not executable in V1 — the local scheduling write it should
+     * have been is `reminder.create@2`.
      *
      * @return list<ToolDefinition>
      */
@@ -136,6 +140,34 @@ class ToolRegistry
                 ]),
             ),
             ToolDefinition::of(
+                key: 'task.complete', version: 1,
+                title: 'إنهاء مهمة',
+                summary: 'يضع مهمة المشترك نفسه في حالة «منجزة». تغيير محلي قابل للتراجع، وتكراره لا يغيّر شيئًا.',
+                capability: ToolCapability::TasksWrite,
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    ToolField::of('task_id', ToolFieldType::Integer, required: true, max: 999999999),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('task_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    ToolField::of('completed_at', ToolFieldType::DateTime, required: true),
+                ]),
+            ),
+            ToolDefinition::of(
+                key: 'reminder.cancel', version: 1,
+                title: 'إلغاء تذكير',
+                summary: 'يلغي تذكيرًا لم يُرسَل بعد للمشترك نفسه. لا يلغي تذكيرًا قيد الإرسال أو أُرسل أو فشل إرساله.',
+                capability: ToolCapability::RemindersWrite,
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    ToolField::of('reminder_id', ToolFieldType::Integer, required: true, max: 999999999),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('reminder_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    ToolField::of('cancelled_at', ToolFieldType::DateTime, required: true),
+                ]),
+            ),
+            ToolDefinition::of(
                 key: 'reminder.create', version: 1,
                 title: 'إنشاء تذكير',
                 summary: 'يجدول تذكيرًا واحدًا للمشترك نفسه في وقت UTC محدد. يُرسل لاحقًا عبر القناة، فيلزم تأكيد.',
@@ -150,6 +182,27 @@ class ToolRegistry
                     ToolField::of('scheduled_for', ToolFieldType::DateTime, required: true),
                 ]),
                 requiresApproval: true,
+                rateLimitPerHour: 20,
+            ),
+            ToolDefinition::of(
+                key: 'reminder.create', version: 2,
+                title: 'إنشاء تذكير',
+                summary: 'يجدول تذكيرًا واحدًا للمشترك نفسه في وقت UTC محدد. الجدولة كتابة محلية؛ الإرسال لاحقًا شأن نظام الإشعارات.',
+                capability: ToolCapability::RemindersWrite,
+                // The reminder ROW is a local, reversible write. What leaves the
+                // platform is the later delivery, which belongs to the
+                // notification subsystem and not to this contract — that is the
+                // whole reason `@1` (external_write + approval) is frozen and
+                // this version exists.
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    ToolField::of('title', ToolFieldType::String, required: true, max: 120),
+                    ToolField::of('remind_at', ToolFieldType::DateTime, required: true),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('reminder_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    ToolField::of('scheduled_for', ToolFieldType::DateTime, required: true),
+                ]),
                 rateLimitPerHour: 20,
             ),
         ];

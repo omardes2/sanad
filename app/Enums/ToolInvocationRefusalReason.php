@@ -27,11 +27,22 @@ enum ToolInvocationRefusalReason: string
     case InvalidInput = 'invalid_input';
 
     /**
-     * F2 executes `read` tools only. Decided BEFORE any claim, so proposing a
-     * write tool for a slot never creates a row and never touches the
-     * invocation that already owns it.
+     * The side-effect class is not executable in this phase — F3-V1 runs `read`
+     * and local `write` only, so `external_write` and `irreversible` land here.
+     * Decided BEFORE any claim and BEFORE the approval check, so the class
+     * always answers first and one condition never masks the other: an
+     * `external_write` that also requires approval is
+     * `side_effect_not_executable`, never `approval_required`.
      */
     case SideEffectNotExecutable = 'side_effect_not_executable';
+
+    /**
+     * Phase F3-V1 — the class IS executable, but the definition requires
+     * approval and no approval mechanism exists yet. Fails closed before any
+     * claim; the real server-bound, single-use, expiring approval arrives with
+     * its own phase.
+     */
+    case ApprovalRequired = 'approval_required';
 
     case SubscriberMissing = 'subscriber_missing';
 

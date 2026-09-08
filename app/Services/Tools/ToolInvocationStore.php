@@ -183,6 +183,34 @@ final class ToolInvocationStore
         return $this->settle($row, ToolInvocationStatus::Succeeded, $durationMs, ['output' => $output], 'ok');
     }
 
+    /**
+     * running → succeeded, with a LOCAL DOMAIN MUTATION committed in the very
+     * same database transaction (Phase F3-V1).
+     *
+     * `$mutate` performs the domain write and returns the tool's output. It runs
+     * inside this transaction, before the projection moves, so:
+     *   - commit    ⇒ the domain row AND the `succeeded` invocation both exist;
+     *   - rollback  ⇒ NEITHER exists — a crash, a domain refusal, or losing the
+     *     settlement race to another process all leave the domain table exactly
+     *     as it was, and the invocation simply stays `running` for the sweeper.
+     *
+     * That is what makes a local write EXACTLY ONCE rather than at-most-once.
+     * It holds ONLY because the mutation is in the same database as the
+     * invocation record. It must never be assumed for an HTTP API, a payment
+     * gateway, a WhatsApp send, an email, a phone call or any other external
+     * service: those cannot join this transaction and remain at-most-once.
+     *
+     * @param  Closure(): array<string, mixed>  $mutate  the domain write, returning the tool output
+     */
+    public function succeedWith(ToolInvocation $row, Closure $mutate, int $durationMs): ToolInvocation
+    {
+        return DB::transaction(function () use ($row, $mutate, $durationMs): ToolInvocation {
+            $output = $mutate();
+
+            return $this->settle($row, ToolInvocationStatus::Succeeded, $durationMs, ['output' => $output], 'ok');
+        });
+    }
+
     /** running → failed. */
     public function fail(ToolInvocation $row, ToolInvocationFailureKind $kind, int $durationMs): ToolInvocation
     {

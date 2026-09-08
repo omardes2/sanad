@@ -1094,3 +1094,57 @@ function f2Cleanup(User $subscriber): void
     DB::table('usage_events')->where('user_id', $subscriber->id)->delete();
     $subscriber->delete();
 }
+
+// ---- Write tools (Phase F3-V1) ---------------------------------------------------------
+
+use App\Enums\ToolCapability;
+use App\Enums\ToolConsentReason;
+use App\Models\Reminder;
+use App\Models\Task;
+use App\Services\Tools\ToolConsentService;
+use App\Services\Tools\ToolExecutor;
+
+function f3Executor(): ToolExecutor
+{
+    return app(ToolExecutor::class);
+}
+
+/** Grant one capability as the subscriber themself (the only actor F1 allows). */
+function f3Consent(User $subscriber, ToolCapability $capability): void
+{
+    $previous = auth()->user();
+    auth()->setUser($subscriber);
+    app(ToolConsentService::class)->grant($subscriber->id, $capability, 0, ToolConsentReason::SubscriberRequest);
+    auth()->forgetUser();
+
+    if ($previous !== null) {
+        auth()->setUser($previous);
+    }
+}
+
+/** A subscriber who has consented to both write capabilities, with a stored message. */
+function f3Subject(): array
+{
+    $subscriber = User::factory()->create(['is_admin' => false, 'timezone' => 'Asia/Hebron']);
+    f3Consent($subscriber, ToolCapability::TasksWrite);
+    f3Consent($subscriber, ToolCapability::RemindersWrite);
+
+    return [$subscriber, f2Message($subscriber)];
+}
+
+/** Everything about the domain tables a refused or conflicting write must leave untouched. */
+function f3DomainSnapshot(User $subscriber): array
+{
+    return [
+        'tasks' => Task::query()->where('user_id', $subscriber->id)->orderBy('id')->get(['id', 'title', 'status', 'completed_at'])->toArray(),
+        'reminders' => Reminder::query()->where('user_id', $subscriber->id)->orderBy('id')->get(['id', 'title', 'status', 'remind_at'])->toArray(),
+    ];
+}
+
+/** Remove everything an F3 race created, so the shared PostgreSQL database stays clean. */
+function f3Cleanup(User $subscriber): void
+{
+    DB::table('reminders')->where('user_id', $subscriber->id)->delete();
+    DB::table('tasks')->where('user_id', $subscriber->id)->delete();
+    f2Cleanup($subscriber);
+}
