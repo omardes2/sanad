@@ -30,6 +30,8 @@ class Reminder extends Model
         'channel',
         'status',
         'sent_at',
+        'claimed_at',
+        'dispatched_at',
         'attempts',
         'last_error',
     ];
@@ -42,6 +44,8 @@ class Reminder extends Model
         return [
             'remind_at' => 'datetime',
             'sent_at' => 'datetime',
+            'claimed_at' => 'datetime',
+            'dispatched_at' => 'datetime',
             'channel' => ChannelType::class,
             'status' => ReminderStatus::class,
             'attempts' => 'integer',
@@ -64,6 +68,19 @@ class Reminder extends Model
     public function sourceMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'source_message_id');
+    }
+
+    /**
+     * Whether a physical send has already been authorised under the CURRENT
+     * claim. One claim authorises at most one request: a second worker holding
+     * the same claim sees this and stops, so a claim can never fan out into two
+     * unsolicited messages.
+     */
+    public function dispatchedUnderCurrentClaim(): bool
+    {
+        return $this->claimed_at !== null
+            && $this->dispatched_at !== null
+            && $this->dispatched_at->greaterThanOrEqualTo($this->claimed_at);
     }
 
     /**

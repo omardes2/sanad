@@ -45,7 +45,7 @@ class WebSimulatorChannelAdapter implements ChannelAdapter
         );
     }
 
-    public function send(OutboundMessageData $message): ChannelDeliveryResult
+    public function send(OutboundMessageData $message, bool $retryTransient = true): ChannelDeliveryResult
     {
         // No external transport: the simulator UI renders the persisted reply,
         // so it is considered delivered locally the instant it is "sent".

@@ -33,3 +33,24 @@ Schedule::command('sanad:ai:health:run')
 Schedule::command('sanad:ai:health:prune')
     ->daily()
     ->withoutOverlapping();
+
+/*
+| Reminder delivery. Both run every minute and are guarded against overlapping
+| on one host; correctness does not depend on that guard — the claim is an
+| atomic conditional update, so concurrent schedulers on several hosts still
+| deliver each reminder once.
+|
+| `dispatch` claims due reminders and queues them (no attempt is counted and
+| nothing is sent by the claim itself). `sweep` recovers reminders stuck in
+| `processing` past their lease: back to pending when the retry budget is
+| unspent and the reminder is still timely, terminal otherwise.
+*/
+Schedule::command('sanad:reminders:dispatch')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->when(static fn (): bool => (bool) config('reminders.enabled', true));
+
+Schedule::command('sanad:reminders:sweep')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->when(static fn (): bool => (bool) config('reminders.enabled', true));

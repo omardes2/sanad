@@ -65,8 +65,10 @@
 
 ### `reminders`
 - `user_id` → `users` (**cascade**) · `task_id?` → `tasks` (**nullOnDelete**) · `source_message_id?` → `messages` (**nullOnDelete**)
-- `title` · `remind_at` (UTC) · `timezone` · `channel` enum `ChannelType` · `status` enum `ReminderStatus` · `sent_at?` · `attempts` (default 0) · `last_error?`
-- **index (`status`,`remind_at`)** لخدمة الـScheduler في جلب التذكيرات المستحقة، + (`user_id`,`status`).
+- `title` · `remind_at` (UTC) · `timezone` · `channel` enum `ChannelType` · `status` enum `ReminderStatus` · `sent_at?` · `claimed_at?` · `dispatched_at?` · `attempts` (default 0) · `last_error?`
+- **index (`status`,`remind_at`)** لخدمة الـScheduler في جلب التذكيرات المستحقة، + (`user_id`,`status`) + **(`status`,`claimed_at`)** لكنس المُعلَّق في `processing`.
+- `claimed_at` وقت المطالبة الحالية، و`dispatched_at` وقت آخر طلب **مأذون** به. المقارنة بينهما هي العقد كلّه: `dispatched_at IS NULL` أو `< claimed_at` تعني أن شيئًا لم يغادر تحت هذه المطالبة (استعادة بلا خطر تكرار)، و`>= claimed_at` تعني أن طلبًا أُذن به وقد يكون وصل أو لا. لذلك تأذن المطالبة الواحدة **بطلب واحد** فقط.
+- `attempts` تَعُدّ **المحاولات الفيزيائية** حصرًا — لا تزيدها المطالبة أبدًا — والسقف **2** لكل تذكير ولا ثالثة. `last_error` رمز مُغلق من `ReminderFailureReason` فقط، ولا يحمل عنوانًا ولا رقمًا ولا نصّ رسالة؛ و`unknown` وحدها ليست نهائية.
 
 ### `memories`
 - `user_id` → `users` (**cascade**) · `source_message_id?` → `messages` (**nullOnDelete**)
@@ -82,6 +84,8 @@
 سجل خام للأحداث الواردة (idempotency).
 - `provider` · `external_event_id` · `payload json` · `status` enum `WebhookEventStatus` · `received_at` · `processed_at?` · `error_message?`
 - **unique(`provider`, `external_event_id`)** لضمان عدم ابتلاع الحدث مرتين.
+
+> `messages.reminder_id?` → `reminders` (**nullOnDelete**) **فريد**: رسالة صادرة واحدة على الأكثر لكل تذكير — نظير `in_reply_to_message_id` تمامًا، لأن التذكير لا رسالة واردة له. تُنشأ الرسالة **قبل** الإرسال، فالعامل المكرَّر يخسر الإدراج الفريد بدل أن ينتج رسالة ثانية. التكرار مستقبلًا يُنتج صفّ تذكير لكل مناسبة، فيبقى المفتاح صحيحًا.
 
 ### `usage_events`
 (بعد E2) حقول التكلفة/التسعير immutable على مستوى الموديل (`IMMUTABLE_COST_FIELDS`) ولا حذف؛ الفروق تعيش في جداول التسوية بجانبه.

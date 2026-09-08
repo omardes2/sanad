@@ -23,5 +23,11 @@ final readonly class OutboundMessageData
         public MessageType $type,
         public ?string $text = null,
         public array $metadata = [],
+        /**
+         * When set, the adapter sends this pre-approved template instead of
+         * free-form text. Used for PROACTIVE sends (reminders) that fall
+         * outside the window in which free-form messages are permitted.
+         */
+        public ?OutboundTemplate $template = null,
     ) {}
 }

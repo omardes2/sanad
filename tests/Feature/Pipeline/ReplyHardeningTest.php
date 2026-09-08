@@ -31,7 +31,7 @@ function flakyWebAdapter(int $failTimes): WebSimulatorChannelAdapter
 
         public function __construct(public int $failTimes) {}
 
-        public function send(OutboundMessageData $message): ChannelDeliveryResult
+        public function send(OutboundMessageData $message, bool $retryTransient = true): ChannelDeliveryResult
         {
             $this->sendCount++;
 

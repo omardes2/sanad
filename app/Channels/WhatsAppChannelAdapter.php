@@ -82,7 +82,13 @@ class WhatsAppChannelAdapter implements ChannelAdapter
         );
     }
 
-    public function send(OutboundMessageData $message): ChannelDeliveryResult
+    /**
+     * `$retryTransient` false ⇒ EXACTLY ONE physical request. A proactive
+     * sender needs that: an invisible in-adapter retry after a timeout can
+     * deliver a second unsolicited message that the caller never learns about,
+     * and would let one counted attempt become three real sends.
+     */
+    public function send(OutboundMessageData $message, bool $retryTransient = true): ChannelDeliveryResult
     {
         // Fail closed if the integration is disabled or misconfigured.
         $this->config->assertCanSend();
@@ -95,18 +101,10 @@ class WhatsAppChannelAdapter implements ChannelAdapter
             $this->config->phoneNumberId(),
         );
 
-        $payload = [
-            'messaging_product' => 'whatsapp',
-            'recipient_type' => 'individual',
-            'to' => $recipient,
-            'type' => 'text',
-            'text' => [
-                'preview_url' => false,
-                'body' => (string) $message->text,
-            ],
-        ];
+        $payload = $this->payload($message, $recipient);
+        $maxAttempts = $retryTransient ? self::MAX_ATTEMPTS : 1;
 
-        for ($attempt = 1; $attempt <= self::MAX_ATTEMPTS; $attempt++) {
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             try {
                 $response = Http::withToken($this->config->accessToken())
                     ->timeout($this->config->requestTimeout)
@@ -115,7 +113,7 @@ class WhatsAppChannelAdapter implements ChannelAdapter
                     ->post($url, $payload);
             } catch (ConnectionException) {
                 // Network error → retry, then give up with a safe exception.
-                if ($attempt < self::MAX_ATTEMPTS) {
+                if ($attempt < $maxAttempts) {
                     $this->backoff($attempt);
 
                     continue;
@@ -132,7 +130,7 @@ class WhatsAppChannelAdapter implements ChannelAdapter
 
             // Retry only transient failures: 429 and 5xx.
             if ($status === 429 || $status >= 500) {
-                if ($attempt < self::MAX_ATTEMPTS) {
+                if ($attempt < $maxAttempts) {
                     $this->backoff($attempt);
 
                     continue;
@@ -147,6 +145,47 @@ class WhatsAppChannelAdapter implements ChannelAdapter
 
         // Unreachable, but keeps static analysis happy.
         throw WhatsAppSendException::network();
+    }
+
+    /**
+     * Free-form text, or a pre-approved template when the caller supplied one.
+     *
+     * @return array<string, mixed>
+     */
+    private function payload(OutboundMessageData $message, string $recipient): array
+    {
+        $base = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $recipient,
+        ];
+
+        if ($message->template !== null) {
+            $components = $message->template->parameters === [] ? [] : [[
+                'type' => 'body',
+                'parameters' => array_map(
+                    static fn (string $value): array => ['type' => 'text', 'text' => $value],
+                    $message->template->parameters,
+                ),
+            ]];
+
+            return $base + [
+                'type' => 'template',
+                'template' => array_filter([
+                    'name' => $message->template->name,
+                    'language' => ['code' => $message->template->language],
+                    'components' => $components === [] ? null : $components,
+                ], static fn ($v): bool => $v !== null),
+            ];
+        }
+
+        return $base + [
+            'type' => 'text',
+            'text' => [
+                'preview_url' => false,
+                'body' => (string) $message->text,
+            ],
+        ];
     }
 
     /**
