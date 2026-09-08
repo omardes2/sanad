@@ -11,6 +11,7 @@ use App\Enums\MessageDeliveryStatus;
 use App\Enums\MessageDirection;
 use App\Enums\MessageProcessingStatus;
 use App\Models\Message;
+use App\Support\Ai\ProviderAttempt;
 use App\Support\SafeError;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -69,6 +70,13 @@ class ProcessInboundMessage implements ShouldBeUnique, ShouldQueue
         }
 
         $inbound->forceFill(['processing_status' => MessageProcessingStatus::Processing])->save();
+
+        // Which PHYSICAL attempt at this message is running. The queue owns the
+        // number and increments it on every reservation, and this job is
+        // ShouldBeUnique so only one attempt runs at a time — so a provider
+        // request re-sent by a retry is recorded as its own billable request,
+        // with no counter of existing rows and no race to resolve.
+        app(ProviderAttempt::class)->set($this->attempts());
 
         // Create the reply row exactly once (DB-enforced), or reuse it on retry.
         $reply = $this->resolveReply($inbound, $agent);

@@ -15,7 +15,6 @@ use App\Models\UsageCharge;
 use App\Models\UsageEvent;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
-use App\Services\Billing\UsageRecorder;
 use App\Support\Billing\UsageKeys;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -91,16 +90,24 @@ it('through the orchestrator: a duplicated inbound message is recorded once and 
         app(AiAgentOrchestrator::class),
         app(UsageEngine::class),
         app(UsageLimitResponder::class),
-        app(UsageRecorder::class),
     );
 
     // Same inbound message handled twice (retry / duplicate webhook).
     $metered->handle($subscriber, $conversation, $message);
     $metered->handle($subscriber, $conversation, $message);
 
-    $key = UsageKeys::invocation(UsageDimension::AiReply, UsageKeys::correlationForMessage($message));
+    $correlation = UsageKeys::correlationForMessage($message);
+    $quotaKey = UsageKeys::invocation(UsageDimension::AiReply, $correlation);
 
+    // QUOTA is scoped to the message: an infrastructure retry never consumes the
+    // subscriber's allowance twice.
     expect(app(UsageEngine::class)->usage($subscriber, UsageDimension::AiReply)['daily'])->toBe(1)
-        ->and(UsageCharge::where('idempotency_key', $key)->count())->toBe(1)
-        ->and(UsageEvent::where('idempotency_key', $key)->count())->toBe(1);
+        ->and(UsageCharge::where('idempotency_key', $quotaKey)->count())->toBe(1)
+        // PROVIDER COST is scoped to the physical request — the call position on
+        // the attempt that sent it. Both handles here run inside the SAME queue
+        // attempt, and one attempt sends call 1 once, so there is one request and
+        // one row. A real queue retry advances the attempt and is charged again
+        // (see the retry-metering test).
+        ->and(UsageEvent::where('correlation_id', $correlation)->count())->toBe(1)
+        ->and(UsageEvent::where('idempotency_key', UsageKeys::providerAttempt(UsageDimension::AiReply, $correlation, 1, 1))->count())->toBe(1);
 });

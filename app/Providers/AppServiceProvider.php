@@ -14,9 +14,9 @@ use App\Services\Ai\AiManager;
 use App\Services\Ai\Catalog\CatalogSourceResolver;
 use App\Services\Billing\UsageEngine;
 use App\Services\Billing\UsageLimitResponder;
-use App\Services\Billing\UsageRecorder;
 use App\Services\Credentials\CredentialVault;
 use App\Services\Settings\SettingsRepository;
+use App\Support\Ai\ProviderAttempt;
 use App\Support\Rbac\Role;
 use App\Support\Security\DnsHostResolver;
 use App\Support\Security\SecretRedactor;
@@ -56,6 +56,8 @@ class AppServiceProvider extends ServiceProvider
         // per-resolution instance would add one more on every tool call (F2).
         $this->app->singleton(ReadOnlyQueryGuard::class);
         $this->app->singleton(DomainWriteGuard::class);
+        // Which physical attempt at the current inbound message is running (queue-owned).
+        $this->app->singleton(ProviderAttempt::class);
 
         // Where the AI router reads its model catalog from: the resolver picks
         // the database catalog (Phase B2) when it has enabled models, else the
@@ -78,7 +80,6 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(AiAgentOrchestrator::class),
                 $app->make(UsageEngine::class),
                 $app->make(UsageLimitResponder::class),
-                $app->make(UsageRecorder::class),
             );
         });
 

@@ -310,9 +310,11 @@ it('meters every real provider call and never only the first', function () {
     $rows = DB::table('usage_events')->where('type', 'ai_reply')->orderBy('id')->get();
 
     expect($rows)->toHaveCount(2)   // one per provider call, not one per message
+        // One row per PHYSICAL provider request: the logical call position and
+        // the queue attempt that actually sent it.
         ->and($rows->pluck('idempotency_key')->all())->toBe([
-            'ai_reply:message:'.$subject[2]->id.'#1',
-            'ai_reply:message:'.$subject[2]->id.'#2',
+            'ai_reply:message:'.$subject[2]->id.':call:1:attempt:1',
+            'ai_reply:message:'.$subject[2]->id.':call:2:attempt:1',
         ])
         ->and($rows->sum('input_units'))->toBe(32)
         // The tool itself is metered on its own dimension, once.

@@ -23,6 +23,7 @@ use App\Models\User;
 use App\Services\Ai\PromptBuilder;
 use App\Services\Ai\SanadAiRouter;
 use App\Services\Ai\ToolTurnRunner;
+use App\Services\Billing\ProviderUsageRecorder;
 use App\Services\Settings\SettingsRepository;
 use App\Support\Ai\ContextRequest;
 use App\Support\SafeError;
@@ -56,6 +57,7 @@ class AiAgentOrchestrator implements AgentOrchestrator
         private readonly SettingsRepository $settings,
         private readonly ToolCatalog $catalog,
         private readonly ToolTurnRunner $tools,
+        private readonly ProviderUsageRecorder $providerUsage,
     ) {}
 
     public function handle(User $user, Conversation $conversation, Message $message): AgentResponseData
@@ -126,6 +128,16 @@ class AiAgentOrchestrator implements AgentOrchestrator
             $response = $provider->chat($withTools ? $request->withTools($offered) : $request->withTools([]));
             $model = $response->model ?? $model;
             $calls[] = self::callFacts($index, $providerName, $model, $routedModel, $response, $withTools);
+
+            // The provider served and billed THIS request. Record it now, not at
+            // the end of the turn: if a later call fails and the queue retries the
+            // message, this cost was still incurred and must not be lost — and the
+            // retry's own re-send of call 1 gets its own row rather than being
+            // deduplicated into this one.
+            $this->providerUsage->record(
+                $message->user, $conversation, $message, $index,
+                $response, $providerName, $model, $routedModel, AiOperation::Chat->value,
+            );
 
             if (! $withTools || ! $response->hasToolCalls()) {
                 break;

@@ -3,25 +3,34 @@
 declare(strict_types=1);
 
 use App\Agents\AiAgentOrchestrator;
+use App\Agents\MeteredAgentOrchestrator;
 use App\Data\Ai\AiToolCall;
 use App\Enums\MessageDirection;
 use App\Enums\MessageType;
+use App\Enums\SubscriptionStatus;
 use App\Enums\ToolCapability;
+use App\Enums\UsageDimension;
 use App\Exceptions\Ai\AiException;
 use App\Models\ChannelAccount;
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Models\Subscription;
 use App\Models\Task;
 use App\Models\ToolInvocation;
 use App\Models\User;
 use App\Services\Ai\ToolTurnRunner;
+use App\Services\Billing\UsageEngine;
 use App\Services\Tools\ToolExecutor;
+use App\Support\Ai\ProviderAttempt;
+use App\Support\Billing\UsageKeys;
 use App\Support\Tools\ToolCallPlan;
 use App\Support\Tools\ToolCatalog;
 use App\Support\Tools\ToolRegistry;
 use App\Support\Tools\ToolTurnBudget;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 uses(RefreshDatabase::class);
@@ -90,6 +99,27 @@ function boundarySubject(): array
     }
 
     return [$user, $conversation, $message];
+}
+
+/**
+ * Turn quota enforcement ON for one test and put the subscriber on a plan, so
+ * "charged once" is a real assertion instead of a no-op: with billing.enforce
+ * off, UsageEngine::charge() reports NotEnforced and writes nothing.
+ */
+function boundaryEnforcedPlan(User $user, int $daily = 5): void
+{
+    config(['billing.enforce' => true]);
+
+    Subscription::create([
+        'subscriber_id' => $user->id,
+        'plan_id' => billingPlan(['daily' => $daily, 'monthly' => 50])->id,
+        'status' => SubscriptionStatus::Active,
+        'started_at' => now(),
+        'current_period_start' => now(),
+        'current_period_end' => now()->addMonth(),
+    ]);
+
+    $user->refresh();
 }
 
 it('turns every failure shape into a bounded machine-readable result, and leaks no internals', function () {
@@ -226,4 +256,87 @@ it('lets the queue retry a transient failure without re-executing the write that
     expect($reply->text)->toBe('تمام.')
         ->and(Task::count())->toBe(1)
         ->and(ToolInvocation::count())->toBe(1);
+});
+
+it('charges the provider for BOTH physical requests when the queue retries, while quota, the write and the tool usage each happen once', function () {
+    [$user, $conversation, $message] = boundarySubject();
+    boundaryEnforcedPlan($user);
+    $metered = app(MeteredAgentOrchestrator::class);
+    $attempt = app(ProviderAttempt::class);
+
+    $proposeTask = [
+        'model' => 'llama-3.3-70b-versatile',
+        'choices' => [['message' => ['role' => 'assistant', 'content' => '', 'tool_calls' => [[
+            'id' => 'call_0', 'type' => 'function',
+            'function' => ['name' => 'task_create__v1', 'arguments' => json_encode(['title' => 'أ'])],
+        ]]], 'finish_reason' => 'tool_calls']],
+        'usage' => ['prompt_tokens' => 100, 'completion_tokens' => 10],
+    ];
+
+    Http::fake(['api.groq.com/*' => Http::sequence()
+        // ATTEMPT 1: call 1 succeeds and is billed, the tool runs, call 2 dies.
+        ->push($proposeTask)
+        ->push(['error' => ['message' => 'server error']], 500)
+        // ATTEMPT 2: call 1 is PHYSICALLY SENT AGAIN and billed again; the tool
+        // replays; call 2 then succeeds.
+        ->push($proposeTask)
+        ->push([
+            'model' => 'llama-3.3-70b-versatile',
+            'choices' => [['message' => ['role' => 'assistant', 'content' => 'تمام.'], 'finish_reason' => 'stop']],
+            'usage' => ['prompt_tokens' => 200, 'completion_tokens' => 20],
+        ]),
+    ]);
+
+    // Attempt 1 — the queue's first reservation.
+    $attempt->set(1);
+    expect(fn () => $metered->handle($user, $conversation, $message))->toThrow(AiException::class);
+
+    // Attempt 2 — the queue retries the same message.
+    $attempt->set(2);
+    $reply = $metered->handle($user, $conversation, $message);
+
+    $correlation = UsageKeys::correlationForMessage($message);
+    $provider = DB::table('usage_events')->where('type', 'ai_reply')->orderBy('id')->get();
+
+    // THREE physical provider requests were served and billed: call 1 twice
+    // (once per attempt) and call 2 once. None is deduplicated away.
+    expect($reply->text)->toBe('تمام.')
+        ->and($provider)->toHaveCount(3)
+        ->and($provider->pluck('idempotency_key')->all())->toBe([
+            'ai_reply:message:'.$message->id.':call:1:attempt:1',
+            'ai_reply:message:'.$message->id.':call:1:attempt:2',
+            'ai_reply:message:'.$message->id.':call:2:attempt:2',
+        ])
+        // The real token cost of all three, not of one.
+        ->and($provider->sum('input_units'))->toBe(400)
+        ->and($provider->pluck('correlation_id')->unique()->all())->toBe([$correlation]);
+
+    // QUOTA: the subscriber asked for one answer and is charged once, however
+    // many times the infrastructure had to try.
+    expect(DB::table('usage_charges')->where('idempotency_key', UsageKeys::invocation('ai_reply', $correlation))->count())->toBe(1)
+        ->and(app(UsageEngine::class)->usage($user, UsageDimension::AiReply)['daily'])->toBe(1);
+
+    // ONE domain mutation, ONE invocation, ONE tool usage row: the retry replayed
+    // the write instead of repeating it.
+    expect(Task::count())->toBe(1)
+        ->and(ToolInvocation::count())->toBe(1)
+        ->and(ToolInvocation::query()->sole()->status->value)->toBe('succeeded')
+        ->and(DB::table('usage_events')->where('type', 'tool_action')->count())->toBe(1);
+});
+
+it('invents no cost when a request produced no measurable usage', function () {
+    [$user, $conversation, $message] = boundarySubject();
+    boundaryEnforcedPlan($user);
+    aiConfigure(['ai.failure_behavior' => 'reply']);
+
+    // A transport failure: no response body, no usage, nothing served.
+    Http::fake(['api.groq.com/*' => fn () => throw new ConnectionException('timed out')]);
+
+    $reply = app(MeteredAgentOrchestrator::class)->handle($user, $conversation, $message);
+
+    expect($reply->metadata['ai']['failed'] ?? false)->toBeTrue()
+        // Nothing is guessed: no ledger row at all, and no quota consumed.
+        ->and(DB::table('usage_events')->count())->toBe(0)
+        ->and(DB::table('usage_charges')->count())->toBe(0)
+        ->and(Task::count())->toBe(0);
 });
