@@ -20,6 +20,16 @@ enum ToolInvocationFailureKind: string
     /** The execution exceeded the timeout declared by this tool version. */
     case Timeout = 'timeout';
 
-    /** An unexpected internal error (including the read-only guard tripping). */
+    /**
+     * Phase F3-V1 — the row a write tool named does not exist, OR it is not
+     * this subscriber's. The two are deliberately the same answer, so a tool
+     * can never be used to discover what somebody else owns.
+     */
+    case NotFound = 'not_found';
+
+    /** Phase F3-V1 — the row is the subscriber's, but its state does not allow the change. */
+    case Rule = 'rule';
+
+    /** An unexpected internal error (including the query guards tripping). */
     case Internal = 'internal';
 }

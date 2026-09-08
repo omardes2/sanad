@@ -15,6 +15,7 @@ use App\Models\User;
 use App\Services\Tools\ReadToolExecutor;
 use App\Services\Tools\StaleInvocationSweeper;
 use App\Services\Tools\ToolConsentService;
+use App\Services\Tools\ToolExecutor;
 use App\Services\Tools\ToolInvocationStore;
 use App\Support\Tools\CanonicalInput;
 use App\Support\Tools\InvocationKey;
@@ -23,6 +24,7 @@ use App\Support\Tools\ToolDefinition;
 use App\Support\Tools\ToolField;
 use App\Support\Tools\ToolRegistry;
 use App\Support\Tools\ToolSchema;
+use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 
 /**
@@ -37,6 +39,8 @@ use Illuminate\Console\Command;
  *      → <outcome>:<id>          claims ONE slot with a named tool/version, to
  *        prove the slot identity holds when the proposed tool changes.
  *  start   <subscriber_id> <message_id> <query>   → running:<id>  (claims and begins, executes nothing)
+ *  write   <subscriber_id> <message_id> <tool_key> <arg>
+ *      → <claim>:<status>:<id> | refused:<reason>   one write tool call
  *  settle  <invocation_id>                        → ok:succeeded | lost
  *  sweep                                          → swept:<n>     (grace pulled back, testing only)
  *  state   <invocation_id>                        → <status>:<version>
@@ -60,6 +64,7 @@ class ToolInvocationProbe extends Command
         $line = match ((string) $this->argument('op')) {
             'execute' => $this->runExecute($executor, $a),
             'claim' => $this->claim($store, $registry, $a),
+            'write' => $this->write($a),
             'start' => $this->start($store, $plan, $consents, $a),
             'settle' => $this->settle($store, (int) $a[0]),
             'sweep' => 'swept:'.(new StaleInvocationSweeper($store, $registry, self::PROBE_GRACE))->sweep(),
@@ -126,6 +131,36 @@ class ToolInvocationProbe extends Command
         ));
 
         return $claim->outcome->value.':'.$claim->invocation->getKey();
+    }
+
+    /**
+     * One write-tool call through the real routing executor.
+     *
+     * `task.complete@1` and `reminder.cancel@1` take the domain id as the
+     * argument; `task.create@1` and `reminder.create@2` take a title.
+     *
+     * @param  list<string>  $a
+     */
+    private function write(array $a): string
+    {
+        $message = $this->message($a[1]);
+        $key = $a[2];
+
+        $arguments = match ($key) {
+            'task.complete@1' => ['task_id' => (int) $a[3]],
+            'reminder.cancel@1' => ['reminder_id' => (int) $a[3]],
+            'reminder.create@2' => ['title' => $a[3], 'remind_at' => CarbonImmutable::now('UTC')->addDay()->format('Y-m-d\\TH:i')],
+            default => ['title' => $a[3]],
+        };
+
+        $result = app(ToolExecutor::class)->call($message, $key, $arguments);
+
+        if ($result->invocation === null) {
+            return 'refused:'.$result->refusal?->value;
+        }
+
+        return $result->claim?->value.':'.$result->status->value.':'.$result->invocation->getKey()
+            .':'.($result->invocation->failure_kind?->value ?? 'none');
     }
 
     /** @param list<string> $a */

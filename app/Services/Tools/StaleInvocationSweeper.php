@@ -13,16 +13,22 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Recovery for READ invocations left `running` by a process that died (Phase F2).
+ * Recovery for invocations left `running` by a process that died (Phase F2,
+ * extended to local writes in F3-V1).
  *
  * This is NOT a retry mechanism and must never become one. It never runs a
- * tool, never marks anything `succeeded`, never manufactures an output and
- * never touches an invocation whose side-effect class is not `read`. Its only
- * power is to say "this synchronous read cannot still be running" and settle it
- * as `timed_out`, once.
+ * tool, never marks anything `succeeded`, never manufactures an output.
+ *
+ * WHY IT IS SAFE FOR A LOCAL WRITE. A `write` tool performs its domain mutation
+ * INSIDE the invocation's settlement transaction, so a process that died before
+ * committing left no domain row at all: settling the invocation `timed_out`
+ * therefore duplicates nothing and hides nothing. That reasoning holds only for
+ * a mutation that shares this database. `external_write` and `irreversible` are
+ * deliberately NOT swept: for those, `running` may mean the effect already left
+ * the platform, and only the phase that introduces them may decide what to do.
  *
  * A candidate must satisfy ALL of:
- *   - status is `running` and side effect is `read`;
+ *   - status is `running` and the side effect is `read` or local `write`;
  *   - the tool VERSION still exists in the code registry — the expiry is
  *     recomputed from that immutable definition, never guessed;
  *   - `started_at + timeout_ms + grace` is already in the past.
@@ -47,6 +53,9 @@ final class StaleInvocationSweeper
         private readonly int $graceSeconds = self::GRACE_SECONDS,
     ) {}
 
+    /** The classes a dead process cannot have left half-done outside this database. */
+    public const SWEEPABLE = [ToolSideEffect::Read, ToolSideEffect::Write];
+
     /** @return int how many invocations were settled as timed out */
     public function sweep(int $limit = 50): int
     {
@@ -56,7 +65,7 @@ final class StaleInvocationSweeper
 
         $candidates = ToolInvocation::query()
             ->where('status', ToolInvocationStatus::Running->value)
-            ->where('side_effect', ToolSideEffect::Read->value)
+            ->whereIn('side_effect', [ToolSideEffect::Read->value, ToolSideEffect::Write->value])
             ->whereNotNull('started_at')
             ->orderBy('created_at')
             ->limit($limit)

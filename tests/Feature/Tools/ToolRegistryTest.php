@@ -48,10 +48,20 @@ function registryOf(array $definitions): ToolRegistry
     };
 }
 
-it('ships exactly the F1 fixtures, each one metadata only', function () {
+it('ships exactly the declared contracts, each one metadata only', function () {
     $registry = app(ToolRegistry::class);
 
-    expect(array_keys($registry->all()))->toBe(['memory.read@1', 'task.create@1', 'reminder.create@1']);
+    // F1's three, plus the minimal write set of F3-V1. `reminder.create@1`
+    // stays exactly as it shipped — a frozen version is never edited — and
+    // `@2` is the local scheduling write that coexists with it.
+    expect(array_keys($registry->all()))->toBe([
+        'memory.read@1',
+        'task.create@1',
+        'task.complete@1',
+        'reminder.cancel@1',
+        'reminder.create@1',
+        'reminder.create@2',
+    ]);
 
     foreach ($registry->all() as $key => $definition) {
         expect($definition->describe()['key'])->toBe($key)
