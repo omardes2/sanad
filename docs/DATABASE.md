@@ -65,8 +65,11 @@
 
 ### `reminders`
 - `user_id` → `users` (**cascade**) · `task_id?` → `tasks` (**nullOnDelete**) · `source_message_id?` → `messages` (**nullOnDelete**)
-- `title` · `remind_at` (UTC) · `timezone` · `channel` enum `ChannelType` · `status` enum `ReminderStatus` · `sent_at?` · `attempts` (default 0) · `last_error?`
-- **index (`status`,`remind_at`)** لخدمة الـScheduler في جلب التذكيرات المستحقة، + (`user_id`,`status`).
+- `title` · `remind_at` (UTC) · `timezone` · `channel` enum `ChannelType` · `status` enum `ReminderStatus` · `sent_at?` · `claim_token?` · `claimed_at?` · `dispatched_at?` · `attempts` (default 0) · `last_error?`
+- **index (`status`,`remind_at`)** لخدمة الـScheduler في جلب التذكيرات المستحقة، + (`user_id`,`status`) + **(`status`,`claimed_at`)** لكنس المُعلَّق في `processing`.
+- **`claim_token` هو هوية المِلكية، ولا شيء غيره.** رمز مبهم يولّده الخادم عند كل مطالبة، يحمله العامل معه (عبر الطابور) حتى لحظة الإرسال، ولا يُسمح له بأي كتابة إلا ما دام الرمز المخزَّن يساويه. هكذا يُستبعَد العامل المتأخّر بنيويًا: مطالبة A كُنِست واستُبدلت بمطالبة B، فيستيقظ A حاملًا هوية لم يعد أحد يعرفها — فلا يزيد `attempts` ولا يرسل ولا يسوّي الصف، **مهما تقاربت المطالبتان زمنيًا، ومهما كانت دقّة الأعمدة، ومهما اختلف تمثيل الوقت بين المحرّكين**. `status = processing` تقول إن أحدًا يعمل عليه لا إنه أنت، وترتيب طابعين زمنيين لا يجيب عن «مَن» أصلًا.
+- `claimed_at` وقت المطالبة الحالية. `dispatched_at` **تُمسح مع كل مطالبة**، فتصير داخل المطالبة حقيقة بسيطة بلا أي مقارنة: `NULL` تعني أن شيئًا لم يغادر تحتها (استعادة بلا خطر تكرار)، وغير `NULL` تعني أن طلبًا أُذن به وقد يكون وصل أو لا — والعامل الثاني على المطالبة نفسها يقرأها ويتوقّف. لذلك تأذن المطالبة الواحدة **بطلب واحد** فقط.
+- `attempts` تَعُدّ **المحاولات الفيزيائية** حصرًا — لا تزيدها المطالبة أبدًا — والسقف **2** لكل تذكير ولا ثالثة. `last_error` رمز مُغلق من `ReminderFailureReason` فقط، ولا يحمل عنوانًا ولا رقمًا ولا نصّ رسالة؛ و`unknown` وحدها ليست نهائية.
 
 ### `memories`
 - `user_id` → `users` (**cascade**) · `source_message_id?` → `messages` (**nullOnDelete**)
@@ -82,6 +85,8 @@
 سجل خام للأحداث الواردة (idempotency).
 - `provider` · `external_event_id` · `payload json` · `status` enum `WebhookEventStatus` · `received_at` · `processed_at?` · `error_message?`
 - **unique(`provider`, `external_event_id`)** لضمان عدم ابتلاع الحدث مرتين.
+
+> `messages.reminder_id?` → `reminders` (**nullOnDelete**) **فريد**: رسالة صادرة واحدة على الأكثر لكل تذكير — نظير `in_reply_to_message_id` تمامًا، لأن التذكير لا رسالة واردة له. تُنشأ الرسالة **قبل** الإرسال، فالعامل المكرَّر يخسر الإدراج الفريد بدل أن ينتج رسالة ثانية. التكرار مستقبلًا يُنتج صفّ تذكير لكل مناسبة، فيبقى المفتاح صحيحًا.
 
 ### `usage_events`
 (بعد E2) حقول التكلفة/التسعير immutable على مستوى الموديل (`IMMUTABLE_COST_FIELDS`) ولا حذف؛ الفروق تعيش في جداول التسوية بجانبه.

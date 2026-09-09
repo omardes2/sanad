@@ -6,6 +6,7 @@ namespace App\Support\Billing;
 
 use App\Enums\UsageDimension;
 use App\Models\Message;
+use App\Models\Reminder;
 
 /**
  * Builds the two identifiers every ledger row carries:
@@ -37,6 +38,13 @@ final class UsageKeys
         return "message:{$id}";
     }
 
+    public static function correlationForReminder(Reminder|int $reminder): string
+    {
+        $id = $reminder instanceof Reminder ? $reminder->getKey() : $reminder;
+
+        return "reminder:{$id}";
+    }
+
     public static function invocation(UsageDimension|string $operation, string $correlationId, int $sequence = 1): string
     {
         $operation = $operation instanceof UsageDimension ? $operation->value : $operation;
@@ -63,5 +71,22 @@ final class UsageKeys
         $operation = $operation instanceof UsageDimension ? $operation->value : $operation;
 
         return "{$operation}:{$correlationId}:call:{$call}:attempt:{$attempt}";
+    }
+
+    /**
+     * ONE PHYSICAL outbound delivery attempt.
+     *
+     * `$attempt` is the reminder's own physical dispatch counter — server
+     * owned, incremented only when a request is actually authorised, never
+     * derived from the provider and never from counting existing rows. Two
+     * genuinely separate physical sends of the same reminder therefore produce
+     * two ledger rows: the provider served and charged for both, and collapsing
+     * them would under-report what we paid.
+     */
+    public static function deliveryAttempt(UsageDimension|string $operation, string $correlationId, int $attempt): string
+    {
+        $operation = $operation instanceof UsageDimension ? $operation->value : $operation;
+
+        return "{$operation}:{$correlationId}:attempt:{$attempt}";
     }
 }

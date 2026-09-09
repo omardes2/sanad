@@ -17,8 +17,8 @@ uses(RefreshDatabase::class);
  */
 it('adds and removes the allocation idempotency columns and unique indexes reversibly on both tables, without touching existing rows', function () {
     $files = glob(database_path('migrations/*.php'));
-    expect($files)->toHaveCount(62) // E5.2a (allocations) + E5.2b (cost_adjustments key, cost_invoices period index) + F1 (tool_consents) + F2 (two invocation tables) — counted from the actual files
-        ->and(basename($files[count($files) - 6]))->toBe('2026_09_06_001301_add_idempotency_key_to_allocation_tables.php')
+    expect($files)->toHaveCount(63) // E5.2a (allocations) + E5.2b (cost_adjustments key, cost_invoices period index) + F1 (tool_consents) + F2 (two invocation tables) — counted from the actual files
+        ->and(basename($files[count($files) - 7]))->toBe('2026_09_06_001301_add_idempotency_key_to_allocation_tables.php')
         ->and(Schema::hasColumn('payment_allocations', 'idempotency_key'))->toBeTrue()
         ->and(Schema::hasColumn('refund_allocations', 'idempotency_key'))->toBeTrue()
         ->and(Schema::hasIndex('payment_allocations', 'payment_allocations_idempotency_key_unique'))->toBeTrue()
@@ -26,7 +26,7 @@ it('adds and removes the allocation idempotency columns and unique indexes rever
         ->and(collect(Schema::getColumns('payment_allocations'))->firstWhere('name', 'idempotency_key')['nullable'])->toBeTrue()
         ->and(collect(Schema::getColumns('refund_allocations'))->firstWhere('name', 'idempotency_key')['nullable'])->toBeTrue();
 
-    Artisan::call('migrate:rollback', ['--step' => 6, '--force' => true]); // the two E5.2b migrations, the F1 one and the two F2 ones sit on top of this one
+    Artisan::call('migrate:rollback', ['--step' => 7, '--force' => true]); // the two E5.2b migrations, the F1 one, the two F2 ones and the reminder-delivery one sit on top of this one
 
     expect(Schema::hasTable('payment_allocations'))->toBeTrue()
         ->and(Schema::hasTable('refund_allocations'))->toBeTrue()
@@ -43,5 +43,5 @@ it('adds and removes the allocation idempotency columns and unique indexes rever
         ->and(Schema::hasColumn('refund_allocations', 'idempotency_key'))->toBeTrue()
         ->and(Schema::hasIndex('payment_allocations', 'payment_allocations_idempotency_key_unique'))->toBeTrue()
         ->and(Schema::hasIndex('refund_allocations', 'refund_allocations_idempotency_key_unique'))->toBeTrue()
-        ->and(DB::table('migrations')->count())->toBe(62);
+        ->and(DB::table('migrations')->count())->toBe(63);
 });

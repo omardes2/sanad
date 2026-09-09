@@ -30,6 +30,7 @@ class Message extends Model
         'type',
         'external_message_id',
         'in_reply_to_message_id',
+        'reminder_id',
         'text_content',
         'media_path',
         'metadata',
