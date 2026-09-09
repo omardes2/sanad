@@ -94,7 +94,9 @@ final class ToolTurnRunner
         return match (true) {
             $result->claim === ToolClaimOutcome::Conflict => ToolResult::failed($call, 'conflict'),
             $result->claim === ToolClaimOutcome::InFlight => ToolResult::failed($call, 'in_flight'),
-            $result->invocation->status === ToolInvocationStatus::Succeeded => ToolResult::ok($call, $result->invocation->output ?? []),
+            // The result's own accessor, not the row: a tool may be allowed to
+            // tell the model more than it is allowed to store (Phase G).
+            $result->invocation->status === ToolInvocationStatus::Succeeded => ToolResult::ok($call, $result->output() ?? []),
             $result->invocation->status === ToolInvocationStatus::Refused => ToolResult::failed($call, (string) $result->invocation->refusal_reason?->value),
             default => ToolResult::failed($call, (string) $result->invocation->failure_kind?->value),
         };

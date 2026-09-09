@@ -107,7 +107,10 @@ it('offers only the tools the server decided to expose, translated for the provi
     $names = array_map(static fn ($t): string => $t->name, $catalog->expose());
 
     // Exactly the V1 execution surface, with provider-safe wire names.
-    expect($names)->toBe(['memory_read__v1', 'task_create__v1', 'task_list__v1', 'task_complete__v1', 'reminder_cancel__v1', 'reminder_create__v2'])
+    expect($names)->toBe([
+        'memory_read__v1', 'memory_read__v2', 'memory_write__v1', 'memory_forget__v1',
+        'task_create__v1', 'task_list__v1', 'task_complete__v1', 'reminder_cancel__v1', 'reminder_create__v2',
+    ])
         // The frozen external-write contract is never described to a model.
         ->and($names)->not->toContain('reminder_create__v1');
 

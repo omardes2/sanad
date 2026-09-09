@@ -21,6 +21,8 @@ use App\Support\Audit\AuditActions;
 use App\Support\Tools\ToolAuthorization;
 use App\Support\Tools\ToolInputPersistence;
 use App\Support\Tools\ToolInvocationTransitions;
+use App\Support\Tools\ToolKey;
+use App\Support\Tools\ToolOutputPersistence;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -177,10 +179,19 @@ final class ToolInvocationStore
         ], reasonCode: $reason->value);
     }
 
-    /** running → succeeded, with the schema-validated output of this tool version. */
+    /**
+     * running → succeeded, with the schema-validated output of this tool
+     * version — filtered by the per-tool output policy before it is stored.
+     *
+     * The caller keeps the full result for the model; the ROW keeps only what
+     * `ToolOutputPersistence` allows, which for a memory read is its shape and
+     * not its content.
+     */
     public function succeed(ToolInvocation $row, array $output, int $durationMs): ToolInvocation
     {
-        return $this->settle($row, ToolInvocationStatus::Succeeded, $durationMs, ['output' => $output], 'ok');
+        return $this->settle($row, ToolInvocationStatus::Succeeded, $durationMs, [
+            'output' => $this->persistableOutput($row, $output),
+        ], 'ok');
     }
 
     /**
@@ -207,7 +218,9 @@ final class ToolInvocationStore
         return DB::transaction(function () use ($row, $mutate, $durationMs): ToolInvocation {
             $output = $mutate();
 
-            return $this->settle($row, ToolInvocationStatus::Succeeded, $durationMs, ['output' => $output], 'ok');
+            return $this->settle($row, ToolInvocationStatus::Succeeded, $durationMs, [
+                'output' => $this->persistableOutput($row, $output),
+            ], 'ok');
         });
     }
 
@@ -230,6 +243,22 @@ final class ToolInvocationStore
     }
 
     // ------------------------------------------------------------ internals
+
+    /**
+     * The part of a result that may be written to the row. The tool key comes
+     * from the STORED claim facts, never from the caller, so a redaction policy
+     * cannot be bypassed by presenting a different key at settlement time.
+     *
+     * @param  array<string, mixed>  $output
+     * @return array<string, mixed>
+     */
+    private function persistableOutput(ToolInvocation $row, array $output): array
+    {
+        return ToolOutputPersistence::filter(
+            ToolKey::of($row->tool_key, $row->tool_version),
+            $output,
+        );
+    }
 
     /**
      * @param  array<string, mixed>  $attributes

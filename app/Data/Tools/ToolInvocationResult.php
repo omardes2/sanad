@@ -25,11 +25,25 @@ final readonly class ToolInvocationResult
         public ToolInvocationStatus $status,
         public ?ToolInvocationRefusalReason $refusal = null,
         public bool $executed = false,
+        /**
+         * The FULL declared output of an execution that just happened, held for
+         * this turn only. It exists because a tool may be allowed to tell the
+         * model more than it is allowed to store: `memory.read@2` returns the
+         * subscriber's memories, and `ToolOutputPersistence` keeps only their
+         * shape on the row. Null for every tool that stores its whole output,
+         * and null on a replay — a replay legitimately sees only what was kept.
+         *
+         * @var array<string, mixed>|null
+         */
+        public ?array $transientOutput = null,
     ) {}
 
-    public static function settled(ToolClaimOutcome $claim, ToolInvocation $invocation, bool $executed): self
+    /**
+     * @param  array<string, mixed>|null  $transientOutput  the full result, when this call executed one
+     */
+    public static function settled(ToolClaimOutcome $claim, ToolInvocation $invocation, bool $executed, ?array $transientOutput = null): self
     {
-        return new self($claim, $invocation, $invocation->status, $invocation->refusal_reason, $executed);
+        return new self($claim, $invocation, $invocation->status, $invocation->refusal_reason, $executed, $transientOutput);
     }
 
     /** Refused before a claim: nothing stored, nothing executed. */
@@ -43,9 +57,20 @@ final readonly class ToolInvocationResult
         return $this->status === ToolInvocationStatus::Succeeded;
     }
 
-    /** The declared output of a successful invocation, replay included. */
+    /**
+     * The declared output of a successful invocation, replay included.
+     *
+     * The transient result of THIS execution wins when there is one, because a
+     * redacted row deliberately holds less than the model was allowed to see.
+     * Falling back to the stored projection is what makes a replay honest
+     * rather than empty.
+     */
     public function output(): ?array
     {
-        return $this->succeeded() ? ($this->invocation?->output ?? []) : null;
+        if (! $this->succeeded()) {
+            return null;
+        }
+
+        return $this->transientOutput ?? $this->invocation?->output ?? [];
     }
 }

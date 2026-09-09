@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Support\Ai\Contributors\ConversationHistoryContributor;
 use App\Support\Ai\Contributors\PersonaContributor;
+use App\Support\Ai\Contributors\UserMemoryContributor;
 
 return [
     /*
@@ -175,9 +176,11 @@ return [
     */
     'context_contributors' => [
         PersonaContributor::class,
+        // Standing context before the live turn: what Sanad durably knows about
+        // this subscriber, bounded and gated on `memory.read` consent (Phase G).
+        UserMemoryContributor::class,
         ConversationHistoryContributor::class,
         // Future (not implemented in this phase):
-        // \App\Support\Ai\Contributors\UserMemoryContributor::class,
         // \App\Support\Ai\Contributors\ToolsContributor::class,
     ],
 

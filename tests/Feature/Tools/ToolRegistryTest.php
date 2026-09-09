@@ -51,11 +51,15 @@ function registryOf(array $definitions): ToolRegistry
 it('ships exactly the declared contracts, each one metadata only', function () {
     $registry = app(ToolRegistry::class);
 
-    // F1's three, plus the minimal write set of F3-V1. `reminder.create@1`
-    // stays exactly as it shipped — a frozen version is never edited — and
-    // `@2` is the local scheduling write that coexists with it.
+    // F1's three, plus the minimal write set of F3-V1, plus durable memory.
+    // A shipped version is never edited: `reminder.create@1` stays exactly as
+    // it was beside `@2`, and `memory.read@1` keeps returning counts beside the
+    // `@2` that returns content.
     expect(array_keys($registry->all()))->toBe([
         'memory.read@1',
+        'memory.read@2',
+        'memory.write@1',
+        'memory.forget@1',
         'task.create@1',
         'task.list@1',
         'task.complete@1',

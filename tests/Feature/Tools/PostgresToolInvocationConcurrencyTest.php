@@ -45,7 +45,12 @@ beforeEach(function () {
 function f2Subject(int $memories = 3): array
 {
     $subscriber = User::factory()->create(['is_admin' => false]);
-    Memory::factory()->count($memories)->create(['user_id' => $subscriber->id, 'content' => 'a note about coffee']);
+
+    // Distinct sentences: two memories with the same normalised text in one
+    // category ARE one memory, so a fixture that repeated itself could not exist.
+    for ($i = 0; $i < $memories; $i++) {
+        Memory::factory()->create(['user_id' => $subscriber->id, 'content' => "a note {$i} about coffee"]);
+    }
 
     auth()->setUser($subscriber);
     app(ToolConsentService::class)->grant($subscriber->id, ToolCapability::MemoryRead, 0, ToolConsentReason::SubscriberRequest);

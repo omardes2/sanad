@@ -30,6 +30,33 @@ enum ToolInvocationFailureKind: string
     /** Phase F3-V1 — the row is the subscriber's, but its state does not allow the change. */
     case Rule = 'rule';
 
+    /**
+     * Phase G — the write named content durable memory refuses to hold: a
+     * structured identifier (a card, an IBAN, a credential, a national id).
+     * The value itself is never stored, logged or echoed back.
+     */
+    case SensitiveContent = 'sensitive_content';
+
+    /**
+     * Phase G — the subscriber's durable memory is full. Nothing is evicted to
+     * make room: an explicit memory is removed only when they explicitly forget
+     * one, so a new memory at capacity is refused instead.
+     */
+    case MemoryCapacityReached = 'memory_capacity_reached';
+
+    /**
+     * Phase G — the request matched more than one row and the server will not
+     * guess which one was meant. Nothing was changed.
+     */
+    case Ambiguous = 'ambiguous';
+
+    /**
+     * Phase G — durable memory has no key configured, so it can neither seal
+     * nor fingerprint. Failing closed is deliberate: plaintext memory and an
+     * unkeyed fingerprint are not acceptable fallbacks.
+     */
+    case MemoryUnavailable = 'memory_unavailable';
+
     /** An unexpected internal error (including the query guards tripping). */
     case Internal = 'internal';
 }

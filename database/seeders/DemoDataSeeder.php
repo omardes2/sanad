@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Database\Seeders;
 
 use App\Enums\ChannelType;
+use App\Enums\MemoryCategory;
 use App\Enums\MessageDirection;
 use App\Enums\MessageType;
 use App\Enums\ReminderStatus;
@@ -17,6 +18,8 @@ use App\Models\Message;
 use App\Models\Reminder;
 use App\Models\Task;
 use App\Models\User;
+use App\Services\Memory\MemoryCipher;
+use App\Support\Memory\MemoryFingerprint;
 use Illuminate\Database\Seeder;
 
 /**
@@ -87,14 +90,18 @@ class DemoDataSeeder extends Seeder
             'status' => ReminderStatus::Pending,
         ]);
 
-        // 7) Memory.
-        Memory::factory()->create([
-            'user_id' => $user->id,
-            'category' => 'preference',
-            'content' => 'يفضّل المستخدم التذكير مساءً.',
-            'importance' => 4,
-            'source_message_id' => $inbound->id,
-        ]);
+        // 7) Memory. Sealed like every real memory, so it is skipped entirely
+        // when no memory key is configured — a demo row is not a reason to
+        // write plaintext into a table that is meant to be encrypted.
+        if (app(MemoryCipher::class)->available() && MemoryFingerprint::available()) {
+            Memory::factory()->create([
+                'user_id' => $user->id,
+                'category' => MemoryCategory::Preference->value,
+                'content' => 'يفضّل المستخدم التذكير مساءً.',
+                'importance' => 4,
+                'source_message_id' => $inbound->id,
+            ]);
+        }
 
         // 8) Expenses.
         Expense::factory()->count(3)->create([

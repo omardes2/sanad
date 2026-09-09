@@ -29,6 +29,12 @@
         <env name="AI_ROUTING_MODE" value=""/>
         <env name="CREDENTIALS_KEY" value=""/>
         <env name="CREDENTIALS_PREVIOUS_KEYS" value=""/>
+        <!-- Durable memory is fail-closed without keys; the suite gets fixed test
+             keys so the real sealed/HMAC path is exercised everywhere, and the
+             unavailable case is proven by nulling the config in its own test. -->
+        <env name="MEMORY_KEY" value="base64:251MGyf9yPbLJeYJsPKgkyAQQH9ERb3WM/4wwFLW2xw="/>
+        <env name="MEMORY_PREVIOUS_KEYS" value=""/>
+        <env name="MEMORY_FINGERPRINT_KEY" value="base64:x3Zpdubn+FbBhzk4p2KK2r8EqfO/ubytx/JDgSwqB04="/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>

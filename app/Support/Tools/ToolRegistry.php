@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Support\Tools;
 
+use App\Enums\MemoryCategory;
 use App\Enums\ToolCapability;
 use App\Enums\ToolFieldType;
 use App\Enums\ToolSideEffect;
 use App\Exceptions\Tools\ToolDefinitionException;
+use App\Services\Memory\MemoryService;
 
 /**
  * Every tool the platform knows, DECLARED IN CODE (Phase F1) — the same shape
@@ -98,10 +100,11 @@ class ToolRegistry
      * The declarations themselves.
      *
      * Phase F1 shipped three contracts; F3-V1 adds the minimal write set the
-     * V1 launch scope names. A shipped version is frozen, so
-     * `reminder.create@1` (external_write + approval) stays exactly as it was
-     * and simply is not executable in V1 — the local scheduling write it should
-     * have been is `reminder.create@2`.
+     * V1 launch scope names; Phase G adds durable personal memory. A shipped
+     * version is frozen, so `reminder.create@1` (external_write + approval)
+     * stays exactly as it was and simply is not executable in V1 — the local
+     * scheduling write it should have been is `reminder.create@2` — and
+     * `memory.read@1` keeps returning counts while `@2` returns content.
      *
      * @return list<ToolDefinition>
      */
@@ -123,6 +126,65 @@ class ToolRegistry
                     ToolField::of('truncated', ToolFieldType::Boolean, required: true),
                 ]),
                 maxRetries: 2,
+            ),
+            ToolDefinition::of(
+                key: 'memory.read', version: 2,
+                title: 'قراءة الذاكرة',
+                summary: 'يعيد ذاكرات المشترك المطابقة بمحتواها ضمن حدّ معلن. قراءة فقط: لا يكتب ولا يرسل شيئًا.',
+                capability: ToolCapability::MemoryRead,
+                sideEffect: ToolSideEffect::Read,
+                input: ToolSchema::of([
+                    ToolField::of('query', ToolFieldType::String, required: true, max: 200),
+                    ToolField::of('limit', ToolFieldType::Integer, required: false, max: MemoryService::RECALL_MAX),
+                ]),
+                // The content THIS version returns is what lets the model answer
+                // «شو بتعرف عني؟». It reaches the model for the turn and is not
+                // written to the invocation row — see `ToolOutputPersistence`.
+                output: ToolSchema::of([
+                    ToolField::of('memories', ToolFieldType::ListOfRows, required: true, max: MemoryService::RECALL_MAX, items: ToolSchema::of([
+                        ToolField::of('content', ToolFieldType::String, required: true, max: 300),
+                        ToolField::of('category', ToolFieldType::Enum, required: true, options: MemoryCategory::options()),
+                        ToolField::of('importance', ToolFieldType::Integer, required: true, max: 5),
+                    ])),
+                    ToolField::of('truncated', ToolFieldType::Boolean, required: true),
+                ]),
+                maxRetries: 2,
+            ),
+            ToolDefinition::of(
+                key: 'memory.write', version: 1,
+                title: 'حفظ في الذاكرة',
+                summary: 'يحفظ معلومة طلب المشترك تذكّرها. لا يُنفَّذ إلا إذا كان الطلب صريحًا في رسالة المشترك نفسها.',
+                capability: ToolCapability::MemoryWrite,
+                // A local, reversible row: forgetting archives it, and nothing
+                // leaves the platform.
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    ToolField::of('content', ToolFieldType::String, required: true, max: 300),
+                    ToolField::of('category', ToolFieldType::Enum, required: true, options: MemoryCategory::options()),
+                    ToolField::of('importance', ToolFieldType::Integer, required: false, max: 5),
+                ]),
+                // No memory id in, no memory id out for the model to name later:
+                // whether this was a new memory or an existing one refreshed is
+                // the SERVER's answer, by fingerprint.
+                output: ToolSchema::of([
+                    ToolField::of('memory_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    ToolField::of('created', ToolFieldType::Boolean, required: true),
+                ]),
+                rateLimitPerHour: 30,
+            ),
+            ToolDefinition::of(
+                key: 'memory.forget', version: 1,
+                title: 'نسيان من الذاكرة',
+                summary: 'يؤرشف ذاكرة واحدة يطابقها الوصف. لا يؤرشف أكثر من واحدة، ويرفض الوصف الملتبس.',
+                capability: ToolCapability::MemoryWrite,
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    ToolField::of('query', ToolFieldType::String, required: true, max: 200),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('forgotten', ToolFieldType::Integer, required: true, max: 1),
+                ]),
+                rateLimitPerHour: 30,
             ),
             ToolDefinition::of(
                 key: 'task.create', version: 1,

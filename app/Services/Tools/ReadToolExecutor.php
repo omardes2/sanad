@@ -16,8 +16,8 @@ use App\Exceptions\Tools\ToolRuleException;
 use App\Models\Message;
 use App\Models\ToolInvocation;
 use App\Models\User;
+use App\Services\Memory\MemoryService;
 use App\Services\Tasks\TaskReader;
-use App\Services\Tools\Readers\MemoryReader;
 use App\Support\Tools\ReadOnlyQueryGuard;
 use App\Support\Tools\ToolCallPlan;
 use Throwable;
@@ -58,7 +58,11 @@ final class ReadToolExecutor
      * @var array<string, array{0: class-string, 1: string}>
      */
     private const HANDLERS = [
-        'memory.read@1' => [MemoryReader::class, 'read'],
+        // `memory.read@1` is FROZEN in meaning — how many memories match — and
+        // now answers it over encrypted rows, in application memory. `@2` is
+        // the version that returns the memories themselves.
+        'memory.read@1' => [MemoryService::class, 'count'],
+        'memory.read@2' => [MemoryService::class, 'recall'],
         'task.list@1' => [TaskReader::class, 'read'],
     ];
 
@@ -155,12 +159,19 @@ final class ReadToolExecutor
             return $this->settledResult($claim, $invocation, executed: false);
         }
 
-        return $this->settledResult($claim, $this->run($request, $invocation), executed: true);
+        [$settled, $output] = $this->run($request, $invocation);
+
+        // The FULL result goes back to the caller for this turn; what the row
+        // kept is whatever `ToolOutputPersistence` allowed.
+        return $this->settledResult($claim, $settled, executed: true, transientOutput: $output);
     }
 
     // ------------------------------------------------------------------
 
-    private function run(ToolCallRequest $request, ToolInvocation $invocation): ToolInvocation
+    /**
+     * @return array{0: ToolInvocation, 1: array<string, mixed>|null}
+     */
+    private function run(ToolCallRequest $request, ToolInvocation $invocation): array
     {
         $definition = $request->definition;
         [$class, $method] = self::HANDLERS[$request->toolKey()];
@@ -169,9 +180,9 @@ final class ReadToolExecutor
         try {
             $raw = $this->guard->run(fn (): mixed => app($class)->{$method}($request->subscriber, $request->input->values));
         } catch (ToolRuleException $e) {
-            return $this->store->fail($invocation, $e->rule === 'read_only' ? ToolInvocationFailureKind::Internal : ToolInvocationFailureKind::ToolError, self::elapsed($startedAt));
+            return [$this->store->fail($invocation, $e->rule === 'read_only' ? ToolInvocationFailureKind::Internal : ToolInvocationFailureKind::ToolError, self::elapsed($startedAt)), null];
         } catch (Throwable) {
-            return $this->store->fail($invocation, ToolInvocationFailureKind::ToolError, self::elapsed($startedAt));
+            return [$this->store->fail($invocation, ToolInvocationFailureKind::ToolError, self::elapsed($startedAt)), null];
         }
 
         $elapsed = self::elapsed($startedAt);
@@ -182,21 +193,24 @@ final class ReadToolExecutor
         try {
             $output = $definition->output->validate(is_array($raw) ? $raw : []);
         } catch (ToolRuleException) {
-            return $this->store->fail($invocation, ToolInvocationFailureKind::InvalidOutput, $elapsed);
+            return [$this->store->fail($invocation, ToolInvocationFailureKind::InvalidOutput, $elapsed), null];
         }
 
         // The timeout is a property of this immutable tool version; nothing is
         // duplicated onto the row, only what actually happened.
         if ($elapsed > $definition->timeoutMs) {
-            return $this->store->timeOut($invocation, $elapsed);
+            return [$this->store->timeOut($invocation, $elapsed), null];
         }
 
-        return $this->store->succeed($invocation, $output, $elapsed);
+        return [$this->store->succeed($invocation, $output, $elapsed), $output];
     }
 
-    private function settledResult(ToolClaim $claim, ToolInvocation $invocation, bool $executed): ToolInvocationResult
+    /**
+     * @param  array<string, mixed>|null  $transientOutput
+     */
+    private function settledResult(ToolClaim $claim, ToolInvocation $invocation, bool $executed, ?array $transientOutput = null): ToolInvocationResult
     {
-        return ToolInvocationResult::settled($claim->outcome, $invocation, $executed);
+        return ToolInvocationResult::settled($claim->outcome, $invocation, $executed, $transientOutput);
     }
 
     private static function elapsed(int $startedAt): int

@@ -27,6 +27,14 @@ enum ToolCapability: string
 {
     case MemoryRead = 'memory.read';
 
+    /**
+     * Phase G — writing durable personal memory. It is a DIFFERENT decision
+     * from reading it: a subscriber may well want Sanad to use what it already
+     * knows without letting it store anything new, and one consent must not
+     * quietly grant the other.
+     */
+    case MemoryWrite = 'memory.write';
+
     case TasksWrite = 'tasks.write';
 
     case RemindersWrite = 'reminders.write';
@@ -44,7 +52,7 @@ enum ToolCapability: string
     public function operatorPermission(): Permission
     {
         return match ($this) {
-            self::MemoryRead, self::TasksWrite, self::RemindersWrite => Permission::SubscribersManage,
+            self::MemoryRead, self::MemoryWrite, self::TasksWrite, self::RemindersWrite => Permission::SubscribersManage,
         };
     }
 
@@ -52,6 +60,7 @@ enum ToolCapability: string
     {
         return match ($this) {
             self::MemoryRead => 'قراءة الذاكرة',
+            self::MemoryWrite => 'حفظ الذاكرة وتعديلها',
             self::TasksWrite => 'إنشاء المهام وتعديلها',
             self::RemindersWrite => 'إنشاء التذكيرات وتعديلها',
         };
