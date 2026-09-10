@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Enums\MemoryCategory;
 use App\Enums\ToolInvocationFailureKind;
 use App\Enums\ToolInvocationRefusalReason;
+use App\Enums\ToolSideEffect;
 use App\Models\Conversation;
 use App\Models\Memory;
 use App\Models\Message;
@@ -17,6 +18,7 @@ use App\Support\Memory\SensitiveContent;
 use App\Support\Tools\ToolIntentRequirements;
 use App\Support\Tools\ToolKey;
 use App\Support\Tools\ToolOutputPersistence;
+use App\Support\Tools\ToolRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -46,21 +48,39 @@ it('never collapses malformed text onto one empty fingerprint', function () {
     $other = "\xC3\x28 memory two";
 
     expect(MemoryText::normalize($broken))->not->toBe('')
-        ->and(MemoryFingerprint::of($broken))->not->toBe(MemoryFingerprint::of($other));
+        ->and(MemoryFingerprint::of(1, MemoryCategory::Fact, $broken))
+        ->not->toBe(MemoryFingerprint::of(1, MemoryCategory::Fact, $other));
 });
 
-it('keys the fingerprint, so a bare digest of the memory is never the answer', function () {
+it('keys the fingerprint and scopes it to the owner and the category', function () {
     $content = 'بحب القهوة سادة';
+    $mine = MemoryFingerprint::of(7, MemoryCategory::Preference, $content);
 
-    expect(MemoryFingerprint::of($content))->not->toBe(hash('sha256', MemoryText::normalize($content)))
-        ->and(MemoryFingerprint::of($content))->toHaveLength(MemoryFingerprint::LENGTH)
-        // Deterministic under one key, and different under another.
-        ->and(MemoryFingerprint::of($content))->toBe(MemoryFingerprint::of($content));
+    expect($mine)->toHaveLength(MemoryFingerprint::LENGTH)
+        // Keyed, so a bare digest of the memory is never the answer.
+        ->and($mine)->not->toBe(hash('sha256', MemoryText::normalize($content)))
+        ->and($mine)->not->toBe(hash('sha256', $content))
+        // Deterministic for the same (subscriber, category, content).
+        ->and(MemoryFingerprint::of(7, MemoryCategory::Preference, $content))->toBe($mine)
+        ->and(MemoryFingerprint::of(7, 'preference', $content))->toBe($mine)
+        // Tashkeel and spacing do not change it; the normaliser runs first.
+        ->and(MemoryFingerprint::of(7, MemoryCategory::Preference, '  بحب القَهوة  سادة '))->toBe($mine)
+        // A DIFFERENT subscriber remembering the SAME thing is a different value:
+        // the database must not reveal that two people share a hidden memory.
+        ->and(MemoryFingerprint::of(8, MemoryCategory::Preference, $content))->not->toBe($mine)
+        // A different category is a different memory, so a different value.
+        ->and(MemoryFingerprint::of(7, MemoryCategory::Habit, $content))->not->toBe($mine)
+        ->and(MemoryFingerprint::of(7, MemoryCategory::Fact, $content))->not->toBe($mine);
 
-    $before = MemoryFingerprint::of($content);
+    // The encoding is unambiguous: no re-splitting of the parts can collide.
+    // `(71, 'fact', x)` and `(7, '1fact', x)` would be one string without the
+    // length prefixes, and `(7, 'fact', 'ab')` vs `(7, 'facta', 'b')` likewise.
+    expect(MemoryFingerprint::of(71, 'fact', 'ab'))->not->toBe(MemoryFingerprint::of(7, 'fact', 'ab'))
+        ->and(MemoryFingerprint::of(7, 'fact', 'ab'))->not->toBe(MemoryFingerprint::of(7, 'facta', 'b'));
+
+    // And it is keyed by the DEDICATED key, not by the content key or APP_KEY.
     config(['memory.fingerprint_key' => 'base64:'.base64_encode(str_repeat('q', 32))]);
-
-    expect(MemoryFingerprint::of($content))->not->toBe($before);
+    expect(MemoryFingerprint::of(7, MemoryCategory::Preference, $content))->not->toBe($mine);
 });
 
 // ------------------------------------------------------- the intent gate
@@ -82,12 +102,58 @@ it('reads intent only from the words, and only from the phrasings it declares', 
         ->and(ExplicitMemoryIntent::inText('اح_ف_ظ إني نباتي'))->toBeFalse();
 });
 
+it('reads a forget instruction only from an instruction, never from a contradiction', function () {
+    // Erasing what the subscriber deliberately kept needs the SAME bar as writing
+    // it — arguably a sharper one, because it destroys rather than adds.
+    $permitted = [
+        'انسى إني بحب القهوة',
+        'احذف من ذاكرتك إني بحب القهوة',
+        'امسح من الذاكرة إني نباتي',
+        'لا تضل متذكر إني بحب القهوة',
+        'forget that I like coffee',
+        'stop remembering that I like coffee',
+    ];
+
+    // Corrections and contradictions. New information — possibly a memory worth
+    // updating — but NOT permission to erase anything.
+    $refused = [
+        'بطلت أحب القهوة',
+        'ما عدت أفضل المساء',
+        'غيرت رأيي',
+        'I changed my mind about coffee',
+        'احذف المهمة',
+        'شو بتعرف عني؟',
+    ];
+
+    foreach ($permitted as $text) {
+        expect(ExplicitMemoryIntent::forgetInText($text))->toBeTrue($text);
+    }
+
+    foreach ($refused as $text) {
+        expect(ExplicitMemoryIntent::forgetInText($text))->toBeFalse($text);
+    }
+
+    // The two gates never fire on the same sentence: «لا تنسى» is a REMEMBER
+    // instruction that contains the word forget, and «لا تضل متذكر» is a FORGET
+    // instruction that contains the word remember.
+    foreach (['لا تنسى اني نباتي', "don't forget I am vegetarian", 'احفظ إني بحب القهوة'] as $text) {
+        expect(ExplicitMemoryIntent::inText($text))->toBeTrue($text)
+            ->and(ExplicitMemoryIntent::forgetInText($text))->toBeFalse($text);
+    }
+
+    foreach (['انسى إني بحب القهوة', 'لا تضل متذكر إني بحب القهوة', 'forget that I like coffee'] as $text) {
+        expect(ExplicitMemoryIntent::forgetInText($text))->toBeTrue($text)
+            ->and(ExplicitMemoryIntent::inText($text))->toBeFalse($text);
+    }
+});
+
 it('requires an intent only where a tool declares one, and every other tool is untouched', function () {
-    expect(ToolIntentRequirements::keys())->toBe(['memory.write@1'])
-        ->and(ToolIntentRequirements::required(ToolKey::of('memory.write', 1)))->toBeTrue();
+    expect(ToolIntentRequirements::keys())->toBe(['memory.write@1', 'memory.forget@1'])
+        ->and(ToolIntentRequirements::required(ToolKey::of('memory.write', 1)))->toBeTrue()
+        ->and(ToolIntentRequirements::required(ToolKey::of('memory.forget', 1)))->toBeTrue();
 
     // The tools whose authority is consent plus the request that caused the turn.
-    foreach ([['memory.forget', 1], ['memory.read', 2], ['task.create', 1], ['reminder.create', 2]] as [$name, $version]) {
+    foreach ([['memory.read', 2], ['task.create', 1], ['reminder.create', 2]] as [$name, $version]) {
         $key = ToolKey::of($name, $version);
 
         expect(ToolIntentRequirements::required($key))->toBeFalse($key->value())
@@ -167,6 +233,28 @@ it('refuses content that is only invisible characters, and never lets them hide 
 });
 
 // ------------------------------------------------- output persistence policy
+
+it('only ever rehydrates a redacted READ on replay, and declares it in code', function () {
+    $registry = app(ToolRegistry::class);
+
+    expect(ToolOutputPersistence::rehydratableOnReplay(ToolKey::of('memory.read', 2)))->toBeTrue();
+
+    // Every rehydratable tool is redacted (there would be nothing to re-derive
+    // otherwise) and is a `read` — re-deriving a write would BE a second write.
+    foreach ($registry->all() as $definition) {
+        if (! ToolOutputPersistence::rehydratableOnReplay($definition->key)) {
+            continue;
+        }
+
+        expect(ToolOutputPersistence::isRedacted($definition->key))->toBeTrue($definition->key->value())
+            ->and($definition->sideEffect)->toBe(ToolSideEffect::Read, $definition->key->value());
+    }
+
+    // Nothing that stores its whole output has anything to rehydrate.
+    foreach ([['memory.read', 1], ['memory.write', 1], ['memory.forget', 1], ['task.list', 1], ['task.create', 1]] as [$name, $version]) {
+        expect(ToolOutputPersistence::rehydratableOnReplay(ToolKey::of($name, $version)))->toBeFalse("{$name}@{$version}");
+    }
+});
 
 it('persists a tool output in full by default, and only says less where a policy says so', function () {
     expect(ToolOutputPersistence::isRedacted(ToolKey::of('memory.read', 2)))->toBeTrue()

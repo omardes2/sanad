@@ -7,6 +7,7 @@ namespace App\Services\Tools;
 use App\Data\Tools\ToolCallRequest;
 use App\Data\Tools\ToolClaim;
 use App\Data\Tools\ToolInvocationResult;
+use App\Enums\ToolClaimOutcome;
 use App\Enums\ToolInvocationFailureKind;
 use App\Enums\ToolInvocationRefusalReason;
 use App\Enums\ToolInvocationStatus;
@@ -20,6 +21,7 @@ use App\Services\Memory\MemoryService;
 use App\Services\Tasks\TaskReader;
 use App\Support\Tools\ReadOnlyQueryGuard;
 use App\Support\Tools\ToolCallPlan;
+use App\Support\Tools\ToolOutputPersistence;
 use Throwable;
 
 /**
@@ -127,7 +129,12 @@ final class ReadToolExecutor
         $claim = $this->store->claim($request);
 
         if (! $claim->isClaimed()) {
-            return ToolInvocationResult::settled($claim->outcome, $claim->invocation, executed: false);
+            return ToolInvocationResult::settled(
+                $claim->outcome,
+                $claim->invocation,
+                executed: false,
+                transientOutput: $this->rehydrate($claim, $request),
+            );
         }
 
         $invocation = $claim->invocation;
@@ -167,6 +174,71 @@ final class ReadToolExecutor
     }
 
     // ------------------------------------------------------------------
+
+    /**
+     * REPLAY OUTPUT REHYDRATION — not a second execution (Phase G).
+     *
+     * A tool whose result is deliberately NOT stored in full would otherwise
+     * lose its answer to an infrastructure retry: the queue re-processes the
+     * same inbound message, the same slot replays, and only the projection is
+     * left. The subscriber's reply must not depend on whether a provider call
+     * happened to fail, so the read is re-derived from live data instead.
+     *
+     * It runs only when ALL of these hold, and the first four are already
+     * PROVEN by the claim itself — `observe()` answers CONFLICT rather than
+     * REPLAY unless the tool, the version and the canonical input hash all
+     * match the slot:
+     *
+     *   - the outcome is REPLAY of this exact invocation slot;
+     *   - the recorded invocation SUCCEEDED;
+     *   - the side-effect class is `read` (this executor runs nothing else, and
+     *     re-deriving a write would BE a second write);
+     *   - the tool declares itself rehydratable (`ToolOutputPersistence`);
+     *   - CONSENT IS STILL GRANTED. It is re-read here for the same reason it is
+     *     re-read before an execution: a subscriber who revoked between the two
+     *     attempts must not have their data handed to a provider again.
+     *
+     * NOTHING is written: no invocation, no transition, no event, no audit, no
+     * usage row. The stored record of the original execution stays exactly as
+     * it was, and `executed` remains false.
+     *
+     * HONEST CAVEAT: the re-derived result reflects the CURRENT committed state.
+     * If the subscriber's memories changed between the two attempts, the retry
+     * sees the newer set. That is the correct trade: the alternative is either
+     * a stale plaintext copy on the row, or no answer at all.
+     *
+     * A failure to re-derive is never fatal — the caller falls back to the
+     * stored projection, which is what a replay returned before this existed.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function rehydrate(ToolClaim $claim, ToolCallRequest $request): ?array
+    {
+        $definition = $request->definition;
+
+        if ($claim->outcome !== ToolClaimOutcome::Replay
+            || $claim->invocation->status !== ToolInvocationStatus::Succeeded
+            || $definition->sideEffect !== ToolSideEffect::Read
+            || ! ToolOutputPersistence::rehydratableOnReplay($definition->key)
+            || ! array_key_exists($request->toolKey(), self::HANDLERS)) {
+            return null;
+        }
+
+        if (! $this->consents->granted((int) $request->subscriber->getKey(), $definition->capability)) {
+            return null;
+        }
+
+        [$class, $method] = self::HANDLERS[$request->toolKey()];
+
+        try {
+            $raw = $this->guard->run(fn (): mixed => app($class)->{$method}($request->subscriber, $request->input->values));
+
+            return $definition->output->validate(is_array($raw) ? $raw : []);
+        } catch (Throwable) {
+            // The projection on the row is still a truthful, if thinner, answer.
+            return null;
+        }
+    }
 
     /**
      * @return array{0: ToolInvocation, 1: array<string, mixed>|null}

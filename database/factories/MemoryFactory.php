@@ -71,7 +71,15 @@ class MemoryFactory extends Factory
             $memory->setAttribute('content', app(MemoryCipher::class)->seal($plain));
 
             if ($memory->getAttribute('archived_at') === null && $memory->getAttribute('fingerprint') === null) {
-                $memory->setAttribute('fingerprint', MemoryFingerprint::of($plain));
+                // Scoped exactly as the one domain writer scopes it.
+                /** @var MemoryCategory|string $category */
+                $category = $memory->getAttribute('category');
+
+                $memory->setAttribute('fingerprint', MemoryFingerprint::of(
+                    (int) $memory->getAttribute('user_id'),
+                    $category,
+                    $plain,
+                ));
             }
         });
     }

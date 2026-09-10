@@ -6,6 +6,8 @@ use App\Enums\MemoryCategory;
 use App\Enums\MemoryProvenance;
 use App\Enums\MessageDirection;
 use App\Enums\ToolCapability;
+use App\Enums\ToolClaimOutcome;
+use App\Enums\ToolConsentReason;
 use App\Enums\ToolInvocationFailureKind;
 use App\Enums\ToolInvocationRefusalReason;
 use App\Enums\ToolInvocationStatus;
@@ -14,6 +16,7 @@ use App\Models\Message;
 use App\Models\ToolInvocation;
 use App\Models\User;
 use App\Services\Memory\MemoryCipher;
+use App\Services\Tools\ToolConsentService;
 use App\Support\Memory\MemoryFingerprint;
 use App\Support\Tools\ToolRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -56,6 +59,12 @@ function memorySaid(User $subscriber, string $text, MessageDirection $direction 
 function memoryAsk(User $subscriber, string $what = 'شيء'): Message
 {
     return memorySaid($subscriber, "احفظ إني {$what}");
+}
+
+/** «انسى ...» — an instruction, so the forget path is permitted. */
+function memoryAskForget(User $subscriber, string $what = 'شيء'): Message
+{
+    return memorySaid($subscriber, "انسى إني {$what}");
 }
 
 function memoryWrite(Message $message, array $args)
@@ -171,7 +180,8 @@ it('stores memory content as ciphertext, never as readable text', function () {
         ->and($stored)->toContain('"kid"')
         ->and(app(MemoryCipher::class)->open($stored))->toBe('بشتغل مهندس برمجيات')
         // And the fingerprint is a keyed MAC, not a digest anyone can recompute.
-        ->and(DB::table('memories')->value('fingerprint'))->toBe(MemoryFingerprint::of('بشتغل مهندس برمجيات'))
+        ->and(DB::table('memories')->value('fingerprint'))
+        ->toBe(MemoryFingerprint::of($this->subscriber->id, MemoryCategory::Fact, 'بشتغل مهندس برمجيات'))
         ->and(DB::table('memories')->value('fingerprint'))->not->toBe(hash('sha256', 'بشتغل مهندس برمجيات'));
 });
 
@@ -249,17 +259,17 @@ it('forgets exactly one unambiguous memory, refuses a vague one, and says so whe
     memoryWrite(memoryAsk($this->subscriber), ['content' => 'بشرب شاي المساء', 'category' => 'habit']);
 
     // Nothing matches.
-    $missing = memoryForget(memoryAsk($this->subscriber), ['query' => 'كرة القدم']);
+    $missing = memoryForget(memoryAskForget($this->subscriber), ['query' => 'كرة القدم']);
     expect($missing->invocation->failure_kind)->toBe(ToolInvocationFailureKind::NotFound)
         ->and(Memory::query()->active()->count())->toBe(2);
 
     // Two match: NOTHING is archived. A vague word never sweeps memories away.
-    $vague = memoryForget(memoryAsk($this->subscriber), ['query' => 'بشرب']);
+    $vague = memoryForget(memoryAskForget($this->subscriber), ['query' => 'بشرب']);
     expect($vague->invocation->failure_kind)->toBe(ToolInvocationFailureKind::Ambiguous)
         ->and(Memory::query()->active()->count())->toBe(2);
 
     // One matches: exactly one is archived, and the row survives.
-    $one = memoryForget(memoryAsk($this->subscriber), ['query' => 'قهوة']);
+    $one = memoryForget(memoryAskForget($this->subscriber), ['query' => 'قهوة']);
     expect($one->output())->toBe(['forgotten' => 1])
         ->and(Memory::query()->active()->count())->toBe(1)
         ->and(Memory::count())->toBe(2);
@@ -274,7 +284,7 @@ it('forgets exactly one unambiguous memory, refuses a vague one, and says so whe
 
 it('lets a forgotten memory be saved again, because archiving released its slot', function () {
     memoryWrite(memoryAsk($this->subscriber), ['content' => 'بحب المشي', 'category' => 'habit']);
-    memoryForget(memoryAsk($this->subscriber), ['query' => 'المشي']);
+    memoryForget(memoryAskForget($this->subscriber), ['query' => 'المشي']);
 
     $again = memoryWrite(memoryAsk($this->subscriber), ['content' => 'بحب المشي', 'category' => 'habit']);
 
@@ -318,19 +328,77 @@ it('keeps the memories out of the invocation row while the model still sees them
         ->and(json_encode(DB::table('tool_invocations')->pluck('output')->all(), JSON_UNESCAPED_UNICODE))->not->toContain('القراءة');
 });
 
-it('gives a replay only what was kept, and never resurrects content the policy refused to store', function () {
+it('re-derives a replayed memory read instead of handing back the projection, and still stores nothing', function () {
     memoryWrite(memoryAsk($this->subscriber), ['content' => 'بحب القراءة قبل النوم', 'category' => 'preference']);
 
     $message = memoryAsk($this->subscriber);
     $first = memoryRecall($message, ['query' => 'القراءة']);
 
-    // The very same slot again: the invocation is a replay, so nothing executes.
+    // The very same slot again: the invocation is a REPLAY, so nothing executes
+    // as an invocation — but the read itself is re-derived, because an
+    // infrastructure retry must not change what the subscriber gets.
     $replay = memoryRecall($message, ['query' => 'القراءة']);
 
     expect($first->executed)->toBeTrue()
         ->and($replay->executed)->toBeFalse()
-        ->and($replay->output())->toBe(['memories_count' => 1, 'truncated' => false])
-        ->and(ToolInvocation::where('tool_key', 'memory.read')->count())->toBe(1);
+        ->and($replay->claim)->toBe(ToolClaimOutcome::Replay)
+        ->and($replay->output()['memories'][0]['content'])->toBe('بحب القراءة قبل النوم')
+        // One invocation, one event trail, one audit, one usage row.
+        ->and(ToolInvocation::where('tool_key', 'memory.read')->count())->toBe(1)
+        ->and($replay->invocation->events()->count())->toBe($first->invocation->events()->count())
+        // And the row STILL holds only the shape: nothing was persisted to make
+        // the replay work.
+        ->and($replay->invocation->refresh()->output)->toBe(['memories_count' => 1, 'truncated' => false])
+        ->and(json_encode(DB::table('tool_invocations')->pluck('output')->all(), JSON_UNESCAPED_UNICODE))
+        ->not->toContain('القراءة');
+});
+
+it('refuses to re-derive a replayed memory read once consent is revoked', function () {
+    memoryWrite(memoryAsk($this->subscriber), ['content' => 'بحب القراءة قبل النوم', 'category' => 'preference']);
+
+    $message = memoryAsk($this->subscriber);
+    memoryRecall($message, ['query' => 'القراءة']);
+
+    $this->actingAs($this->subscriber);
+    app(ToolConsentService::class)->revoke(
+        $this->subscriber->id,
+        ToolCapability::MemoryRead,
+        1,
+        ToolConsentReason::SubscriberRequest,
+    );
+
+    // Rehydration is a read of the subscriber's data for a provider, so it is
+    // governed by the same live consent an execution is. Withdrawn ⇒ the replay
+    // falls back to the stored projection and no memory leaves the platform.
+    $replay = memoryRecall($message, ['query' => 'القراءة']);
+
+    expect($replay->output())->toBe(['memories_count' => 1, 'truncated' => false])
+        ->and(json_encode($replay->output(), JSON_UNESCAPED_UNICODE))->not->toContain('القراءة');
+});
+
+it('needs an explicit forget instruction, and a contradiction is not one', function () {
+    memoryWrite(memoryAsk($this->subscriber), ['content' => 'بحب القهوة سادة', 'category' => 'preference']);
+
+    // A correction. The model may well judge the old preference stale — and it
+    // still may not archive it.
+    $refused = memoryForget(memorySaid($this->subscriber, 'بطلت أحب القهوة'), ['query' => 'القهوة']);
+
+    expect($refused->status)->toBe(ToolInvocationStatus::Refused)
+        ->and($refused->invocation->refusal_reason)->toBe(ToolInvocationRefusalReason::ExplicitIntentMissing)
+        ->and(Memory::query()->active()->count())->toBe(1);
+
+    // Sanad's own words are not authority here either.
+    $own = memoryForget(memorySaid($this->subscriber, 'انسى إني بحب القهوة', MessageDirection::Outbound), ['query' => 'القهوة']);
+
+    expect($own->invocation->refusal_reason)->toBe(ToolInvocationRefusalReason::ExplicitIntentMissing)
+        ->and(Memory::query()->active()->count())->toBe(1);
+
+    // The instruction itself may proceed.
+    $allowed = memoryForget(memorySaid($this->subscriber, 'انسى إني بحب القهوة'), ['query' => 'القهوة']);
+
+    expect($allowed->output())->toBe(['forgotten' => 1])
+        ->and(Memory::query()->active()->count())->toBe(0)
+        ->and(Memory::count())->toBe(1);
 });
 
 // ------------------------------------------------------- isolation & consent
@@ -348,7 +416,7 @@ it('can never be pointed at another subscriber, in any of the three tools', func
     expect(array_column($recall['memories'], 'content'))->toBe(['بسكن في نابلس']);
 
     // Forgetting cannot reach across either: it is not found, not archived.
-    $forget = memoryForget(memoryAsk($this->subscriber), ['query' => 'رام الله']);
+    $forget = memoryForget(memoryAskForget($this->subscriber), ['query' => 'رام الله']);
 
     expect($forget->invocation->failure_kind)->toBe(ToolInvocationFailureKind::NotFound)
         ->and(Memory::query()->where('user_id', $other->id)->active()->count())->toBe(1);

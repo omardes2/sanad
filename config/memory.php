@@ -24,7 +24,9 @@ declare(strict_types=1);
 return [
     /*
      | AES-256-GCM master key for `memories.content` at rest, and the previous
-     | key(s) that older rows may still be sealed with during a rotation.
+     | key(s) that older rows may still be sealed with during a rotation. There
+     | is no re-encryption pass in this phase: a previous key must be retained
+     | for as long as any row is still sealed with it.
      */
     'key' => env('MEMORY_KEY'),
     'previous_keys' => env('MEMORY_PREVIOUS_KEYS', ''),

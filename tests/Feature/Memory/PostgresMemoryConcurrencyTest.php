@@ -45,8 +45,14 @@ beforeEach(function () {
 
 // ---------------------------------------------------------------- helpers
 
-/** A consenting subscriber and N stored messages, each an explicit instruction. */
-function memorySubject(int $messages = 1): array
+/**
+ * A consenting subscriber and N stored messages, each an explicit instruction.
+ *
+ * The TEXT matters: `memory.write@1` and `memory.forget@1` each require their
+ * own server-verifiable instruction in the subscriber's own message, so a race
+ * that drives forget needs forget instructions to drive it with.
+ */
+function memorySubject(int $messages = 1, string $text = 'احفظ إني بحب القهوة سادة'): array
 {
     $subscriber = User::factory()->create(['is_admin' => false]);
 
@@ -64,11 +70,29 @@ function memorySubject(int $messages = 1): array
             'conversation_id' => $conversation->id,
             'user_id' => $subscriber->id,
             'direction' => MessageDirection::Inbound,
-            'text_content' => 'احفظ إني بحب القهوة سادة',
+            'text_content' => $text,
         ])->id;
     }
 
     return [$subscriber, $ids];
+}
+
+/** @return list<int> N more stored inbound messages for an existing subscriber */
+function memoryMessages(User $subscriber, int $count, string $text): array
+{
+    $conversation = Conversation::factory()->create(['user_id' => $subscriber->id]);
+    $ids = [];
+
+    for ($i = 0; $i < $count; $i++) {
+        $ids[] = Message::factory()->create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $subscriber->id,
+            'direction' => MessageDirection::Inbound,
+            'text_content' => $text,
+        ])->id;
+    }
+
+    return $ids;
 }
 
 function memoryRun(array $args): Process
@@ -166,7 +190,9 @@ it('of 6 concurrent saves at capacity never exceeds the ceiling and evicts nothi
 });
 
 it('of a save racing a forget of the same memory settles deterministically, never both', function () {
-    [$subscriber, $messages] = memorySubject(4);
+    [$subscriber, $writeMessages] = memorySubject(2);
+    // Forgetting needs its own instruction; the same subscriber, said differently.
+    $forgetMessages = memoryMessages($subscriber, 2, 'انسى إني بحب القهوة سادة');
 
     try {
         Memory::factory()->create([
@@ -177,10 +203,10 @@ it('of a save racing a forget of the same memory settles deterministically, neve
 
         // Two savers and two forgetters, all released together.
         $lines = memoryLines([
-            memoryRun(['write', (string) $messages[0], 'preference', 'بحب القهوة سادة']),
-            memoryRun(['forget', (string) $messages[1], 'القهوة سادة']),
-            memoryRun(['write', (string) $messages[2], 'preference', 'بحب القهوة سادة']),
-            memoryRun(['forget', (string) $messages[3], 'القهوة سادة']),
+            memoryRun(['write', (string) $writeMessages[0], 'preference', 'بحب القهوة سادة']),
+            memoryRun(['forget', (string) $forgetMessages[0], 'القهوة سادة']),
+            memoryRun(['write', (string) $writeMessages[1], 'preference', 'بحب القهوة سادة']),
+            memoryRun(['forget', (string) $forgetMessages[1], 'القهوة سادة']),
         ]);
 
         $rows = Memory::query()->where('user_id', $subscriber->id)->get();

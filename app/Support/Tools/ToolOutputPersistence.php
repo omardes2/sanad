@@ -21,11 +21,12 @@ namespace App\Support\Tools;
  * persists. `ToolInvocationResult::output()` prefers the transient value when
  * the executor has just produced one.
  *
- * A CONSEQUENCE, stated rather than hidden: replaying a `memory.read@2`
- * invocation returns the redacted projection, because the content it would need
- * was deliberately never stored. That is correct. A replay must not be able to
- * resurrect what the policy refused to keep, and the model can simply read
- * again under a new slot.
+ * REPLAY. A redacted read would otherwise lose its answer to an infrastructure
+ * retry: the queue re-processes the same message, the same slot replays, and the
+ * projection is all that is left. So such a read is declared REHYDRATABLE — on a
+ * proven replay its result is re-derived from the live data rather than read
+ * back from the row (see `rehydratableOnReplay()`). Nothing is stored either
+ * way, and no second invocation, event, audit or usage row exists.
  *
  * The default is PERSIST: most tools return ids and counts, which are exactly
  * what an audit trail is for. A tool appears here only to say less.
@@ -35,7 +36,17 @@ final class ToolOutputPersistence
     /**
      * `name@version` ⇒ the fields whose VALUES may be stored, plus derived
      * counters computed from the ones that may not.
+     */
+    /**
+     * `name@version` of the redacted READS whose result may be re-derived on a
+     * replay. Every entry must also appear in `PERSISTABLE` and must be a
+     * `read`; a contract test pins both.
      *
+     * @var list<string>
+     */
+    private const REHYDRATABLE = ['memory.read@2'];
+
+    /**
      * @var array<string, list<string>>
      */
     private const PERSISTABLE = [
@@ -48,6 +59,32 @@ final class ToolOutputPersistence
     public static function isRedacted(ToolKey $key): bool
     {
         return array_key_exists($key->value(), self::PERSISTABLE);
+    }
+
+    /**
+     * May a REPLAY of this tool re-derive the part of its result that was never
+     * stored, instead of handing back the projection?
+     *
+     * This exists because redaction and infrastructure retries would otherwise
+     * contradict each other. A queue retry re-processes the same inbound message
+     * at the same invocation slot: the read replays, and with only the shape on
+     * the row the model can no longer answer the question it asked in the first
+     * place. Losing the answer to a retry is not a privacy win — it is a broken
+     * reply — and persisting the plaintext to avoid it is exactly what the
+     * policy refuses.
+     *
+     * So a redacted READ may be re-derived on replay. The executor proves the
+     * slot, the tool version, the canonical input hash, the read side-effect
+     * class and live consent before it does, and the re-derivation creates no
+     * invocation, no event, no audit and no usage row: it is REPLAY OUTPUT
+     * REHYDRATION, not a second execution.
+     *
+     * It is declared per tool rather than inferred, and only a `read` may ever
+     * qualify — re-deriving a write would BE a second write.
+     */
+    public static function rehydratableOnReplay(ToolKey $key): bool
+    {
+        return in_array($key->value(), self::REHYDRATABLE, true);
     }
 
     /**

@@ -73,7 +73,7 @@ it('lets the DATABASE decide that one memory is one memory, per subscriber and p
         'user_id' => $user->id,
         'category' => MemoryCategory::Preference->value,
         'content' => 'sealed',
-        'fingerprint' => MemoryFingerprint::of('بحب القهوة سادة'),
+        'fingerprint' => MemoryFingerprint::of($user->id, MemoryCategory::Preference, 'بحب القهوة سادة'),
         'importance' => 3,
         'provenance' => MemoryProvenance::Explicit->value,
         'created_at' => now(),
@@ -88,9 +88,16 @@ it('lets the DATABASE decide that one memory is one memory, per subscriber and p
     expect(fn () => DB::transaction(fn () => DB::table('memories')->insert($row)))
         ->toThrow(UniqueConstraintViolationException::class);
 
-    // Another subscriber, and another category, are different memories.
-    DB::table('memories')->insert(array_merge($row, ['user_id' => $other->id]));
-    DB::table('memories')->insert(array_merge($row, ['category' => MemoryCategory::Fact->value]));
+    // Another subscriber, and another category, are different memories — and
+    // their fingerprints differ too, because the MAC is scoped to both.
+    DB::table('memories')->insert(array_merge($row, [
+        'user_id' => $other->id,
+        'fingerprint' => MemoryFingerprint::of($other->id, MemoryCategory::Preference, 'بحب القهوة سادة'),
+    ]));
+    DB::table('memories')->insert(array_merge($row, [
+        'category' => MemoryCategory::Fact->value,
+        'fingerprint' => MemoryFingerprint::of($user->id, MemoryCategory::Fact, 'بحب القهوة سادة'),
+    ]));
 
     // And NULL is unconstrained, which is what lets archived rows keep their
     // content without holding the slot.

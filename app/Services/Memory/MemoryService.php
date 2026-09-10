@@ -100,7 +100,9 @@ final class MemoryService
         }
 
         $subscriberId = (int) $subscriber->getKey();
-        $fingerprint = $this->fingerprint($content);
+        // Scoped to this subscriber AND this category, so the value says nothing
+        // about whether anybody else remembers the same thing.
+        $fingerprint = $this->fingerprint($subscriberId, $category, $content);
         $sealed = $this->seal($content);
 
         // Serialise this subscriber's memory writes against each other. The
@@ -384,10 +386,10 @@ final class MemoryService
         return Memory::query()->where('user_id', $subscriberId)->whereNull('archived_at')->count();
     }
 
-    private function fingerprint(string $content): string
+    private function fingerprint(int $subscriberId, MemoryCategory $category, string $content): string
     {
         try {
-            return MemoryFingerprint::of($content);
+            return MemoryFingerprint::of($subscriberId, $category, $content);
         } catch (MemoryUnavailableException) {
             throw new ToolDomainException(ToolInvocationFailureKind::MemoryUnavailable, 'الذاكرة غير متاحة: لا يوجد مفتاح بصمة.');
         }

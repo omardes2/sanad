@@ -21,9 +21,9 @@ use App\Support\Memory\ExplicitMemoryIntent;
  * The map is OPT-IN, not fail-closed, and that is a deliberate difference from
  * every other map in this layer: most tools take their authority from consent
  * plus the subscriber's request being the reason the turn exists at all, and
- * demanding a magic phrase before «ذكرني بكرا» would break them. Only where a
- * write persists personal data BEYOND the conversation does a per-message
- * instruction become the right bar — which today is exactly one tool.
+ * demanding a magic phrase before «ذكرني بكرا» would break them. The bar belongs
+ * where a write reaches BEYOND the conversation — creating durable personal data
+ * or destroying it — which today is the two memory writes.
  *
  * The verifier is resolved from code, keyed by tool key. A definition still
  * cannot name it, and no row or payload can.
@@ -33,6 +33,11 @@ final class ToolIntentRequirements
     /** @var array<string, callable(Message): bool> */
     private const VERIFIERS = [
         'memory.write@1' => [ExplicitMemoryIntent::class, 'present'],
+        // Forgetting destroys what the subscriber deliberately kept, so it needs
+        // the SAME bar, not a lower one: a model that reads a contradiction
+        // («بطلت أحب القهوة») as permission would archive a fact nobody asked it
+        // to touch.
+        'memory.forget@1' => [ExplicitMemoryIntent::class, 'forgetPresent'],
     ];
 
     public static function required(ToolKey $key): bool
