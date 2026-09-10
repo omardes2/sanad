@@ -28,7 +28,7 @@ use Throwable;
  *                                        → resolved:<0|1>:<status>  |  refused:<Class>
  *   cancel   <followUpId> <userId>       → cancelled:<asks>:<terminated>  |  refused:<Class>
  *   complete <userId> <taskId>           → completed  |  refused:<Class>
- *   state    <followUpId>                → <status>:<asks>:<asksUsed>
+ *   state    <followUpId>                → <status>:<askRows>:<asksProvenSent>
  *
  * `advance` targets ONE loop rather than running the whole sweep, because the race
  * under test is two processes advancing the SAME loop — a batch walk would let
@@ -247,7 +247,8 @@ class FollowUpProbe extends Command
             '%s:%d:%d',
             $followUp->status->value,
             Reminder::query()->where('follow_up_id', $followUpId)->count(),
-            $followUp->asksUsed(),
+            // PROVEN SENT, so a race test can assert the logical budget directly.
+            $followUp->asksSent(),
         ));
 
         return self::SUCCESS;

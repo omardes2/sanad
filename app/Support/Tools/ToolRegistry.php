@@ -444,7 +444,9 @@ class ToolRegistry
                         ToolField::of('follow_up_id', ToolFieldType::Integer, required: true, max: 999999999),
                         ToolField::of('question', ToolFieldType::String, required: true, max: 200),
                         ToolField::of('status', ToolFieldType::Enum, required: true, options: FollowUpStatus::values()),
-                        ToolField::of('asks_used', ToolFieldType::Integer, required: true, max: 20),
+                        // PROVEN SENT asks, never attempts: the field name means
+                        // exactly what the budget means.
+                        ToolField::of('asks_sent', ToolFieldType::Integer, required: true, max: 20),
                         ToolField::of('max_asks', ToolFieldType::Integer, required: true, max: 20),
                         ToolField::of('next_ask_local', ToolFieldType::String, required: false, max: 20),
                     ])),

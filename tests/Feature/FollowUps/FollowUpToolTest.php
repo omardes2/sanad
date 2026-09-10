@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Enums\FollowUpAnswer;
 use App\Enums\FollowUpStatus;
+use App\Enums\ReminderStatus;
 use App\Enums\ToolCapability;
 use App\Enums\ToolSideEffect;
 use App\Services\FollowUps\FollowUpService;
@@ -14,6 +15,7 @@ use App\Support\Tools\ToolKey;
 use App\Support\Tools\ToolOutputPersistence;
 use App\Support\Tools\ToolRegistry;
 use App\Support\Tools\ToolWriteTargets;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 /**
@@ -183,7 +185,7 @@ it('reports the budget and the next ask in the subscriber\'s own wall clock', fu
 
     $row = app(FollowUpService::class)->list($user)['follow_ups'][0];
 
-    expect($row['asks_used'])->toBe(1)
+    expect($row['asks_sent'])->toBe(1)
         ->and($row['max_asks'])->toBe(3)
         ->and($row['status'])->toBe(FollowUpStatus::AwaitingAnswer->value)
         // Awaiting an answer means nothing else is scheduled, and the listing says
@@ -201,6 +203,38 @@ it('reports the budget and the next ask in the subscriber\'s own wall clock', fu
         ->and($after['next_ask_local'])->not->toBe(
             $followUp->fresh()->next_ask_at->format('Y-m-d H:i')
         );
+});
+
+it('names the budget field after what it means: asks PROVEN SENT', function () {
+    [$user, , $conversation] = fuSubscriber();
+    $followUp = fuCreate($user, $conversation);
+    $followUp->forceFill(['next_ask_at' => CarbonImmutable::now('UTC')->subMinute()])->save();
+    fuAdvance($followUp->fresh());
+
+    // An ask that was AUTHORISED but never proven sent — the crash window.
+    $ask = fuAsks($followUp)[0];
+    $ask->forceFill([
+        'attempts' => 1,
+        'dispatched_at' => CarbonImmutable::now(),
+        'status' => ReminderStatus::Processing->value,
+    ])->save();
+
+    $row = app(FollowUpService::class)->list($user)['follow_ups'][0];
+
+    // The contract field is `asks_sent`, and it reads 0 — because nothing was
+    // proven sent. A field called `asks_used` fed by `attempts` would read 1 here
+    // and licence a second question about something nobody was asked.
+    expect(array_key_exists('asks_sent', $row))->toBeTrue()
+        ->and(array_key_exists('asks_used', $row))->toBeFalse()
+        ->and($row['asks_sent'])->toBe(0);
+
+    // Proven sent, and only now does it count.
+    $ask->forceFill([
+        'status' => ReminderStatus::Sent->value,
+        'sent_at' => CarbonImmutable::now(),
+    ])->save();
+
+    expect(app(FollowUpService::class)->list($user)['follow_ups'][0]['asks_sent'])->toBe(1);
 });
 
 it('only lets the model propose the two outcomes a reply can support', function () {

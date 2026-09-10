@@ -26,7 +26,8 @@ use Carbon\CarbonImmutable;
  * So correlation must be EARNED from stored facts, all of which must hold:
  *
  *   1. the loop belongs to THIS subscriber;
- *   2. it is `awaiting_answer` — an ask genuinely left the platform;
+ *   2. it is `awaiting_answer` — an ask was PROVEN SENT (`ReminderStatus::Sent`),
+ *      never merely attempted;
  *   3. the message arrived AFTER that ask;
  *   4. it arrived inside the configured answer window, because «تمام» eight days
  *      later is a reply to today's conversation, not to last week's question;
@@ -70,10 +71,10 @@ final class FollowUpCorrelator
         $reason = 'none';
 
         foreach ($candidates as $candidate) {
-            $askedAt = $candidate->lastAskedAt();
+            $askedAt = $candidate->lastSentAt();
 
             if ($askedAt === null) {
-                // `awaiting_answer` without a dispatched ask should not exist; if
+                // `awaiting_answer` without a PROVEN SENT ask should not exist; if
                 // it does, it is not evidence of anything.
                 continue;
             }

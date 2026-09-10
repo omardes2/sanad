@@ -30,10 +30,14 @@ use Illuminate\Support\Facades\Schema;
  * ── WHAT IS DELIBERATELY NOT HERE ────────────────────────────────────────────
  *  - No `expires_at` / deadline column: V1 has no deadline concept, and a column
  *    nothing writes is a promise the schema does not keep.
- *  - No `asks_sent` counter: the ask budget is DERIVED from reminder truth
- *    (`attempts > 0` means a request genuinely left the platform), so a
- *    template-refused ask cannot quietly spend a subscriber's budget and no
- *    counter can drift from the rows it claims to count.
+ *  - No `asks_sent` counter, and no counter at all: the ask budget is DERIVED
+ *    from DELIVERY TRUTH — `count(*)` over the ask rows whose reminder reached
+ *    `sent`. `attempts` is deliberately not that truth: it is incremented in the
+ *    transaction that commits BEFORE the network request, so it cannot tell a
+ *    delivered question from a worker that died on the way to the provider. With
+ *    nothing counted up, a template-refused ask cannot quietly spend a
+ *    subscriber's budget, concurrency cannot double-count, and no number can
+ *    drift from the rows it claims to describe.
  *  - No `messages` change: the resolving message is pointed at from here
  *    (`resolved_by_message_id`), so reply correlation needed no Message schema.
  *  - No finance change, and no follow-up-specific usage dimension: an ask's

@@ -23,14 +23,26 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * to this one. What lives here is the only thing a per-delivery row cannot hold:
  * whether the loop is still open, and how much of the ask budget is left.
  *
- * THE BUDGET IS DERIVED, NOT COUNTED. `asksUsed()` reads the ask rows and counts
- * those with `attempts > 0` — i.e. those for which a request genuinely left the
- * platform. There is deliberately no `asks_sent` column, because a counter can
- * drift from the rows it claims to describe and, worse, a refusal that never
- * reached a provider (no approved template, a channel that cannot send) would
- * have to be remembered NOT to increment it. Reading reminder truth makes that
- * impossible to get wrong: an ask that was refused before dispatch simply has
- * `attempts = 0` and was never an ask.
+ * THE BUDGET IS DERIVED FROM DELIVERY TRUTH, AND DELIVERY TRUTH IS `sent`.
+ *
+ * `asksSent()` counts ask rows whose reminder reached `ReminderStatus::Sent` —
+ * the state the dispatcher writes, in one transaction with `sent_at`, and only
+ * after the provider ACCEPTED the message. Nothing else counts as having asked the
+ * subscriber anything.
+ *
+ * `attempts` is deliberately NOT used, and that is the correction this model
+ * exists to make. The dispatcher increments `attempts` inside the locked
+ * transaction that commits BEFORE the network request, so there is a real window
+ * in which a row reads `attempts = 1` and no request was ever made: the worker
+ * died between that commit and the send. From outside, that state is
+ * indistinguishable from a request that left and whose answer was lost — which is
+ * exactly why `attempts` can authorise a PHYSICAL RETRY (it is a spend ceiling)
+ * and can never establish that a QUESTION was asked.
+ *
+ * There is no `asks_sent` column either, and no counter anywhere: the number is a
+ * `count(*)` over the ask rows, so there is nothing to increment twice, nothing to
+ * forget to increment, and nothing that can drift from the rows it describes.
+ * Concurrency cannot double-count what is never counted up.
  */
 class FollowUp extends Model
 {
@@ -128,23 +140,24 @@ class FollowUp extends Model
     }
 
     /**
-     * How many asks have GENUINELY left the platform.
+     * How many asks were PROVEN SENT — the logical ask budget, and the only
+     * meaning of "we asked" in this domain.
      *
-     * `attempts > 0` is the whole definition, and it is reminder truth rather
-     * than a follow-up opinion: the dispatcher increments `attempts` inside the
-     * locked transaction immediately before the physical request, so a row with
-     * `attempts > 0` is one the provider may well have delivered — including the
-     * `unknown` outcome, which must never be re-read as "not sent" merely
-     * because retrying would be cheaper than admitting uncertainty.
+     * `ReminderStatus::Sent` is the trusted delivery state: the dispatcher writes
+     * it together with `sent_at`, in one transaction, and only after the provider
+     * accepted the message. A claim does not count. An authorised attempt does not
+     * count. A refusal before dispatch does not count. A worker that died between
+     * incrementing `attempts` and reaching the network does not count — nothing was
+     * asked, so nothing is spent.
      */
-    public function asksUsed(): int
+    public function asksSent(): int
     {
-        return $this->asks()->where('attempts', '>', 0)->count();
+        return $this->asks()->where('status', ReminderStatus::Sent->value)->count();
     }
 
     public function budgetRemaining(): int
     {
-        return max(0, $this->max_asks - $this->asksUsed());
+        return max(0, $this->max_asks - $this->asksSent());
     }
 
     /**
@@ -172,41 +185,24 @@ class FollowUp extends Model
     }
 
     /**
-     * When the most recent ask actually left the platform, or null if none has.
+     * When the most recent PROVEN SENT ask reached the subscriber, or null if no
+     * ask has been proven sent.
      *
-     * Both stamps are consulted because a `sent` ask has `sent_at` while an ask
-     * whose outcome is `unknown` has only `dispatched_at` — and the second kind
-     * counts: the subscriber may have received it.
+     * `sent_at` from a `sent` row, and nothing else. `dispatched_at` is
+     * deliberately ignored: it records that a request was AUTHORISED, which is
+     * precisely the fact that survives a crash before the network. Measuring the
+     * next-ask interval from it would start the clock on a question nobody
+     * received.
      */
-    public function lastAskedAt(): ?CarbonImmutable
+    public function lastSentAt(): ?CarbonImmutable
     {
-        $row = $this->asks()
-            ->where('attempts', '>', 0)
+        $sentAt = $this->asks()
+            ->where('status', ReminderStatus::Sent->value)
             ->reorder()
             ->orderByDesc('ask_index')
-            ->first(['sent_at', 'dispatched_at']);
+            ->value('sent_at');
 
-        if ($row === null) {
-            return null;
-        }
-
-        $stamps = array_values(array_filter([$row->sent_at, $row->dispatched_at]));
-
-        if ($stamps === []) {
-            return null;
-        }
-
-        $latest = null;
-
-        foreach ($stamps as $stamp) {
-            $moment = CarbonImmutable::parse((string) $stamp);
-
-            if ($latest === null || $moment->greaterThan($latest)) {
-                $latest = $moment;
-            }
-        }
-
-        return $latest;
+        return $sentAt === null ? null : CarbonImmutable::parse((string) $sentAt);
     }
 
     /** The next index an ask may take. Identity, not a count of deliveries. */

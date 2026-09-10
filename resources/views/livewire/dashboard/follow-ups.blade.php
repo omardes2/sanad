@@ -62,7 +62,7 @@
                     <th class="p-2 text-right">#</th>
                     <th class="p-2 text-right">المشترك</th>
                     <th class="p-2 text-right">الحالة</th>
-                    <th class="p-2 text-right">الأسئلة</th>
+                    <th class="p-2 text-right">أسئلة أُرسلت</th>
                     <th class="p-2 text-right">السؤال القادم</th>
                     <th class="p-2 text-right">سبب الإيقاف</th>
                     <th class="p-2 text-right">مهمة مرتبطة</th>
@@ -75,7 +75,7 @@
                         <td class="p-2" dir="ltr">{{ $followUp->id }}</td>
                         <td class="p-2">{{ $followUp->user?->name ?? '—' }} <span class="text-slate-400" dir="ltr">#{{ $followUp->user_id }}</span></td>
                         <td class="p-2">{{ $followUp->status->label() }}</td>
-                        <td class="p-2" dir="ltr">{{ $followUp->asksUsed() }}/{{ $followUp->max_asks }}</td>
+                        <td class="p-2" dir="ltr">{{ $followUp->asksSent() }}/{{ $followUp->max_asks }}</td>
                         <td class="p-2" dir="ltr">{{ $followUp->next_ask_at?->format('Y-m-d H:i') ?? '—' }}</td>
                         <td class="p-2">{{ $followUp->blocked_reason?->label() ?? '—' }}</td>
                         <td class="p-2" dir="ltr">{{ $followUp->task_id ? '#'.$followUp->task_id : '—' }}</td>

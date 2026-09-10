@@ -720,25 +720,152 @@ it('closes the loop exactly once when a genuinely linked task is completed concu
 
 /*
 |--------------------------------------------------------------------------
-| Per-ask physical budget
+| The crash boundary: `attempts` is not delivery truth
 |--------------------------------------------------------------------------
 */
 
-it('keeps each ask\'s physical attempt budget to itself', function () {
+it('does not advance the ladder when a worker died after authorising an attempt and before the network', function () {
     [$user, , $message] = pfuSubject();
     $followUp = pfuLoop($user, $message);
 
     try {
         pfuOutcomes([pfuRun(['advance', (string) $followUp->id])]);
 
-        // Ask 1 spends BOTH of its physical attempts on unproven outcomes.
-        $first = Reminder::query()->where('follow_up_id', $followUp->id)->firstOrFail();
-        $first->forceFill([
+        /*
+         * EXACTLY THE STATE `ReminderDispatcher::authoriseDispatch()` COMMITS — the
+         * claim is held, `attempts` is 1, `dispatched_at` is stamped — and then the
+         * worker dies before the request leaves. `sent_at` is null and the status is
+         * still `processing`, which from outside is indistinguishable from a request
+         * in flight whose answer was lost. That indistinguishability is the whole
+         * reason `attempts` cannot mean "the subscriber was asked".
+         */
+        Reminder::query()->where('follow_up_id', $followUp->id)->update([
+            'status' => ReminderStatus::Processing->value,
+            'claim_token' => str_repeat('b', 32),
+            'claimed_at' => CarbonImmutable::now()->subMinutes(2),
+            'attempts' => 1,
+            'dispatched_at' => CarbonImmutable::now()->subMinutes(2),
+            'sent_at' => null,
+        ]);
+
+        // Eight concurrent materialisers, every one of them given the chance to
+        // read `attempts = 1` and conclude that a question was asked.
+        $outcomes = pfuOutcomes(array_map(
+            fn () => pfuRun(['advance', (string) $followUp->id, '--sleep=30000']),
+            range(1, 8),
+        ));
+        $report = implode(' | ', $outcomes);
+
+        $state = pfuOutcomes([pfuRun(['state', (string) $followUp->id])])[0];
+
+        // `open:1:0` — one ask row, ZERO logical asks, and no ask 2.
+        expect($state)->toBe('open:1:0', $report)
+            ->and(array_unique($outcomes))->toBe(['in_flight'], $report)
+            ->and(DB::table('reminders')->where('follow_up_id', $followUp->id)->count())->toBe(1, $report);
+
+        $fresh = DB::table('follow_ups')->where('id', $followUp->id)->first();
+
+        // Neither awaiting an answer nor answered: nothing was established.
+        expect($fresh->status)->toBe(FollowUpStatus::Open->value, $report)
+            ->and($fresh->resolved_at)->toBeNull()
+            ->and($fresh->blocked_reason)->toBeNull();
+    } finally {
+        pfuCleanup($user);
+    }
+});
+
+it('advances the logical ask exactly once when the reminder reaches sent, across racing observers', function () {
+    [$user, , $message] = pfuSubject();
+    $followUp = pfuLoop($user, $message);
+
+    try {
+        pfuOutcomes([pfuRun(['advance', (string) $followUp->id])]);
+
+        // Proven sent, just now — so the interval has NOT passed and no further ask
+        // is owed; what is under test is only the counting.
+        pfuSend($followUp->fresh(), CarbonImmutable::now());
+
+        $outcomes = pfuOutcomes(array_map(
+            fn () => pfuRun(['advance', (string) $followUp->id, '--sleep=30000']),
+            range(1, 8),
+        ));
+        $report = implode(' | ', $outcomes);
+
+        $state = pfuOutcomes([pfuRun(['state', (string) $followUp->id])])[0];
+
+        /*
+         * ONE logical ask, whatever the interleaving. There is no counter to
+         * increment twice: `asksSent()` is a `count(*)` over the ask rows, so
+         * concurrency has nothing to corrupt — and exactly one process performed the
+         * state transition to `awaiting_answer`.
+         */
+        expect($state)->toBe('awaiting_answer:1:1', $report)
+            ->and(array_filter($outcomes, static fn (string $o): bool => $o === 'asked'))->toHaveCount(1, $report)
+            ->and(DB::table('reminders')->where('follow_up_id', $followUp->id)->count())->toBe(1, $report);
+    } finally {
+        pfuCleanup($user);
+    }
+});
+
+it('does not produce the next ask from an unknown terminal outcome, and holds the loop instead', function () {
+    [$user, , $message] = pfuSubject();
+    $followUp = pfuLoop($user, $message);
+
+    try {
+        pfuOutcomes([pfuRun(['advance', (string) $followUp->id])]);
+
+        /*
+         * A request left and its answer never came back, twice: the reminder
+         * subsystem spent its own bounded retry and retired the row WITHOUT ever
+         * establishing `sent`. The follow-up must not read that as a delivery — nor
+         * as a confirmed failure.
+         */
+        Reminder::query()->where('follow_up_id', $followUp->id)->update([
+            'attempts' => ReminderDispatcher::MAX_ATTEMPTS,
+            'dispatched_at' => CarbonImmutable::now()->subHours(3),
+            'sent_at' => null,
+            'status' => ReminderStatus::Failed->value,
+            'last_error' => ReminderFailureReason::Unknown->value,
+        ]);
+
+        $outcomes = pfuOutcomes(array_map(
+            fn () => pfuRun(['advance', (string) $followUp->id, '--sleep=30000']),
+            range(1, 6),
+        ));
+        $report = implode(' | ', $outcomes);
+
+        $state = pfuOutcomes([pfuRun(['state', (string) $followUp->id])])[0];
+        $fresh = DB::table('follow_ups')->where('id', $followUp->id)->first();
+
+        // Held, with ZERO logical asks spent and no replacement ask.
+        expect($state)->toBe('blocked:1:0', $report)
+            ->and($fresh->blocked_reason)->toBe(FollowUpBlockReason::DeliveryUnavailable->value, $report)
+            ->and($fresh->next_ask_at)->toBeNull();
+
+        // And ten further runs create nothing: an unknown outcome is not a retry loop.
+        $again = pfuOutcomes(array_map(fn () => pfuRun(['advance', (string) $followUp->id]), range(1, 10)));
+
+        expect(array_unique($again))->toBe(['inert'], implode(' | ', $again))
+            ->and(pfuOutcomes([pfuRun(['state', (string) $followUp->id])])[0])->toBe('blocked:1:0');
+    } finally {
+        pfuCleanup($user);
+    }
+});
+
+it('keeps each ask\'s physical attempt ceiling to itself once a question is proven sent', function () {
+    [$user, , $message] = pfuSubject();
+    $followUp = pfuLoop($user, $message);
+
+    try {
+        pfuOutcomes([pfuRun(['advance', (string) $followUp->id])]);
+
+        // Ask 1 needed BOTH physical attempts, and the second was accepted.
+        Reminder::query()->where('follow_up_id', $followUp->id)->update([
             'attempts' => ReminderDispatcher::MAX_ATTEMPTS,
             'dispatched_at' => CarbonImmutable::now()->subHours(30),
-            'status' => ReminderStatus::Failed->value,
-            'last_error' => ReminderFailureReason::AttemptsExhausted->value,
-        ])->save();
+            'sent_at' => CarbonImmutable::now()->subHours(30),
+            'status' => ReminderStatus::Sent->value,
+        ]);
 
         pfuOutcomes([pfuRun(['advance', (string) $followUp->id])]);
         $outcomes = pfuOutcomes(array_map(fn () => pfuRun(['advance', (string) $followUp->id, '--sleep=20000']), range(1, 4)));
@@ -746,14 +873,14 @@ it('keeps each ask\'s physical attempt budget to itself', function () {
 
         $asks = Reminder::query()->where('follow_up_id', $followUp->id)->orderBy('ask_index')->get();
 
-        // ONE logical ask was spent, not two: the loop's budget counts asks, and
-        // each ask carries its own physical ceiling.
+        // ONE logical ask was spent for two physical requests, and ask 2 starts with
+        // a fresh ceiling of its own.
         expect($asks)->toHaveCount(2, $report)
             ->and($asks[0]->attempts)->toBe(ReminderDispatcher::MAX_ATTEMPTS)
             ->and($asks[1]->attempts)->toBe(0)
             ->and($asks[1]->claim_token)->toBeNull()
-            // Still `awaiting_answer`: the question is outstanding while it is
-            // being asked again, which is what keeps a reply correlatable.
+            // Still `awaiting_answer`: the question is outstanding while it is being
+            // asked again, which is what keeps a reply correlatable.
             ->and(pfuOutcomes([pfuRun(['state', (string) $followUp->id])])[0])->toBe('awaiting_answer:2:1', $report);
     } finally {
         pfuCleanup($user);

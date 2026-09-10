@@ -22,8 +22,17 @@ enum FollowUpBlockReason: string
     case TemplateUnavailable = 'template_unavailable';
 
     /**
-     * The channel cannot send at all, or the subscriber has no reachable account
-     * on it. Also a configuration/account fact rather than a delivery failure.
+     * DELIVERY COULD NOT BE ESTABLISHED. One value, because from the ladder's point
+     * of view these are one fact — Sanad cannot prove the subscriber was asked:
+     *
+     *   - the channel cannot send at all, or there is no reachable account on it
+     *     (a configuration or account gap, known before anything is attempted);
+     *   - an ask ended terminally WITHOUT reaching `sent`: an unknown outcome whose
+     *     attempt budget ran out, a rejection, or a moment that passed.
+     *
+     * The second case is deliberately NOT recorded as "sent" or as "not sent" —
+     * both are claims Sanad cannot support. The loop is held and a person decides,
+     * which is the only honest handling of an unknown outcome.
      */
     case DeliveryUnavailable = 'delivery_unavailable';
 
@@ -31,7 +40,7 @@ enum FollowUpBlockReason: string
     {
         return match ($this) {
             self::TemplateUnavailable => 'لا يوجد قالب متابعة معتمَد ومضبوط',
-            self::DeliveryUnavailable => 'القناة غير قادرة على الإرسال للمشترك',
+            self::DeliveryUnavailable => 'لم يثبت وصول السؤال: القناة غير قادرة على الإرسال أو انتهى السؤال بلا حالة «أُرسل»',
         };
     }
 

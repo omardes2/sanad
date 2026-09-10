@@ -51,7 +51,7 @@ it('opens a loop with the time the subscriber gave, and schedules nothing else',
     expect($followUp->status)->toBe(FollowUpStatus::Open)
         ->and($followUp->next_ask_at->format('Y-m-d H:i'))->toBe($at->format('Y-m-d H:i'))
         ->and($followUp->max_asks)->toBe(3)
-        ->and($followUp->asksUsed())->toBe(0)
+        ->and($followUp->asksSent())->toBe(0)
         // Creating a loop SENDS NOTHING and creates no ask: materialisation does
         // that, separately, when the time comes.
         ->and(fuAsks($followUp))->toHaveCount(0)
@@ -173,7 +173,7 @@ it('moves to awaiting_answer only once an ask genuinely left the platform', func
 
     // A pending ask is not an asked question, and no budget is spent.
     expect($followUp->fresh()->status)->toBe(FollowUpStatus::Open)
-        ->and($followUp->fresh()->asksUsed())->toBe(0);
+        ->and($followUp->fresh()->asksSent())->toBe(0);
 
     // Reminder truth: `attempts > 0` means a request left the platform.
     $ask->forceFill(['attempts' => 1, 'dispatched_at' => CarbonImmutable::now(), 'status' => ReminderStatus::Sent->value, 'sent_at' => CarbonImmutable::now()])->save();
@@ -183,9 +183,9 @@ it('moves to awaiting_answer only once an ask genuinely left the platform', func
     $followUp->refresh();
 
     expect($followUp->status)->toBe(FollowUpStatus::AwaitingAnswer)
-        ->and($followUp->asksUsed())->toBe(1)
+        ->and($followUp->asksSent())->toBe(1)
         ->and($followUp->budgetRemaining())->toBe(2)
-        ->and($followUp->lastAskedAt())->not->toBeNull();
+        ->and($followUp->lastSentAt())->not->toBeNull();
 });
 
 it('waits out the interval, then asks again — and stops at the budget, silently', function () {
@@ -225,7 +225,7 @@ it('waits out the interval, then asks again — and stops at the budget, silentl
     $followUp->refresh();
 
     expect($followUp->status)->toBe(FollowUpStatus::Abandoned)
-        ->and($followUp->asksUsed())->toBe(2)
+        ->and($followUp->asksSent())->toBe(2)
         ->and($followUp->terminated_at)->not->toBeNull()
         ->and($followUp->next_ask_at)->toBeNull();
 
@@ -288,7 +288,7 @@ it('holds the loop instead of asking when no approved follow-up template exists 
         ->and($followUp->next_ask_at)->toBeNull()
         // NO ASK WAS CREATED AT ALL: no budget spent, and no failed delivery.
         ->and(fuAsks($followUp))->toHaveCount(0)
-        ->and($followUp->asksUsed())->toBe(0)
+        ->and($followUp->asksSent())->toBe(0)
         ->and($followUp->budgetRemaining())->toBe(3);
 
     // And it stays held: a run-by-run retry loop is exactly what this prevents.
@@ -335,7 +335,7 @@ it('treats an ask refused before dispatch as never asked, and holds the loop', f
         ->and($followUp->blocked_reason)->toBe(FollowUpBlockReason::TemplateUnavailable)
         // THE BUDGET IS UNTOUCHED: nothing reached a provider, so nothing was
         // asked. A configuration gap cannot drain a subscriber's ladder.
-        ->and($followUp->asksUsed())->toBe(0)
+        ->and($followUp->asksSent())->toBe(0)
         ->and($followUp->budgetRemaining())->toBe(3)
         // And no replacement ask is generated to fail the same way.
         ->and(fuAsks($followUp))->toHaveCount(1);
@@ -416,7 +416,7 @@ it('closes the loop on a correlated confirmation, exactly once', function () {
 it('keeps the loop open on "not yet" and schedules at most one more ask, never immediately', function () {
     [$user, , $conversation] = fuSubscriber();
     $followUp = fuAwaiting($user, $conversation);
-    $askedAt = $followUp->lastAskedAt();
+    $askedAt = $followUp->lastSentAt();
 
     $reply = fuInbound($user, $conversation, 'لسا ما دفعت');
 
@@ -612,7 +612,7 @@ it('delivers an ask through the untouched reminder path, with the FOLLOW-UP temp
         ->and($sent['template']['name'] ?? null)->toBe('sanad_follow_up_v1');
 });
 
-it('keeps each ask\'s attempt budget to itself, and the loop\'s budget to reminder truth', function () {
+it('holds the loop when an ask exhausts its physical attempts without ever reaching sent', function () {
     [$user, , $conversation] = fuSubscriber();
     config(['follow_ups.min_ask_interval_hours' => 1]);
     $followUp = fuCreate($user, $conversation);
@@ -620,7 +620,11 @@ it('keeps each ask\'s attempt budget to itself, and the loop\'s budget to remind
     $followUp->forceFill(['next_ask_at' => CarbonImmutable::now('UTC')->subMinute()])->save();
     fuAdvance($followUp->fresh());
 
-    // Ask 1 spends BOTH its physical attempts on unproven outcomes.
+    /*
+     * Ask 1 spends BOTH physical attempts on unproven outcomes and is retired by
+     * the sweeper as `attempts_exhausted`. It never reached `sent`, so Sanad cannot
+     * say the subscriber was asked — and the ladder must not act as though it was.
+     */
     $first = fuAsks($followUp)[0];
     $first->forceFill([
         'attempts' => ReminderDispatcher::MAX_ATTEMPTS,
@@ -629,20 +633,178 @@ it('keeps each ask\'s attempt budget to itself, and the loop\'s budget to remind
         'last_error' => ReminderFailureReason::AttemptsExhausted->value,
     ])->save();
 
+    expect(fuAdvance($followUp->fresh()))->toBe('blocked');
+
+    $followUp->refresh();
+
+    expect($followUp->status)->toBe(FollowUpStatus::Blocked)
+        ->and($followUp->blocked_reason)->toBe(FollowUpBlockReason::DeliveryUnavailable)
+        // NO logical ask was spent: two physical attempts are not one question.
+        ->and($followUp->asksSent())->toBe(0)
+        ->and($followUp->budgetRemaining())->toBe(3)
+        // And no replacement ask is produced, now or ever, while the hold stands.
+        ->and(fuAsks($followUp))->toHaveCount(1);
+
+    foreach (range(1, 5) as $i) {
+        expect(fuAdvance($followUp->fresh()))->toBe('inert');
+    }
+
+    expect(fuAsks($followUp->fresh()))->toHaveCount(1);
+});
+
+it('gives the next ask a fresh physical ceiling once the previous one is proven sent', function () {
+    [$user, , $conversation] = fuSubscriber();
+    config(['follow_ups.min_ask_interval_hours' => 1]);
+    $followUp = fuCreate($user, $conversation);
+
+    $followUp->forceFill(['next_ask_at' => CarbonImmutable::now('UTC')->subMinute()])->save();
     fuAdvance($followUp->fresh());
 
-    // ONE logical ask was spent, not two: the budget counts asks, not attempts.
-    expect($followUp->fresh()->asksUsed())->toBe(1);
+    // Ask 1 needed BOTH physical attempts, and the second one was accepted.
+    $first = fuAsks($followUp)[0];
+    $first->forceFill([
+        'attempts' => ReminderDispatcher::MAX_ATTEMPTS,
+        'dispatched_at' => CarbonImmutable::now()->subHours(3),
+        'sent_at' => CarbonImmutable::now()->subHours(3),
+        'status' => ReminderStatus::Sent->value,
+    ])->save();
+
+    expect(fuAdvance($followUp->fresh()))->toBe('asked')
+        // ONE logical ask, not two: the budget counts questions, not requests.
+        ->and($followUp->fresh()->asksSent())->toBe(1);
 
     expect(fuAdvance($followUp->fresh()))->toBe('created');
 
     $second = fuAsks($followUp->fresh())[1];
 
-    // The next ask starts with a FRESH physical budget of its own.
     expect($second->attempts)->toBe(0)
         ->and($second->claim_token)->toBeNull()
         ->and($second->ask_index)->toBe(2)
         ->and($first->fresh()->attempts)->toBe(ReminderDispatcher::MAX_ATTEMPTS);
+});
+
+/*
+|--------------------------------------------------------------------------
+| The crash boundary: `attempts` is not delivery truth
+|--------------------------------------------------------------------------
+*/
+
+it('does not advance the ladder when a worker died after authorising an attempt and before the network', function () {
+    [$user, , $conversation] = fuSubscriber();
+    config(['follow_ups.min_ask_interval_hours' => 1]);
+    $followUp = fuCreate($user, $conversation);
+
+    $followUp->forceFill(['next_ask_at' => CarbonImmutable::now('UTC')->subMinute()])->save();
+    fuAdvance($followUp->fresh());
+
+    /*
+     * EXACTLY THE STATE `ReminderDispatcher::authoriseDispatch()` COMMITS: the
+     * claim is held, `attempts` is 1 and `dispatched_at` is stamped — and then the
+     * worker dies before the request leaves. `sent_at` is null and the status is
+     * still `processing`, which is indistinguishable from a request in flight. That
+     * is the whole reason `attempts` cannot mean "asked".
+     */
+    $ask = fuAsks($followUp)[0];
+    $ask->forceFill([
+        'status' => ReminderStatus::Processing->value,
+        'claim_token' => str_repeat('a', 32),
+        'claimed_at' => CarbonImmutable::now()->subMinutes(2),
+        'attempts' => 1,
+        'dispatched_at' => CarbonImmutable::now()->subMinutes(2),
+        'sent_at' => null,
+    ])->save();
+
+    // Many materialiser runs, with the ladder given every chance to advance.
+    foreach (range(1, 8) as $i) {
+        expect(fuAdvance($followUp->fresh()))->toBe('in_flight');
+    }
+
+    $followUp->refresh();
+
+    expect($followUp->asksSent())->toBe(0, 'a crash before the network asked nothing')
+        ->and($followUp->budgetRemaining())->toBe(3)
+        // No ask 2: a question that may never have been asked cannot license a second.
+        ->and(fuAsks($followUp))->toHaveCount(1)
+        // And the loop is neither awaiting an answer nor answered.
+        ->and($followUp->status)->toBe(FollowUpStatus::Open)
+        ->and($followUp->resolved_at)->toBeNull()
+        ->and($followUp->lastSentAt())->toBeNull();
+});
+
+it('counts the logical ask exactly once when the reminder reaches sent, however many runs observe it', function () {
+    [$user, , $conversation] = fuSubscriber();
+    $followUp = fuCreate($user, $conversation);
+
+    $followUp->forceFill(['next_ask_at' => CarbonImmutable::now('UTC')->subMinute()])->save();
+    fuAdvance($followUp->fresh());
+
+    $ask = fuAsks($followUp)[0];
+    $ask->forceFill([
+        'attempts' => 1,
+        'dispatched_at' => CarbonImmutable::now(),
+        'sent_at' => CarbonImmutable::now(),
+        'status' => ReminderStatus::Sent->value,
+    ])->save();
+
+    // Ten observers of the same sent reminder.
+    $outcomes = [];
+
+    foreach (range(1, 10) as $i) {
+        $outcomes[] = fuAdvance($followUp->fresh());
+    }
+
+    $followUp->refresh();
+
+    // There is no counter to increment, so there is nothing to increment twice:
+    // the number is a count over the ask rows.
+    expect($followUp->asksSent())->toBe(1, implode(' | ', $outcomes))
+        ->and($followUp->budgetRemaining())->toBe(2)
+        ->and($followUp->status)->toBe(FollowUpStatus::AwaitingAnswer)
+        ->and(fuAsks($followUp))->toHaveCount(1);
+});
+
+it('does not produce the next ask from an unknown outcome, and never calls it sent or unsent', function () {
+    [$user, , $conversation] = fuSubscriber();
+    config(['follow_ups.min_ask_interval_hours' => 1]);
+    $followUp = fuCreate($user, $conversation);
+
+    $followUp->forceFill(['next_ask_at' => CarbonImmutable::now('UTC')->subMinute()])->save();
+    fuAdvance($followUp->fresh());
+
+    // A request left and its answer never came back: the dispatcher records
+    // `unknown`, which is neither a delivery nor a confirmed failure.
+    $ask = fuAsks($followUp)[0];
+    $ask->forceFill([
+        'attempts' => 1,
+        'dispatched_at' => CarbonImmutable::now()->subHours(2),
+        'status' => ReminderStatus::Processing->value,
+        'last_error' => ReminderFailureReason::Unknown->value,
+    ])->save();
+
+    // While it is unresolved, nothing advances.
+    expect(fuAdvance($followUp->fresh()))->toBe('in_flight')
+        ->and($followUp->fresh()->asksSent())->toBe(0)
+        ->and(fuAsks($followUp->fresh()))->toHaveCount(1);
+
+    // The reminder subsystem exhausts its own bounded retry and retires the row
+    // without ever establishing `sent`.
+    $ask->forceFill([
+        'attempts' => ReminderDispatcher::MAX_ATTEMPTS,
+        'status' => ReminderStatus::Failed->value,
+        'last_error' => ReminderFailureReason::Unknown->value,
+    ])->save();
+
+    expect(fuAdvance($followUp->fresh()))->toBe('blocked');
+
+    $followUp->refresh();
+
+    // Held: not asked, not unasked, no budget spent, no replacement ask.
+    expect($followUp->status)->toBe(FollowUpStatus::Blocked)
+        ->and($followUp->blocked_reason)->toBe(FollowUpBlockReason::DeliveryUnavailable)
+        ->and($followUp->asksSent())->toBe(0)
+        ->and($followUp->budgetRemaining())->toBe(3)
+        ->and(fuAsks($followUp))->toHaveCount(1)
+        ->and($followUp->resolved_at)->toBeNull();
 });
 
 it('leaves one-time reminders and recurring occurrences completely untouched', function () {

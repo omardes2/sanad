@@ -56,9 +56,12 @@ it('reports the bounds and the authority rules it actually enforces', function (
         // The two authorities, and the rule that makes Sanad ask rather than assume.
         ->and($text)->toContain('طلب صريح من المشترك')
         ->and($text)->toContain('وبلا وقت يسأل سَنَد ولا يفترض')
-        // One outstanding ask, and a budget measured in reminder truth.
+        // One outstanding ask, and a budget measured in DELIVERY truth.
         ->and($text)->toContain('سؤال واحد معلَّق')
-        ->and($text)->toContain('attempts > 0')
+        ->and($text)->toContain('status = sent')
+        ->and($text)->toContain('العامل الذي مات قبل الشبكة لا يستهلك')
+        // `attempts` is never offered as the budget rule, because it is not one.
+        ->and($text)->not->toContain('attempts > 0')
         // Silence closes nothing.
         ->and($text)->toContain('الصمت لا يُغلق شيئًا');
 });

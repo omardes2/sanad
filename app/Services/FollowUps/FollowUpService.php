@@ -179,7 +179,8 @@ final class FollowUpService
             // loop this is.
             'question' => (string) $followUp->question,
             'status' => $followUp->status->value,
-            'asks_used' => $followUp->asksUsed(),
+            // PROVEN SENT, never attempted: the field means what the budget means.
+            'asks_sent' => $followUp->asksSent(),
             'max_asks' => (int) $followUp->max_asks,
             'next_ask_local' => $followUp->next_ask_at === null
                 ? null
@@ -290,10 +291,11 @@ final class FollowUpService
             /*
              * «لسا» — still open. The loop returns to `open` and AT MOST ONE more
              * ask becomes eligible, never immediately: `next_ask_at` is the last
-             * ask plus the configured interval, so answering "not yet" can never
-             * be what triggers the next message.
+             * PROVEN SENT ask plus the configured interval, so answering "not yet"
+             * can never be what triggers the next message — and the clock starts
+             * from a question that actually arrived.
              */
-            $askedAt = $fresh->lastAskedAt() ?? $now;
+            $askedAt = $fresh->lastSentAt() ?? $now;
             $interval = max(1, (int) config('follow_ups.min_ask_interval_hours', 24));
 
             $fresh->forceFill([
