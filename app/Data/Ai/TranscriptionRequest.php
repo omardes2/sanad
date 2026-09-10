@@ -10,8 +10,8 @@ use SensitiveParameter;
 /**
  * One transcription request, in PROVIDER-NEUTRAL terms.
  *
- * Deliberately carries nothing Groq-specific — no `response_format`, no
- * `temperature`, no vendor field names. A second provider must be addable by
+ * Deliberately carries NO VENDOR FIELD at all — no `response_format`, no
+ * `temperature`, no vendor-shaped names. A further provider must be addable by
  * writing one adapter, not by widening this contract, so anything only one
  * vendor understands belongs inside that vendor's adapter.
  *

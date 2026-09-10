@@ -44,7 +44,15 @@ expect()->extend('toBeOne', function () {
 |
 */
 
+use App\Contracts\Ai\AiProvider as AiProviderContract;
+use App\Contracts\Ai\SupportsChat;
+use App\Contracts\Ai\SupportsTranscription;
+use App\Data\Ai\AiRequest;
+use App\Data\Ai\AiResponse;
+use App\Data\Ai\TranscriptionRequest;
+use App\Data\Ai\TranscriptionResult;
 use App\Data\InboundMessageData;
+use App\Enums\AiOperation;
 use App\Enums\ChannelType;
 use App\Enums\CostSource;
 use App\Enums\MessageDirection;
@@ -63,6 +71,7 @@ use App\Models\SubscriptionEvent;
 use App\Models\UsageEvent;
 use App\Models\User;
 use App\Models\WebhookEvent;
+use App\Services\Ai\AiManager;
 use App\Services\Rbac\RbacSynchronizer;
 use App\Services\Settings\SettingsRepository;
 use App\Support\Rbac\Role;
@@ -1340,4 +1349,99 @@ function voiceNote(User $user, ChannelAccount $account, array $attrs = []): Mess
         'transcription_status' => TranscriptionStatus::Pending,
         'transcription_attempts' => 0,
     ], $attrs));
+}
+
+/**
+ * Register a CHAT-ONLY provider at runtime, under a key the app has never heard
+ * of, via the documented `AiManager::extend()` extension point.
+ *
+ * Two things are proved by having this available. A provider that does not
+ * implement `SupportsTranscription` must be rejected for transcription however
+ * the catalog advertises it — operator data must never be able to crash a
+ * worker. And a provider can be added to this platform without touching app
+ * code at all, which is what "no vendor lock-in" has to mean in practice.
+ */
+function voiceRegisterChatOnlyProvider(string $key = 'chatonly'): AiProviderContract
+{
+    $provider = new class($key) implements SupportsChat
+    {
+        public function __construct(private readonly string $key) {}
+
+        public function name(): string
+        {
+            return $this->key;
+        }
+
+        public function supports(AiOperation $operation): bool
+        {
+            return $operation === AiOperation::Chat;
+        }
+
+        public function isConfigured(): bool
+        {
+            return true;
+        }
+
+        public function chat(AiRequest $request): AiResponse
+        {
+            return new AiResponse('chat only');
+        }
+    };
+
+    app(AiManager::class)->extend($key, fn () => $provider);
+
+    return $provider;
+}
+
+/**
+ * Register a TRANSCRIBING provider at runtime under an unknown key, recording
+ * every request it serves.
+ *
+ * This is the real test of the abstraction: a third vendor is one adapter plus
+ * catalog data, and the generic pipeline must drive it with no change at all.
+ *
+ * @param  array<int, mixed>  $calls  filled with each TranscriptionRequest served
+ */
+function voiceRegisterTranscribingProvider(string $key, array &$calls, string $text = 'نصّ المزوّد'): AiProviderContract
+{
+    $provider = new class($key, $calls, $text) implements SupportsTranscription
+    {
+        /** @param array<int, mixed> $calls */
+        public function __construct(
+            private readonly string $key,
+            private array &$calls,
+            private readonly string $text,
+        ) {}
+
+        public function name(): string
+        {
+            return $this->key;
+        }
+
+        public function supports(AiOperation $operation): bool
+        {
+            return $operation === AiOperation::Transcription;
+        }
+
+        public function isConfigured(): bool
+        {
+            return true;
+        }
+
+        public function transcribe(TranscriptionRequest $request): TranscriptionResult
+        {
+            $this->calls[] = $request;
+
+            return new TranscriptionResult(
+                text: $this->text,
+                provider: $this->key,
+                model: $request->spec->model,
+                language: 'ar',
+            );
+        }
+    };
+
+    app(AiManager::class)->extend($key, fn () => $provider);
+
+    return $provider;
 }

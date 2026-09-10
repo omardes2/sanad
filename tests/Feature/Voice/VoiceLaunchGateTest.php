@@ -52,18 +52,86 @@ it('is NOT READY when WhatsApp media cannot be fetched', function () {
 
 it('is NOT READY when the routed provider cannot actually transcribe', function () {
     voiceConfigure();
-    // The catalog claims a provider transcribes; the adapter says otherwise.
-    // Operator data must never crash a worker, so this is treated as no route
-    // — by the pipeline and by this gate alike.
+
+    // A chat-only provider, catalogued for transcription. Operator data must
+    // never be able to crash a worker, so this is treated as NO ROUTE — by the
+    // pipeline and by this gate alike, which is why they cannot disagree.
+    voiceRegisterChatOnlyProvider('chatonly');
+
     config([
         'ai.providers.groq.transcription_model' => null,
-        'ai.providers.openai.transcription_model' => 'pretend-model',
+        'ai.providers.openai.transcription_model' => null,
+        'ai.catalog' => [[
+            'provider' => 'chatonly',
+            'model' => 'pretend-transcribe',
+            'capabilities' => ['transcription'],
+            'enabled' => true,
+            'priority' => 100,
+        ]],
+    ]);
+
+    $outcome = VoiceChecks::transcription();
+    $values = implode(' ', array_map(static fn ($d): string => $d->value, $outcome->details));
+
+    expect($outcome->state)->toBe(LaunchGateState::NotReady)
+        ->and($outcome->state->blocksLaunch())->toBeTrue()
+        ->and($values)->toContain('لا يوجد');
+});
+
+it('names the selected provider and counts the others that could serve instead', function () {
+    voiceConfigure([
         'ai.providers.openai.api_key' => 'test-openai-key',
-        'ai.provider' => 'openai',
+        'ai.providers.openai.transcription_model' => 'openai-transcribe',
+        'ai.providers.groq.transcription_model' => 'groq-transcribe',
+    ]);
+
+    $outcome = VoiceChecks::transcription();
+    $values = implode(' ', array_map(static fn ($d): string => $d->value, $outcome->details));
+
+    // Both providers are eligible, and the row says so — the capability is not
+    // one vendor's, and an operator should be able to see that at a glance.
+    expect($outcome->state)->toBe(LaunchGateState::Ready)
+        ->and($values)->toContain('openai')
+        ->and($values)->toContain('groq')
+        ->and($values)->toContain('2 (')
+        // Still never a credential.
+        ->and($values)->not->toContain('test-openai-key')
+        ->and($values)->not->toContain('test-groq-key');
+});
+
+it('is READY on either provider alone, and names whichever one routes', function (string $provider, string $model) {
+    voiceConfigure([
+        'ai.provider' => $provider,
+        'ai.providers.openai.api_key' => 'test-openai-key',
+        'ai.providers.openai.transcription_model' => null,
+        'ai.providers.groq.transcription_model' => null,
+        "ai.providers.{$provider}.transcription_model" => $model,
+    ]);
+
+    $outcome = VoiceChecks::transcription();
+    $values = implode(' ', array_map(static fn ($d): string => $d->value, $outcome->details));
+
+    // READY means "a routable SupportsTranscription provider with a usable
+    // credential exists" — never "Groq is configured".
+    expect($outcome->state)->toBe(LaunchGateState::Ready)
+        ->and($values)->toContain($provider)
+        ->and($values)->toContain($model);
+})->with([
+    'openai' => ['openai', 'openai-transcribe'],
+    'groq' => ['groq', 'groq-transcribe'],
+]);
+
+it('is NOT READY when the only transcription provider has no usable credential', function () {
+    voiceConfigure([
+        'ai.providers.groq.transcription_model' => 'groq-transcribe',
+        'ai.providers.groq.api_key' => '',
+        'ai.providers.openai.transcription_model' => null,
     ]);
 
     $outcome = VoiceChecks::transcription();
 
+    // An unkeyed provider is not a route: the router already refuses it, so the
+    // gate never reports a capability that would fail on the first voice note.
     expect($outcome->state)->toBe(LaunchGateState::NotReady)
         ->and($outcome->state->blocksLaunch())->toBeTrue();
 });

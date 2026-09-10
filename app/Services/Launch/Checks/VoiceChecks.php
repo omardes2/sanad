@@ -5,23 +5,30 @@ declare(strict_types=1);
 namespace App\Services\Launch\Checks;
 
 use App\Contracts\Ai\SupportsTranscription;
+use App\Data\Ai\Catalog\ModelSpec;
 use App\Data\Launch\GateDetail;
 use App\Data\Launch\GateOutcome;
 use App\Enums\AiOperation;
+use App\Services\Ai\AiManager;
 use App\Services\Ai\SanadAiRouter;
+use App\Services\Credentials\CredentialResolver;
 use App\Support\WhatsApp\WhatsAppConfig;
 use Throwable;
 
 /**
  * Readiness of the voice-note path: a subscriber speaks, Sanad understands.
  *
- * WHAT THIS GATE ASKS is whether the four things that must ALL be true for a
- * voice note to become text are true right now:
+ * WHAT THIS GATE ASKS. Not "is Groq configured" — that would make one vendor
+ * the definition of a product capability, and the next deployment that routes
+ * transcription to OpenAI would read as unready while working perfectly. It
+ * asks the vendor-neutral question instead:
  *
- *   1. the feature is switched on;
- *   2. WhatsApp media can be fetched (the same credential that sends);
- *   3. a transcription-capable model is catalogued and routable;
- *   4. the provider it routes to can actually transcribe.
+ *   is the feature on, can WhatsApp media be fetched, and does a ROUTABLE
+ *   `SupportsTranscription` provider/model with a USABLE CREDENTIAL exist?
+ *
+ * The row names whichever provider and model the catalog actually resolved, and
+ * counts the other eligible ones, so an operator can see both what is serving
+ * voice today and that it is not the only thing that could.
  *
  * WHAT IT DOES NOT ASK is whether any voice note has succeeded. That is
  * OBSERVATION, and this codebase has one rule about observation on this screen:
@@ -30,9 +37,10 @@ use Throwable;
  * otherwise would block a launch on traffic that has not happened.
  *
  * PRIVACY: the provider key and the routed model id are operator configuration
- * and are safe to render. No credential, no key id, no subscriber fact, and no
- * signed media URL is read here — and no provider name is ever GUESSED: what is
- * printed is what the catalog actually resolved, or nothing.
+ * and safe to render. Credential health is taken from `usable()` — a boolean —
+ * exactly as AiChecks takes it. No key, no fingerprint, no last4, no key id, no
+ * subscriber fact and no signed media URL is read here. And no provider name is
+ * ever GUESSED: what is printed is what the catalog resolved, or nothing.
  */
 final class VoiceChecks
 {
@@ -62,29 +70,56 @@ final class VoiceChecks
             return GateOutcome::notReady('تعذّر تنزيل الوسائط: تكامل واتساب غير مكتمل.', $details);
         }
 
-        [$provider, $model, $transcribes, $error] = self::route();
+        [$selected, $eligible, $error] = self::route();
 
-        if ($provider === null) {
+        // How many DIFFERENT providers could serve transcription right now. The
+        // count is the point: it says this capability is not one vendor's.
+        $providers = array_values(array_unique(array_map(
+            static fn (ModelSpec $spec): string => $spec->provider,
+            $eligible,
+        )));
+
+        $details[] = GateDetail::plain(
+            'مزوّدو تفريغ مؤهَّلون',
+            $providers === [] ? 'لا يوجد' : count($providers).' ('.implode(' · ', $providers).')',
+        );
+
+        if ($selected === null) {
             $details[] = GateDetail::bad('التوجيه', $error ?? 'لا يوجد نموذج تفريغ مؤهَّل في الفهرس');
             $details[] = GateDetail::plain(
                 'المطلوب',
-                'نموذج بقدرة transcription في فهرس النماذج (قاعدة البيانات أو config)، لمزوّد مضبوط',
+                'نموذج بقدرة transcription في فهرس النماذج (قاعدة البيانات أو config) لمزوّد ينفّذ SupportsTranscription ومفتاحه صالح',
             );
 
             return GateOutcome::notReady('لا يوجد مسار تفريغ صالح.', $details);
         }
 
-        $details[] = GateDetail::ok('المزوّد المختار', $provider);
-        $details[] = GateDetail::plain('النموذج', $model ?? '—');
-        $details[] = GateDetail::boolean('المزوّد ينفّذ عقد التفريغ', $transcribes, 'نعم', 'لا');
+        $details[] = GateDetail::ok('المزوّد المختار', $selected->provider);
+        $details[] = GateDetail::plain('النموذج', $selected->model);
 
-        if (! $transcribes) {
-            // The catalog says this model transcribes; the adapter says it
-            // cannot. Operator data must never be able to crash a worker, so
-            // the pipeline treats this as "no route" — and so does this gate.
-            $details[] = GateDetail::plain('الأثر', 'يُعامَل كأنه بلا مسار: لا يُستدعى المزوّد إطلاقًا');
+        // The credential, as a boolean — never a key, a fingerprint or a last4.
+        $credential = null;
 
-            return GateOutcome::notReady('المزوّد المختار لا ينفّذ SupportsTranscription.', $details);
+        try {
+            $credential = app(CredentialResolver::class)->resolve($selected->provider);
+        } catch (Throwable) {
+            // Reported as "could not be established" below, never as ready.
+        }
+
+        if ($credential === null) {
+            $details[] = GateDetail::unknown('المفتاح', 'تعذّر الحسم');
+
+            return GateOutcome::notObserved('تعذّر التحقّق من مفتاح مزوّد التفريغ المختار.', $details);
+        }
+
+        $details[] = GateDetail::boolean('مفتاح المزوّد المختار', $credential->usable(), 'صالح للاستخدام', 'غير صالح');
+
+        if ($credential->failedClosed()) {
+            $details[] = GateDetail::bad('المزوّد مغلَق', (string) $credential->failure);
+        }
+
+        if (! $credential->usable()) {
+            return GateOutcome::notReady('مزوّد التفريغ المختار بلا مفتاح صالح.', $details);
         }
 
         $details[] = GateDetail::plain(
@@ -104,29 +139,50 @@ final class VoiceChecks
             'صفوف الاستخدام تُسجَّل بلا سعر: التفريغ يُسعَّر بالدقيقة ولا يوجد تسعير بالدقيقة بعد',
         );
 
-        return GateOutcome::ready('التفريغ مفعَّل، الوسائط قابلة للتنزيل، ومسار التفريغ صالح.', $details);
+        return GateOutcome::ready('التفريغ مفعَّل، الوسائط قابلة للتنزيل، ومزوّد تفريغ مؤهَّل بمفتاح صالح.', $details);
     }
 
     /**
-     * The routed transcription provider, or nulls with a safe reason.
+     * The routed transcription provider/model and every eligible candidate.
      *
-     * @return array{0: ?string, 1: ?string, 2: bool, 3: ?string}
+     * A candidate counts only when its ADAPTER implements SupportsTranscription,
+     * not merely when the catalog says the model transcribes: the catalog is
+     * operator data, and operator data must not be able to crash a worker. The
+     * pipeline applies exactly this rule (VoiceNoteTranscriber::route), so the
+     * gate and the runtime cannot disagree — including on the awkward case where
+     * the selected row is catalogued for transcription by a provider that cannot
+     * serve it, which is treated as no route by both.
+     *
+     * @return array{0: ?ModelSpec, 1: list<ModelSpec>, 2: ?string}
      */
     private static function route(): array
     {
         try {
-            $route = app(SanadAiRouter::class)->route(AiOperation::Transcription);
-        } catch (Throwable $e) {
-            // The message is from the typed AI hierarchy, which is safe by
-            // construction (status codes and short reasons only).
-            return [null, null, false, $e->getMessage()];
-        }
+            $evaluation = app(SanadAiRouter::class)->evaluate(AiOperation::Transcription);
+            $manager = app(AiManager::class);
 
-        return [
-            $route->provider->name(),
-            $route->model,
-            $route->provider instanceof SupportsTranscription,
-            null,
-        ];
+            $transcribes = static function (ModelSpec $spec) use ($manager): bool {
+                try {
+                    return $manager->provider($spec->provider) instanceof SupportsTranscription;
+                } catch (Throwable) {
+                    return false;
+                }
+            };
+
+            $eligible = array_values(array_filter($evaluation->eligible(), $transcribes));
+            $selected = $evaluation->selected;
+
+            return [
+                $selected !== null && $transcribes($selected) ? $selected : null,
+                $eligible,
+                $selected === null
+                    ? null
+                    : ($transcribes($selected) ? null : 'المزوّد المختار لا ينفّذ SupportsTranscription — يُعامَل كأنه بلا مسار'),
+            ];
+        } catch (Throwable $e) {
+            // The message comes from the typed AI hierarchy, which is safe by
+            // construction (status codes and short reasons only).
+            return [null, [], $e->getMessage()];
+        }
     }
 }

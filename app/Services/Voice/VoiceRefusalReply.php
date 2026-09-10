@@ -33,7 +33,8 @@ use App\Models\Message;
  * a provider message, an HTTP status, a model name, or a stack trace. The
  * pipeline decides what happened; lang/<locale>/voice.php decides how it is
  * said. That separation is what lets Sanad answer a Saudi subscriber in Arabic
- * about a Groq timeout without either fact leaking into the other.
+ * about a provider timeout without either fact leaking into the other — and it
+ * is why the sentence does not change when the routed provider does.
  */
 class VoiceRefusalReply
 {

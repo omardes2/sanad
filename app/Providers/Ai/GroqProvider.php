@@ -13,12 +13,12 @@ use App\Providers\Ai\Concerns\TranscribesOpenAICompatibleAudio;
  * Groq provider: OpenAI-compatible Chat Completions AND OpenAI-compatible audio
  * transcription, both against the same base URL and the same credential.
  *
- * Groq serves transcription first in V1 because Sanad already resolves,
- * stores and fails-closed on a Groq credential — adding a vendor would have
- * meant a second credential path before the first transcript. The ABSTRACTION
- * is what keeps that from becoming a lock-in: everything vendor-shaped lives in
- * the shared base and the audio trait, the router picks this provider only via
- * AiOperation::Transcription, and nothing above this class names Groq.
+ * ONE OF SEVERAL transcription providers, not the transcription provider. It
+ * declares the capability in exactly the same two lines OpenAIProvider does —
+ * the contract plus the shared audio trait — and which of them serves a given
+ * voice note is the router's decision from the model catalog. So transcription
+ * moves between providers by changing catalog data, never code, and nothing
+ * above this class names a vendor at all.
  *
  * The transcription MODEL is not declared here and never hard-coded: it comes
  * from the catalogued routable model the router selected. An operator who has
