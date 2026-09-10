@@ -50,7 +50,7 @@ final class ToolOutputPersistence
      *
      * @var list<string>
      */
-    private const REHYDRATABLE = ['memory.read@2'];
+    private const REHYDRATABLE = ['memory.read@2', 'reminder_schedule.list@1'];
 
     /**
      * @var array<string, list<string>>
@@ -59,6 +59,15 @@ final class ToolOutputPersistence
         // Never the memories themselves; only how many were returned and
         // whether the bound cut the answer short.
         'memory.read@2' => ['truncated'],
+        /*
+         * Never the subscriber's reminder TITLES. «اشرب الدوا» on an operational
+         * row is a health fact in plaintext, in an operator's reach and in every
+         * backup, and an audit trail does not need it to show that a listing
+         * happened: the count and the truncation flag say everything the trail is
+         * for. The ids are not kept either — they are only meaningful next to the
+         * titles, and a listing is not the record of what was then acted on.
+         */
+        'reminder_schedule.list@1' => ['truncated'],
     ];
 
     /** Does this tool store something other than its full declared output? */

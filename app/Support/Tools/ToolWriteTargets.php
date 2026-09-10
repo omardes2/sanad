@@ -26,6 +26,13 @@ final class ToolWriteTargets
         'task.complete@1' => ['tasks'],
         'reminder.create@2' => ['reminders'],
         'reminder.cancel@1' => ['reminders'],
+        // Creating a series touches the DEFINITION only. The occurrence rows are
+        // written by the materialiser, which is not a tool and is not reachable
+        // from a model turn at all.
+        'reminder_schedule.create@1' => ['reminder_schedules'],
+        // Cancelling touches both: the definition is terminated and its own
+        // pending occurrences are cancelled, in one transaction.
+        'reminder_schedule.cancel@1' => ['reminder_schedules', 'reminders'],
     ];
 
     /** @return list<string> */

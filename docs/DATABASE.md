@@ -80,10 +80,22 @@
 ### `reminders`
 - `user_id` → `users` (**cascade**) · `task_id?` → `tasks` (**nullOnDelete**) · `source_message_id?` → `messages` (**nullOnDelete**)
 - `title` · `remind_at` (UTC) · `timezone` · `channel` enum `ChannelType` · `status` enum `ReminderStatus` · `sent_at?` · `claim_token?` · `claimed_at?` · `dispatched_at?` · `attempts` (default 0) · `last_error?`
+- **المرّة من سلسلة (مرحلة التكرار):** `reminder_schedule_id?` → `reminder_schedules` (**cascade**) · `occurrence_key?` string(20) = الوقت المحلي الاسمي (`2026-09-11T09:00`) · `occurrence_local_at?` — مع **unique(`reminder_schedule_id`,`occurrence_key`)** وCHECK على PostgreSQL أن الاثنين معًا `NULL` أو معًا مضبوطان. والثلاثة `NULL` للتذكير المفرد، **فلم يتغيّر شيء له**.
+- **المرّة تذكير عاديّ، لا حالة داخل سلسلة**: `attempts` و`claim_token` و`dispatched_at` و`sent_at` و`last_error` كلها حقائق عن **تسليم واحد**، و`messages.reminder_id` فريد — فصفٌّ واحد يخدم عدّة تسليمات يعني عدّاد محاولات واحدًا ورسالة صادرة واحدة للسلسلة كلها. ولذلك لم يُلمَس المُوزِّع ولا الكانس ولا سياسة التسليم (ADR-0050).
 - **index (`status`,`remind_at`)** لخدمة الـScheduler في جلب التذكيرات المستحقة، + (`user_id`,`status`) + **(`status`,`claimed_at`)** لكنس المُعلَّق في `processing`.
 - **`claim_token` هو هوية المِلكية، ولا شيء غيره.** رمز مبهم يولّده الخادم عند كل مطالبة، يحمله العامل معه (عبر الطابور) حتى لحظة الإرسال، ولا يُسمح له بأي كتابة إلا ما دام الرمز المخزَّن يساويه. هكذا يُستبعَد العامل المتأخّر بنيويًا: مطالبة A كُنِست واستُبدلت بمطالبة B، فيستيقظ A حاملًا هوية لم يعد أحد يعرفها — فلا يزيد `attempts` ولا يرسل ولا يسوّي الصف، **مهما تقاربت المطالبتان زمنيًا، ومهما كانت دقّة الأعمدة، ومهما اختلف تمثيل الوقت بين المحرّكين**. `status = processing` تقول إن أحدًا يعمل عليه لا إنه أنت، وترتيب طابعين زمنيين لا يجيب عن «مَن» أصلًا.
 - `claimed_at` وقت المطالبة الحالية. `dispatched_at` **تُمسح مع كل مطالبة**، فتصير داخل المطالبة حقيقة بسيطة بلا أي مقارنة: `NULL` تعني أن شيئًا لم يغادر تحتها (استعادة بلا خطر تكرار)، وغير `NULL` تعني أن طلبًا أُذن به وقد يكون وصل أو لا — والعامل الثاني على المطالبة نفسها يقرأها ويتوقّف. لذلك تأذن المطالبة الواحدة **بطلب واحد** فقط.
 - `attempts` تَعُدّ **المحاولات الفيزيائية** حصرًا — لا تزيدها المطالبة أبدًا — والسقف **2** لكل تذكير ولا ثالثة. `last_error` رمز مُغلق من `ReminderFailureReason` فقط، ولا يحمل عنوانًا ولا رقمًا ولا نصّ رسالة؛ و`unknown` وحدها ليست نهائية.
+
+### `reminder_schedules`
+تعريف التكرار — **ولا شيء عن التسليم**: لا مطالبة ولا محاولات ولا حالة إرسال، لأن تلك حقائق عن المرّة لا عن السلسلة.
+- `user_id` → `users` (**cascade**) · `source_message_id?` → `messages` (**nullOnDelete**)
+- `title` · `channel` enum `ChannelType` · `timezone` · `pattern` enum `ReminderPattern` (`daily`/`weekly`/`monthly`) · `local_time` string(5) `HH:MM` · `weekdays? json` (أيام ISO للأسبوعي) · `day_of_month?` (1..31 للشهري) · `starts_on` (date محلي) · `ends_on?` · `status` enum `ReminderScheduleStatus` (`active`/`terminated`) · `terminated_at?` · `materialised_through?` · `version` (default 1)
+- index: (`status`,`materialised_through`) لجولة التوليد + (`user_id`,`status`) للسرد.
+- **`version` هو السياج**: الإلغاء يرفعه تحت `lockForUpdate` في المعاملة نفسها التي يُنهي بها السلسلة ويُلغي مرّاتها المعلَّقة، فالمُوَلِّد الذي خطّط قبل الإلغاء يُعيد القراءة فيجد العالم تغيّر ولا يُدرج شيئًا. و`withoutOverlapping` ليس جزءًا من هذه الحجّة.
+- **`materialised_through` مؤشّر وتحسين فقط**: يتقدّم في معاملة الإدراج ذاتها، فلا يسبق ما كُتب فعلًا؛ والسلطة تبقى `unique(reminder_schedule_id, occurrence_key)` على `reminders` مع `status`/`version`. والجولة تمشي دائمًا من «الآن» لا من المؤشّر، فلا يستطيع المؤشّر أن يتخطّى مرّة.
+- قيود CHECK على PostgreSQL: النمط والحالة من قائمتيهما · `(status='terminated') = (terminated_at IS NOT NULL)` · `local_time` بصيغة `HH:MM` · `day_of_month` بين 1 و31 · `ends_on >= starts_on`.
+- **لا تعديل في V1**: التغيير إنهاءُ سلسلة وإنشاء غيرها، فتبقى كل مرّة منسوبة إلى التعريف الذي أنتجها (ADR-0050).
 
 ### `memories`
 - `user_id` → `users` (**cascade**) · `source_message_id?` → `messages` (**nullOnDelete**)
@@ -248,7 +260,7 @@ User 1─* UsageEvent (nullable)   User 1─* AuditLog (nullable)
 
 | الجدول | عند حذف المستخدم |
 |--------|-------------------|
-| channel_accounts, conversations, messages, tasks, reminders, memories, expenses | **يُحذف** (cascade) |
+| channel_accounts, conversations, messages, tasks, reminders, reminder_schedules, memories, expenses | **يُحذف** (cascade) |
 | usage_events, audit_logs | **يبقى**، ويصبح `user_id = null` |
 | tasks/reminders/memories/expenses.`source_message_id` عند حذف الرسالة | يصبح `null` (السجل يبقى) |
 

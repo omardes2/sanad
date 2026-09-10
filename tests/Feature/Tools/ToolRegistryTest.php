@@ -51,10 +51,12 @@ function registryOf(array $definitions): ToolRegistry
 it('ships exactly the declared contracts, each one metadata only', function () {
     $registry = app(ToolRegistry::class);
 
-    // F1's three, plus the minimal write set of F3-V1, plus durable memory.
-    // A shipped version is never edited: `reminder.create@1` stays exactly as
-    // it was beside `@2`, and `memory.read@1` keeps returning counts beside the
-    // `@2` that returns content.
+    // F1's three, plus the minimal write set of F3-V1, plus durable memory, plus
+    // recurrence. A shipped version is never edited: `reminder.create@1` stays
+    // exactly as it was beside `@2`, `memory.read@1` keeps returning counts
+    // beside the `@2` that returns content, and recurrence arrived as its OWN
+    // tools rather than as a third version of `reminder.create` — a series and a
+    // single occurrence are different objects with different identifiers.
     expect(array_keys($registry->all()))->toBe([
         'memory.read@1',
         'memory.read@2',
@@ -65,6 +67,9 @@ it('ships exactly the declared contracts, each one metadata only', function () {
         'task.complete@1',
         'reminder.cancel@1',
         'reminder.create@1',
+        'reminder_schedule.create@1',
+        'reminder_schedule.list@1',
+        'reminder_schedule.cancel@1',
         'reminder.create@2',
     ]);
 

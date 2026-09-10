@@ -66,6 +66,8 @@ use App\Jobs\ProcessInboundMessage;
 use App\Jobs\ProcessWhatsAppWebhook;
 use App\Models\ChannelAccount;
 use App\Models\Plan;
+use App\Models\Reminder;
+use App\Models\ReminderSchedule;
 use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
 use App\Models\UsageEvent;
@@ -73,6 +75,8 @@ use App\Models\User;
 use App\Models\WebhookEvent;
 use App\Services\Ai\AiManager;
 use App\Services\Rbac\RbacSynchronizer;
+use App\Services\Reminders\ReminderMaterialiser;
+use App\Services\Reminders\ReminderScheduleService;
 use App\Services\Settings\SettingsRepository;
 use App\Support\Rbac\Role;
 use Illuminate\Support\Facades\Http;
@@ -1116,7 +1120,6 @@ use App\Enums\ToolConsentReason;
 use App\Enums\ToolConsentStatus;
 use App\Enums\ToolInvocationStatus;
 use App\Enums\ToolSideEffect;
-use App\Models\Reminder;
 use App\Models\Task;
 use App\Services\Tools\ToolConsentService;
 use App\Services\Tools\ToolExecutor;
@@ -1444,4 +1447,63 @@ function voiceRegisterTranscribingProvider(string $key, array &$calls, string $t
     app(AiManager::class)->extend($key, fn () => $provider);
 
     return $provider;
+}
+
+// ---- Recurring reminders (Phase H2) ----------------------------------------
+
+/**
+ * A subscriber in a real DST zone, with a WhatsApp account and an open
+ * conversation — everything a recurring series needs to exist and be delivered.
+ *
+ * @return array{0: User, 1: ChannelAccount, 2: Conversation}
+ */
+function recSubscriber(string $timezone = 'Asia/Hebron', string $e164 = '+970599000001'): array
+{
+    $user = User::factory()->create([
+        'is_admin' => false,
+        'timezone' => $timezone,
+        'locale' => 'ar',
+    ]);
+
+    $account = ChannelAccount::factory()->for($user)->create([
+        'channel' => ChannelType::WhatsApp,
+        'external_identifier' => $e164,
+    ]);
+
+    $conversation = Conversation::factory()->for($user)->create(['channel_account_id' => $account->id]);
+
+    return [$user->refresh(), $account, $conversation];
+}
+
+/**
+ * Create one series through the DOMAIN SERVICE — the same path the tool takes, so
+ * a test never exercises a shape the tool could not produce.
+ *
+ * @param  array<string, mixed>  $input
+ */
+function recSchedule(User $subscriber, array $input = []): ReminderSchedule
+{
+    $created = app(ReminderScheduleService::class)->create(
+        $subscriber,
+        array_merge(['title' => 'اشرب الدوا', 'pattern' => 'daily', 'local_time' => '09:00'], $input),
+        ChannelType::WhatsApp,
+    );
+
+    return ReminderSchedule::query()->findOrFail($created['schedule_id']);
+}
+
+/** Run one materialisation pass. */
+function recMaterialise(): array
+{
+    return app(ReminderMaterialiser::class)->run();
+}
+
+/** The occurrence identities of one series, in date order. */
+function recOccurrenceKeys(ReminderSchedule $schedule): array
+{
+    return Reminder::query()
+        ->where('reminder_schedule_id', $schedule->getKey())
+        ->orderBy('remind_at')
+        ->pluck('occurrence_key')
+        ->all();
 }

@@ -8,6 +8,7 @@ use App\Data\Tools\ToolCallRequest;
 use App\Data\Tools\ToolClaim;
 use App\Data\Tools\ToolInvocationResult;
 use App\Enums\ChannelType;
+use App\Enums\ReminderCancelScope;
 use App\Enums\ToolInvocationFailureKind;
 use App\Enums\ToolInvocationRefusalReason;
 use App\Enums\ToolInvocationStatus;
@@ -18,6 +19,7 @@ use App\Models\Conversation;
 use App\Models\ToolInvocation;
 use App\Models\User;
 use App\Services\Memory\MemoryService;
+use App\Services\Reminders\ReminderScheduleService;
 use App\Services\Reminders\ReminderService;
 use App\Services\Tasks\TaskService;
 use App\Support\Tools\DomainWriteGuard;
@@ -65,6 +67,8 @@ final class WriteToolExecutor
         'task.complete@1' => [TaskService::class, 'complete'],
         'reminder.create@2' => [ReminderService::class, 'create'],
         'reminder.cancel@1' => [ReminderService::class, 'cancel'],
+        'reminder_schedule.create@1' => [ReminderScheduleService::class, 'create'],
+        'reminder_schedule.cancel@1' => [ReminderScheduleService::class, 'cancel'],
     ];
 
     public function __construct(
@@ -187,6 +191,16 @@ final class WriteToolExecutor
             'task.complete@1' => $service->{$method}($subscriber, (int) $values['task_id']),
             'reminder.create@2' => $service->{$method}($subscriber, $values, $this->channel($request), $messageId),
             'reminder.cancel@1' => $service->{$method}($subscriber, (int) $values['reminder_id']),
+            // The channel comes from the conversation, exactly as for a one-time
+            // reminder: no schema field could redirect a series elsewhere.
+            'reminder_schedule.create@1' => $service->{$method}($subscriber, $values, $this->channel($request), $messageId),
+            // The scope is a closed enum the schema already validated, so an
+            // unrecognised value never reaches the domain.
+            'reminder_schedule.cancel@1' => $service->{$method}(
+                $subscriber,
+                (int) $values['schedule_id'],
+                ReminderCancelScope::from((string) $values['scope']),
+            ),
         };
     }
 

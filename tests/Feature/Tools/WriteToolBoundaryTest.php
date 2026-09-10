@@ -280,10 +280,12 @@ it('routes each class to its own executor and keeps the F2 read path intact', fu
             default => false,
         };
 
-        // Exactly the six write tools plus the three read tools are executable.
+        // Exactly the eight write tools plus the four read tools are executable.
         expect($executable)->toBe(in_array($key, [
-            'memory.read@1', 'memory.read@2', 'task.list@1',
-            'memory.write@1', 'memory.forget@1', 'task.create@1', 'task.complete@1', 'reminder.create@2', 'reminder.cancel@1',
+            'memory.read@1', 'memory.read@2', 'task.list@1', 'reminder_schedule.list@1',
+            'memory.write@1', 'memory.forget@1', 'task.create@1', 'task.complete@1',
+            'reminder.create@2', 'reminder.cancel@1',
+            'reminder_schedule.create@1', 'reminder_schedule.cancel@1',
         ], true), $key);
     }
 

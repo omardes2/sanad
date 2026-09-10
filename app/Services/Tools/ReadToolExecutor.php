@@ -19,6 +19,7 @@ use App\Models\Message;
 use App\Models\ToolInvocation;
 use App\Models\User;
 use App\Services\Memory\MemoryService;
+use App\Services\Reminders\ReminderScheduleService;
 use App\Services\Tasks\TaskReader;
 use App\Support\Tools\ReadOnlyQueryGuard;
 use App\Support\Tools\ToolCallPlan;
@@ -67,6 +68,9 @@ final class ReadToolExecutor
         'memory.read@1' => [MemoryService::class, 'count'],
         'memory.read@2' => [MemoryService::class, 'recall'],
         'task.list@1' => [TaskReader::class, 'read'],
+        // Discovery, not content: which recurring series the subscriber owns, so
+        // the model can tell which one they mean days after creating it.
+        'reminder_schedule.list@1' => [ReminderScheduleService::class, 'list'],
     ];
 
     public function __construct(

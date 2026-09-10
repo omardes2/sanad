@@ -67,3 +67,22 @@ Schedule::command('sanad:voice:sweep')
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->when(static fn (): bool => (bool) config('voice.enabled', true));
+
+/*
+| Recurring reminders: materialisation ONLY.
+|
+| It creates the occurrence rows active schedules are due within the horizon and
+| does nothing else — no delivery, no claim, no settlement. Each occurrence is an
+| ordinary reminder, so `dispatch` and `sweep` above pick it up knowing nothing
+| about recurrence.
+|
+| Correctness does not depend on `withoutOverlapping`: two concurrent runs cannot
+| duplicate an occurrence (the unique occurrence key decides that) and cannot
+| write after a cancellation commits (the schedule's status and version are
+| re-read under a row lock). The guard is there to save work, not to be right.
+*/
+Schedule::command('sanad:reminders:materialise')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->when(static fn (): bool => (bool) config('reminders.enabled', true)
+        && (bool) config('reminders.recurrence.enabled', true));
