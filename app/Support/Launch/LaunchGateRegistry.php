@@ -79,8 +79,8 @@ final class LaunchGateRegistry
             'title' => 'التذكيرات المتكرِّرة',
             'owner' => LaunchGateOwner::Sanad,
             'required' => true,
-            'why' => 'نطاق V1 يشترط تذكيرات متكرِّرة، ولا يوجد تمثيل للتكرار في المستودع.',
-            'check' => [FeatureChecks::class, 'recurringReminders'],
+            'why' => 'نطاق V1 يشترط تذكيرات متكرِّرة: كل مرّة صفّ تذكير مستقل بمطالبته وميزانيته.',
+            'check' => [ReminderChecks::class, 'recurrence'],
         ],
         [
             'key' => 'reminders.follow_up',

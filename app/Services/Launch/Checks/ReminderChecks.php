@@ -79,6 +79,94 @@ final class ReminderChecks
         return GateOutcome::ready('المُجدوِل مضبوط، وتنفيذه مرصود على صفوف حقيقية.', $details);
     }
 
+    /**
+     * RECURRENCE — implemented, so this gate REPORTS rather than declares.
+     *
+     * What it asks is whether a recurring reminder can actually happen end to
+     * end: the machinery is switched on, a series can be created, occurrences are
+     * materialised, and each occurrence then travels the ORDINARY delivery path —
+     * so the delivery gate and the template gate above still carry their own
+     * halves of the answer and this one does not restate them.
+     *
+     * WHAT IT DOES NOT DO is conflate recurrence with the external template
+     * dependency. A recurring reminder fires, by nature, long after the
+     * subscriber's last message and therefore almost always OUTSIDE the WhatsApp
+     * free-form window, where the permitted mechanism is an approved template.
+     * Without one, occurrences fail closed with `template_required`. That is a
+     * real and serious constraint — it is stated on this row in plain words — but
+     * it is the TEMPLATE gate's blocker, not recurrence's: Sanad's side can be
+     * complete while Meta's side is not, and collapsing the two would make it
+     * impossible to see which one is actually missing.
+     *
+     * Materialisation LAG is deliberately absent as a blocker. It is a rate over
+     * a window, no threshold has been approved as launch authority, and a number
+     * invented here would decide a release nobody agreed to.
+     */
+    public static function recurrence(): GateOutcome
+    {
+        $deliveryEnabled = (bool) config('reminders.enabled', true);
+        $enabled = (bool) config('reminders.recurrence.enabled', true);
+
+        $details = [
+            GateDetail::boolean('التكرار مفعَّل', $enabled, 'مفعَّل', 'معطّل'),
+            GateDetail::plain('الأنماط المدعومة', 'يومي · أسبوعي (أيام محدَّدة) · شهري (يوم محدَّد، مع تثبيت آخر الشهر)'),
+            GateDetail::plain(
+                'الحدود',
+                sprintf(
+                    'أفق %d يومًا · %d مرّة غير منتهية لكل سلسلة · %d سلسلة فعّالة لكل مشترك',
+                    (int) config('reminders.recurrence.horizon_days', 30),
+                    (int) config('reminders.recurrence.max_occurrences_per_schedule', 35),
+                    (int) config('reminders.recurrence.max_active_schedules_per_subscriber', 10),
+                ),
+            ),
+            GateDetail::plain('الأمر المجدول', 'sanad:reminders:materialise — كل دقيقة، إنشاء فقط'),
+            GateDetail::plain(
+                'هوية المرّة',
+                'كل مرّة صفّ تذكير مستقل بمطالبة وميزانية محاولات ورسالة صادرة خاصة به — لا يُعاد استخدام صفّ لعدّة تسليمات',
+            ),
+            GateDetail::plain(
+                'التوقيت',
+                'الوقت المحلي يُحسَب من قواعد المنطقة عند كل مرّة: الفجوة الربيعية تُزاح بمقدارها الفعلي، والتكرار الخَرفي يختار الأولى',
+            ),
+            GateDetail::plain('التعديل', 'لا تعديل في V1 — التغيير إلغاءُ السلسلة وإنشاء غيرها'),
+        ];
+
+        if (! $enabled) {
+            $details[] = GateDetail::plain('الأثر', 'لا تُنشأ سلسلة ولا تُولَّد مرّات؛ والتذكيرات المفردة غير متأثّرة');
+
+            return GateOutcome::notReady('التذكيرات المتكرِّرة معطّلة في هذه البيئة.', $details);
+        }
+
+        if (! $deliveryEnabled) {
+            // Recurrence without delivery would create occurrences nothing sends.
+            $details[] = GateDetail::bad('تسليم التذكيرات', 'معطّل — ستُولَّد مرّات لا يُسلِّمها شيء');
+
+            return GateOutcome::notReady('التكرار مفعَّل وتسليم التذكيرات معطّل.', $details);
+        }
+
+        // The external dependency, named on the row WITHOUT being counted as this
+        // gate's blocker — it is the template gate's, and it is already blocking
+        // there. Recurrence makes it the dominant one, so silence would mislead.
+        $templateReady = (bool) config('reminders.whatsapp.template.ready', false)
+            && trim((string) config('reminders.whatsapp.template.name', '')) !== '';
+
+        $details[] = $templateReady
+            ? GateDetail::ok('قالب واتساب', 'معتمَد ومضبوط — التسليم خارج النافذة ممكن')
+            : GateDetail::bad(
+                'قالب واتساب',
+                'غير مضبوط: المرّة التي تحين خارج نافذة الخدمة تفشل مغلقة بسبب template_required — وهو حاجز البند الخارجي لا حاجز التكرار',
+            );
+
+        if (! $templateReady) {
+            return GateOutcome::ready(
+                'جانب سَنَد من التكرار مكتمل؛ والتسليم خارج نافذة الخدمة يبقى محجوبًا ببند القالب الخارجي.',
+                $details,
+            );
+        }
+
+        return GateOutcome::ready('التذكيرات المتكرِّرة مفعَّلة، والتسليم ممكن داخل النافذة وخارجها.', $details);
+    }
+
     public static function delivery(): GateOutcome
     {
         $enabled = (bool) config('reminders.enabled', true);

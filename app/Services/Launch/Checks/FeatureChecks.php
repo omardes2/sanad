@@ -21,23 +21,13 @@ use App\Data\Launch\GateOutcome;
  * that does not exist — a readiness screen that fills in a plausible detail is
  * worse than one that says nothing.
  *
- * Voice transcription used to live here and no longer does: it is implemented,
- * so its gate moved to VoiceChecks and REPORTS rather than declares. That
- * migration is the intended lifecycle of every method in this file.
+ * Voice transcription and recurring reminders used to live here and no longer do:
+ * both are implemented, so their gates moved to VoiceChecks and ReminderChecks
+ * and REPORT rather than declare. That migration is the intended lifecycle of
+ * every method in this file.
  */
 final class FeatureChecks
 {
-    public static function recurringReminders(): GateOutcome
-    {
-        return GateOutcome::notImplemented(
-            'التذكيرات المتكرِّرة غير ممثَّلة في المخطط ولا في الكود؛ F3-V1 نفّذت المرة الواحدة فقط.',
-            [
-                GateDetail::bad('التنفيذ', 'لا يوجد تمثيل للتكرار في app/ ولا في المخطط'),
-                GateDetail::plain('المطلوب', 'نموذج تكرار + جدولة المرّات التالية + قواعد الإلغاء'),
-            ],
-        );
-    }
-
     public static function followUpUntilDone(): GateOutcome
     {
         return GateOutcome::notImplemented(

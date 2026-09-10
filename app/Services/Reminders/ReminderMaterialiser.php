@@ -108,18 +108,34 @@ final class ReminderMaterialiser
     public function materialise(ReminderSchedule $schedule): int
     {
         $now = CarbonImmutable::now('UTC');
+        $cap = $this->cap();
 
         // How much room the count bound leaves. "Uncompleted" is the honest
         // measure: pending and processing rows are future work, while sent,
         // failed and cancelled ones are history and must not hold a slot.
-        $room = $this->room($schedule);
+        $room = max(0, $cap - $this->outstanding($schedule));
 
         if ($room < 1) {
             return 0;
         }
 
         $through = $this->horizonDate($schedule, $now);
-        $planned = $this->planner->plan($schedule, $now, $through, $room);
+
+        /*
+         * Plan PAST what already exists, not just the free room.
+         *
+         * The planner always walks from now, so the occurrences it returns first
+         * are the ones already materialised. Asking it for only `room` would hand
+         * back `room` occurrences that all exist, create nothing, and leave the
+         * series quietly refusing to extend — exactly what would happen once some
+         * of its occurrences were delivered and freed their slots.
+         *
+         * So the window is "everything still ahead of now" plus the room: enough
+         * for `room` genuinely new occurrences to appear at the end of it. The
+         * insert below skips what exists and stops after `room` creations, so the
+         * bound is still the bound.
+         */
+        $planned = $this->planner->plan($schedule, $now, $through, $this->ahead($schedule, $now) + $room);
 
         if ($planned === []) {
             // Nothing due inside the horizon. The cursor still advances, so the
@@ -129,7 +145,7 @@ final class ReminderMaterialiser
             return 0;
         }
 
-        return $this->insert($schedule, $planned, $through);
+        return $this->insert($schedule, $planned, $through, $room);
     }
 
     /**
@@ -137,10 +153,11 @@ final class ReminderMaterialiser
      * same active definition that was planned from, then insert.
      *
      * @param  list<PlannedOccurrence>  $planned
+     * @param  int  $room  how many rows the count bound still allows
      */
-    private function insert(ReminderSchedule $schedule, array $planned, string $through): int
+    private function insert(ReminderSchedule $schedule, array $planned, string $through, int $room): int
     {
-        return (int) DB::transaction(function () use ($schedule, $planned, $through): int {
+        return (int) DB::transaction(function () use ($schedule, $planned, $through, $room): int {
             /** @var ReminderSchedule|null $fresh */
             $fresh = ReminderSchedule::query()->whereKey($schedule->getKey())->lockForUpdate()->first();
 
@@ -156,6 +173,13 @@ final class ReminderMaterialiser
             $created = 0;
 
             foreach ($planned as $occurrence) {
+                if ($created >= $room) {
+                    // The count bound is reached. Stop CREATING; never delete to
+                    // make room, because an existing occurrence may already hold a
+                    // claim or a delivery record.
+                    break;
+                }
+
                 if ($this->create($fresh, $occurrence)) {
                     $created++;
                 }
@@ -209,23 +233,41 @@ final class ReminderMaterialiser
         return $reminder->wasRecentlyCreated;
     }
 
-    /**
-     * How many more occurrences this schedule may hold.
-     *
-     * Counts UNCOMPLETED rows only: pending and processing are future work that
-     * occupies the bound, while settled rows are history. Counting history would
-     * mean a long-running daily series eventually stopped scheduling itself.
-     */
-    private function room(ReminderSchedule $schedule): int
+    private function cap(): int
     {
-        $cap = max(1, (int) config('reminders.recurrence.max_occurrences_per_schedule', 35));
+        return max(1, (int) config('reminders.recurrence.max_occurrences_per_schedule', 35));
+    }
 
-        $outstanding = Reminder::query()
+    /**
+     * How many occurrence rows this schedule already has whose moment is still
+     * ahead — i.e. exactly the ones the planner will walk over again.
+     *
+     * Settled or not: a row that exists occupies an occurrence key, so the walk
+     * has to reach past it whether it was delivered, cancelled or is still
+     * pending.
+     */
+    private function ahead(ReminderSchedule $schedule, CarbonImmutable $now): int
+    {
+        return Reminder::query()
+            ->where('reminder_schedule_id', $schedule->getKey())
+            ->where('remind_at', '>', $now)
+            ->count();
+    }
+
+    /**
+     * How many occurrences of this schedule are still FUTURE WORK.
+     *
+     * Pending and processing rows occupy the bound; sent, failed and cancelled
+     * ones are history and must not. Counting history would mean a long-running
+     * daily series eventually stopped scheduling itself — the bound is about how
+     * much future Sanad holds, not how much past it remembers.
+     */
+    private function outstanding(ReminderSchedule $schedule): int
+    {
+        return Reminder::query()
             ->where('reminder_schedule_id', $schedule->getKey())
             ->whereIn('status', [ReminderStatus::Pending->value, ReminderStatus::Processing->value])
             ->count();
-
-        return max(0, $cap - $outstanding);
     }
 
     /** The last local date the horizon reaches, in the schedule's own zone. */
