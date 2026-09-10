@@ -28,6 +28,12 @@ namespace App\Support\Tools;
  * back from the row (see `rehydratableOnReplay()`). Nothing is stored either
  * way, and no second invocation, event, audit or usage row exists.
  *
+ * AND WHEN IT CANNOT BE RE-DERIVED, THE PROJECTION IS STILL NOT THE ANSWER. What
+ * is kept here is audit metadata; returning it as a successful result would claim
+ * the tool produced something it did not, and would disclose the shape of data to
+ * a caller that may no longer be allowed to see it. The replay reports a bounded
+ * failure instead (`ToolReplayFailure`).
+ *
  * The default is PERSIST: most tools return ids and counts, which are exactly
  * what an audit trail is for. A tool appears here only to say less.
  */

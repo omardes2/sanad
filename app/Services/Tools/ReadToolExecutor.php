@@ -11,6 +11,7 @@ use App\Enums\ToolClaimOutcome;
 use App\Enums\ToolInvocationFailureKind;
 use App\Enums\ToolInvocationRefusalReason;
 use App\Enums\ToolInvocationStatus;
+use App\Enums\ToolReplayFailure;
 use App\Enums\ToolSideEffect;
 use App\Exceptions\Tools\ToolDefinitionException;
 use App\Exceptions\Tools\ToolRuleException;
@@ -129,11 +130,14 @@ final class ReadToolExecutor
         $claim = $this->store->claim($request);
 
         if (! $claim->isClaimed()) {
+            [$rehydrated, $rehydrationFailure] = $this->rehydrate($claim, $request);
+
             return ToolInvocationResult::settled(
                 $claim->outcome,
                 $claim->invocation,
                 executed: false,
-                transientOutput: $this->rehydrate($claim, $request),
+                transientOutput: $rehydrated,
+                replayFailure: $rehydrationFailure,
             );
         }
 
@@ -207,12 +211,17 @@ final class ReadToolExecutor
      * sees the newer set. That is the correct trade: the alternative is either
      * a stale plaintext copy on the row, or no answer at all.
      *
-     * A failure to re-derive is never fatal — the caller falls back to the
-     * stored projection, which is what a replay returned before this existed.
+     * WHEN IT CANNOT HAPPEN THERE IS NO RESULT — not a thinner one. The stored
+     * projection (`{memories_count, truncated}`) is audit metadata, and handing
+     * it back as a successful `memory.read@2` would claim memories were returned
+     * when none were, and would disclose how many exist to a caller that may no
+     * longer be allowed to know. So the failure is explicit and bounded
+     * (`ToolReplayFailure`), the model is told Sanad cannot reach what it
+     * remembers, and nothing is written either way.
      *
-     * @return array<string, mixed>|null
+     * @return array{0: array<string, mixed>|null, 1: ToolReplayFailure|null}
      */
-    private function rehydrate(ToolClaim $claim, ToolCallRequest $request): ?array
+    private function rehydrate(ToolClaim $claim, ToolCallRequest $request): array
     {
         $definition = $request->definition;
 
@@ -221,11 +230,19 @@ final class ReadToolExecutor
             || $definition->sideEffect !== ToolSideEffect::Read
             || ! ToolOutputPersistence::rehydratableOnReplay($definition->key)
             || ! array_key_exists($request->toolKey(), self::HANDLERS)) {
-            return null;
+            // Not a rehydratable replay at all: ordinary replay semantics apply
+            // and the stored output IS this tool's whole result.
+            return [null, null];
         }
 
         if (! $this->consents->granted((int) $request->subscriber->getKey(), $definition->capability)) {
-            return null;
+            // The same answer a first-attempt refusal gives, and it discloses
+            // nothing: not the content, not the count, not the earlier output.
+            return [null, ToolReplayFailure::NotGranted];
+        }
+
+        if (! $this->rehydrationIsSafe($request)) {
+            return [null, ToolReplayFailure::RehydrationUnavailable];
         }
 
         [$class, $method] = self::HANDLERS[$request->toolKey()];
@@ -233,11 +250,29 @@ final class ReadToolExecutor
         try {
             $raw = $this->guard->run(fn (): mixed => app($class)->{$method}($request->subscriber, $request->input->values));
 
-            return $definition->output->validate(is_array($raw) ? $raw : []);
+            return [$definition->output->validate(is_array($raw) ? $raw : []), null];
         } catch (Throwable) {
-            // The projection on the row is still a truthful, if thinner, answer.
-            return null;
+            // The reader threw, or produced something its declared schema
+            // refuses. Either way this call has no answer to give.
+            return [null, ToolReplayFailure::RehydrationUnavailable];
         }
+    }
+
+    /**
+     * Can the underlying domain reconstruct this read completely?
+     *
+     * Declared per tool in code, for the same reason the handler map is: the
+     * executor must not infer a domain precondition. For memory it means the
+     * keys are configured AND every row in the subscriber's bounded active set
+     * opens — because a replay that silently came back short would tell the model
+     * a memory does not exist when the truth is that Sanad cannot read it.
+     */
+    private function rehydrationIsSafe(ToolCallRequest $request): bool
+    {
+        return match ($request->toolKey()) {
+            'memory.read@2' => app(MemoryService::class)->readable($request->subscriber),
+            default => true,
+        };
     }
 
     /**

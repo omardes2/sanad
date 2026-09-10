@@ -7,6 +7,7 @@ namespace App\Data\Tools;
 use App\Enums\ToolClaimOutcome;
 use App\Enums\ToolInvocationRefusalReason;
 use App\Enums\ToolInvocationStatus;
+use App\Enums\ToolReplayFailure;
 use App\Models\ToolInvocation;
 
 /**
@@ -36,14 +37,26 @@ final readonly class ToolInvocationResult
          * @var array<string, mixed>|null
          */
         public ?array $transientOutput = null,
+        /**
+         * Set only on a REPLAY of a tool whose result is not stored in full, when
+         * that result could not be re-derived. The replayed invocation still
+         * SUCCEEDED — nothing about it changes — but this call has no semantic
+         * result to offer, and the stored projection is not one.
+         */
+        public ?ToolReplayFailure $replayFailure = null,
     ) {}
 
     /**
-     * @param  array<string, mixed>|null  $transientOutput  the full result, when this call executed one
+     * @param  array<string, mixed>|null  $transientOutput  the full result, when this call produced one
      */
-    public static function settled(ToolClaimOutcome $claim, ToolInvocation $invocation, bool $executed, ?array $transientOutput = null): self
-    {
-        return new self($claim, $invocation, $invocation->status, $invocation->refusal_reason, $executed, $transientOutput);
+    public static function settled(
+        ToolClaimOutcome $claim,
+        ToolInvocation $invocation,
+        bool $executed,
+        ?array $transientOutput = null,
+        ?ToolReplayFailure $replayFailure = null,
+    ): self {
+        return new self($claim, $invocation, $invocation->status, $invocation->refusal_reason, $executed, $transientOutput, $replayFailure);
     }
 
     /** Refused before a claim: nothing stored, nothing executed. */
@@ -58,19 +71,27 @@ final readonly class ToolInvocationResult
     }
 
     /**
-     * The declared output of a successful invocation, replay included.
+     * The declared output of a successful invocation, replay included — or NULL
+     * when this call has no semantic result to give.
      *
-     * The transient result of THIS execution wins when there is one, because a
-     * redacted row deliberately holds less than the model was allowed to see.
-     * Falling back to the stored projection is what makes a replay honest
-     * rather than empty.
+     * The transient result of THIS call wins when there is one. When a replay
+     * could not re-derive a redacted result there is NO result: the projection on
+     * the row is audit metadata, not an answer, and returning it would claim the
+     * tool succeeded in producing something it did not produce. Callers read
+     * `replayFailure` and report the bounded code instead.
      */
     public function output(): ?array
     {
-        if (! $this->succeeded()) {
+        if (! $this->succeeded() || $this->replayFailure !== null) {
             return null;
         }
 
         return $this->transientOutput ?? $this->invocation?->output ?? [];
+    }
+
+    /** Did this call end without a usable result even though the invocation succeeded? */
+    public function rehydrationFailed(): bool
+    {
+        return $this->replayFailure !== null;
     }
 }

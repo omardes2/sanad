@@ -11,6 +11,7 @@ use App\Enums\ToolConsentReason;
 use App\Enums\ToolInvocationFailureKind;
 use App\Enums\ToolInvocationRefusalReason;
 use App\Enums\ToolInvocationStatus;
+use App\Enums\ToolReplayFailure;
 use App\Models\Memory;
 use App\Models\Message;
 use App\Models\ToolInvocation;
@@ -353,7 +354,7 @@ it('re-derives a replayed memory read instead of handing back the projection, an
         ->not->toContain('القراءة');
 });
 
-it('refuses to re-derive a replayed memory read once consent is revoked', function () {
+it('refuses to re-derive a replayed memory read once consent is revoked, and leaks nothing', function () {
     memoryWrite(memoryAsk($this->subscriber), ['content' => 'بحب القراءة قبل النوم', 'category' => 'preference']);
 
     $message = memoryAsk($this->subscriber);
@@ -367,13 +368,66 @@ it('refuses to re-derive a replayed memory read once consent is revoked', functi
         ToolConsentReason::SubscriberRequest,
     );
 
-    // Rehydration is a read of the subscriber's data for a provider, so it is
-    // governed by the same live consent an execution is. Withdrawn ⇒ the replay
-    // falls back to the stored projection and no memory leaves the platform.
+    // Rehydration hands the subscriber's data to a provider, so it is governed by
+    // the same live consent an execution is. Withdrawn ⇒ there is NO result: the
+    // stored projection is audit metadata, not an answer, and handing it back
+    // would disclose how many memories exist to a caller no longer allowed to know.
     $replay = memoryRecall($message, ['query' => 'القراءة']);
 
-    expect($replay->output())->toBe(['memories_count' => 1, 'truncated' => false])
-        ->and(json_encode($replay->output(), JSON_UNESCAPED_UNICODE))->not->toContain('القراءة');
+    expect($replay->rehydrationFailed())->toBeTrue()
+        ->and($replay->replayFailure)->toBe(ToolReplayFailure::NotGranted)
+        ->and($replay->output())->toBeNull()
+        // Nothing about the memory survives into the answer: no content, no count,
+        // and not the earlier stored output either.
+        ->and(json_encode($replay->output(), JSON_UNESCAPED_UNICODE))->not->toContain('القراءة')
+        ->and(json_encode($replay->output(), JSON_UNESCAPED_UNICODE))->not->toContain('memories_count')
+        // The replayed invocation itself is untouched: it really did succeed.
+        ->and($replay->invocation->refresh()->status)->toBe(ToolInvocationStatus::Succeeded)
+        ->and(ToolInvocation::where('tool_key', 'memory.read')->count())->toBe(1);
+});
+
+it('refuses to re-derive a replayed memory read when memory cannot be read in full', function () {
+    memoryWrite(memoryAsk($this->subscriber), ['content' => 'بحب القراءة قبل النوم', 'category' => 'preference']);
+
+    $message = memoryAsk($this->subscriber);
+    $first = memoryRecall($message, ['query' => 'القراءة']);
+
+    expect($first->output()['memories'][0]['content'])->toBe('بحب القراءة قبل النوم');
+
+    // (a) No key at all.
+    config(['memory.key' => null]);
+    app(MemoryCipher::class)->flush();
+
+    $noKey = memoryRecall($message, ['query' => 'القراءة']);
+
+    expect($noKey->replayFailure)->toBe(ToolReplayFailure::RehydrationUnavailable)
+        ->and($noKey->output())->toBeNull();
+
+    // (b) A key that cannot open the row — a partial rotation, a bad restore.
+    config(['memory.key' => 'base64:'.base64_encode(str_repeat('z', 32))]);
+    app(MemoryCipher::class)->flush();
+
+    $wrongKey = memoryRecall($message, ['query' => 'القراءة']);
+
+    // NOT an empty success: «you have no memories» would be a lie when the truth
+    // is «I cannot read them». A live read skips one bad row; a REPLAY refuses.
+    expect($wrongKey->replayFailure)->toBe(ToolReplayFailure::RehydrationUnavailable)
+        ->and($wrongKey->output())->toBeNull()
+        ->and(json_encode($wrongKey->output(), JSON_UNESCAPED_UNICODE))->not->toContain('memories')
+        ->and(json_encode($wrongKey->output(), JSON_UNESCAPED_UNICODE))->not->toContain('truncated');
+
+    // (c) One corrupt row among readable ones, with the right key.
+    config(['memory.key' => config('memory.key')]);
+    app(MemoryCipher::class)->flush();
+    DB::table('memories')->update(['content' => 'garbage-not-an-envelope']);
+
+    expect(memoryRecall($message, ['query' => 'القراءة'])->replayFailure)
+        ->toBe(ToolReplayFailure::RehydrationUnavailable);
+
+    // Throughout: no second invocation, and no plaintext anywhere in storage.
+    expect(ToolInvocation::where('tool_key', 'memory.read')->count())->toBe(1)
+        ->and(json_encode(DB::table('tool_invocations')->pluck('output')->all(), JSON_UNESCAPED_UNICODE))
+        ->not->toContain('القراءة');
 });
 
 it('needs an explicit forget instruction, and a contradiction is not one', function () {

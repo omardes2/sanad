@@ -7,6 +7,8 @@ use App\Enums\MemoryCategory;
 use App\Enums\MessageDirection;
 use App\Enums\MessageType;
 use App\Enums\ToolCapability;
+use App\Enums\ToolConsentReason;
+use App\Enums\ToolReplayFailure;
 use App\Exceptions\Ai\AiException;
 use App\Models\ChannelAccount;
 use App\Models\Conversation;
@@ -14,6 +16,8 @@ use App\Models\Memory;
 use App\Models\Message;
 use App\Models\ToolInvocation;
 use App\Models\User;
+use App\Services\Memory\MemoryCipher;
+use App\Services\Tools\ToolConsentService;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -141,4 +145,91 @@ it('gives the model the real memories again when the queue retries after a faile
         ->and(ToolInvocation::query()->sole()->output)->toBe(['memories_count' => 1, 'truncated' => false])
         ->and(json_encode(DB::table('tool_invocations')->pluck('output')->all(), JSON_UNESCAPED_UNICODE))
         ->not->toContain('القهوة');
+});
+
+it('tells the provider plainly that it cannot reach the memories, instead of passing storage metadata off as a result', function () {
+    [$user, $conversation, $message] = replaySubject();
+
+    Http::fake(['api.groq.com/*' => Http::sequence()
+        // ATTEMPT 1: the read runs and the model sees the memory…
+        ->push(replayProposal())
+        // …then the synthesis call dies.
+        ->push(['error' => ['message' => 'server error']], 500)
+        // ATTEMPT 2: the same slot replays, and the model answers from whatever
+        // the tool result says.
+        ->push(replayProposal())
+        ->push([
+            'model' => 'llama-3.3-70b-versatile',
+            'choices' => [['message' => ['role' => 'assistant', 'content' => 'ما بقدر أوصل لمعلوماتك المحفوظة حاليًا.'], 'finish_reason' => 'stop']],
+            'usage' => ['prompt_tokens' => 12, 'completion_tokens' => 4],
+        ]),
+    ]);
+
+    $orchestrator = app(AiAgentOrchestrator::class);
+
+    expect(fn () => $orchestrator->handle($user, $conversation, $message))->toThrow(AiException::class);
+
+    // Between the two attempts the subscriber withdraws consent.
+    $this->actingAs($user);
+    app(ToolConsentService::class)->revoke(
+        $user->id,
+        ToolCapability::MemoryRead,
+        1,
+        ToolConsentReason::SubscriberRequest,
+    );
+
+    $sentBefore = count(replayToolMessages());
+
+    $reply = $orchestrator->handle($user, $conversation, $message);
+
+    $onRetry = implode("\n", array_slice(replayToolMessages(), $sentBefore));
+
+    expect($reply->text)->toBe('ما بقدر أوصل لمعلوماتك المحفوظة حاليًا.')
+        // An EXPLICIT failure code, not a success carrying audit metadata.
+        ->and($onRetry)->toContain('"ok":false')
+        ->and($onRetry)->toContain(ToolReplayFailure::NotGranted->value)
+        // Nothing about the memories survives: not the content, not the count,
+        // not the projection that is sitting on the row.
+        ->and($onRetry)->not->toContain('بحب القهوة سادة')
+        ->and($onRetry)->not->toContain('memories_count')
+        ->and($onRetry)->not->toContain('truncated')
+        // Still one invocation, still succeeded, still redacted.
+        ->and(ToolInvocation::count())->toBe(1)
+        ->and(ToolInvocation::query()->sole()->output)->toBe(['memories_count' => 1, 'truncated' => false]);
+});
+
+it('tells the provider it cannot reach the memories when the key is gone, rather than answering that there are none', function () {
+    [$user, $conversation, $message] = replaySubject();
+
+    Http::fake(['api.groq.com/*' => Http::sequence()
+        ->push(replayProposal())
+        ->push(['error' => ['message' => 'server error']], 500)
+        ->push(replayProposal())
+        ->push([
+            'model' => 'llama-3.3-70b-versatile',
+            'choices' => [['message' => ['role' => 'assistant', 'content' => 'تعذّر الوصول للذاكرة.'], 'finish_reason' => 'stop']],
+            'usage' => ['prompt_tokens' => 12, 'completion_tokens' => 4],
+        ]),
+    ]);
+
+    $orchestrator = app(AiAgentOrchestrator::class);
+
+    expect(fn () => $orchestrator->handle($user, $conversation, $message))->toThrow(AiException::class);
+
+    // The key is no longer usable when the retry runs.
+    config(['memory.key' => 'base64:'.base64_encode(str_repeat('z', 32))]);
+    app(MemoryCipher::class)->flush();
+
+    $sentBefore = count(replayToolMessages());
+    $orchestrator->handle($user, $conversation, $message);
+
+    $onRetry = implode("\n", array_slice(replayToolMessages(), $sentBefore));
+
+    // «You have no memories» would be a lie; «I cannot read them» is the truth.
+    expect($onRetry)->toContain('"ok":false')
+        ->and($onRetry)->toContain(ToolReplayFailure::RehydrationUnavailable->value)
+        ->and($onRetry)->not->toContain('"memories":[]')
+        ->and($onRetry)->not->toContain('memories_count')
+        ->and($onRetry)->not->toContain('بحب القهوة سادة')
+        ->and(ToolInvocation::count())->toBe(1);
 });

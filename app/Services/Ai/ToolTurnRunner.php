@@ -94,6 +94,10 @@ final class ToolTurnRunner
         return match (true) {
             $result->claim === ToolClaimOutcome::Conflict => ToolResult::failed($call, 'conflict'),
             $result->claim === ToolClaimOutcome::InFlight => ToolResult::failed($call, 'in_flight'),
+            // A replay of a tool whose result is not stored in full, which could
+            // not be re-derived. The stored projection is audit metadata, never a
+            // semantic answer, so the model is told plainly that there is none.
+            $result->rehydrationFailed() => ToolResult::failed($call, (string) $result->replayFailure?->value),
             // The result's own accessor, not the row: a tool may be allowed to
             // tell the model more than it is allowed to store (Phase G).
             $result->invocation->status === ToolInvocationStatus::Succeeded => ToolResult::ok($call, $result->output() ?? []),

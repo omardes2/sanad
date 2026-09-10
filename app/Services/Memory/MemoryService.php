@@ -282,6 +282,33 @@ final class MemoryService
         return $this->cipher->available() && MemoryFingerprint::available();
     }
 
+    /**
+     * Can ONE subscriber's bounded active set be read in full, right now?
+     *
+     * This is a stricter question than `available()` and it exists for the
+     * REPLAY path only. A live read SKIPS a row it cannot open — one corrupt row
+     * must not take down an AI reply, and answering with the rest is better than
+     * answering with nothing. But a replay is RECONSTRUCTING a result the model
+     * has already been given, and silently reconstructing it short would tell the
+     * model that a memory does not exist when the truth is that Sanad cannot read
+     * it. So on a replay anything less than a complete read is a refusal, not a
+     * thinner answer.
+     */
+    public function readable(User $subscriber): bool
+    {
+        if (! $this->available()) {
+            return false;
+        }
+
+        foreach ($this->activeSet((int) $subscriber->getKey(), $this->maxActive()) as $memory) {
+            if ($this->cipher->open((string) $memory->getAttribute('content')) === null) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     // ------------------------------------------------------------ internals
 
     public const RECALL_MAX = 10;
