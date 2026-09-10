@@ -20,12 +20,12 @@ it('adds and removes cost_invoices_period_start_id_idx reversibly without touchi
     $e2Indexes = ['cost_invoices_scope_idx', 'cost_invoices_status_idx', 'cost_invoices_counterparty_ref_unique', 'cost_invoices_idempotency_key_unique'];
     $invoice = e2Invoice();
 
-    expect($files)->toHaveCount(65)
-        ->and(basename($files[count($files) - 7]))->toBe('2026_09_06_001303_add_period_start_index_to_cost_invoices_table.php')
+    expect($files)->toHaveCount(66)
+        ->and(basename($files[count($files) - 8]))->toBe('2026_09_06_001303_add_period_start_index_to_cost_invoices_table.php')
         ->and(Schema::hasIndex('cost_invoices', 'cost_invoices_period_start_id_idx'))->toBeTrue()
         ->and(Schema::hasIndex('cost_invoices', ['period_start', 'id']))->toBeTrue();
 
-    Artisan::call('migrate:rollback', ['--step' => 7, '--force' => true]); // the F1 migration, the two F2 ones, the reminder-delivery one, the memory one and the voice-transcription one sit on top of this one
+    Artisan::call('migrate:rollback', ['--step' => 8, '--force' => true]); // the F1 migration, the two F2 ones, the reminder-delivery one, the memory one, the voice-transcription one and the recurring-reminders one sit on top of this one
 
     expect(Schema::hasTable('cost_invoices'))->toBeTrue()
         ->and(Schema::hasIndex('cost_invoices', 'cost_invoices_period_start_id_idx'))->toBeFalse()
@@ -39,7 +39,7 @@ it('adds and removes cost_invoices_period_start_id_idx reversibly without touchi
     Artisan::call('migrate', ['--force' => true]);
 
     expect(Schema::hasIndex('cost_invoices', 'cost_invoices_period_start_id_idx'))->toBeTrue()
-        ->and(DB::table('migrations')->count())->toBe(65)
+        ->and(DB::table('migrations')->count())->toBe(66)
         ->and(Schema::hasTable('tool_consents'))->toBeTrue()
         ->and(DB::table('cost_invoices')->count())->toBe(1);
     foreach ($e2Indexes as $index) {

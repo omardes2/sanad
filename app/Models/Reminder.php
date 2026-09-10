@@ -26,6 +26,9 @@ class Reminder extends Model
         'user_id',
         'task_id',
         'source_message_id',
+        'reminder_schedule_id',
+        'occurrence_key',
+        'occurrence_local_at',
         'title',
         'remind_at',
         'timezone',
@@ -46,6 +49,7 @@ class Reminder extends Model
     {
         return [
             'remind_at' => 'datetime',
+            'occurrence_local_at' => 'datetime',
             'sent_at' => 'datetime',
             'claimed_at' => 'datetime',
             'dispatched_at' => 'datetime',
@@ -65,6 +69,31 @@ class Reminder extends Model
     public function task(): BelongsTo
     {
         return $this->belongsTo(Task::class);
+    }
+
+    /**
+     * The recurrence definition this row is ONE OCCURRENCE of, or null for a
+     * one-time reminder.
+     *
+     * @return BelongsTo<ReminderSchedule, $this>
+     */
+    public function schedule(): BelongsTo
+    {
+        return $this->belongsTo(ReminderSchedule::class, 'reminder_schedule_id');
+    }
+
+    /**
+     * Is this row one occurrence of a series?
+     *
+     * Nothing in the delivery path asks this question, and that is the point: an
+     * occurrence is an ordinary reminder with its own claim, its own attempt
+     * budget and its own outbound message, so the dispatcher, the sweeper and
+     * the delivery policy are identical for both kinds. This exists for the
+     * admin surface and for the cancellation scopes.
+     */
+    public function isOccurrence(): bool
+    {
+        return $this->reminder_schedule_id !== null;
     }
 
     /** @return BelongsTo<Message, $this> */

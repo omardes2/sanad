@@ -20,11 +20,11 @@ uses(RefreshDatabase::class);
  * token, two nullable timestamps and an index on `reminders`, one nullable
  * unique FK on `messages`, and nothing else in E0–E5 or F1–F4 touched.
  */
-it('is the 63rd of 65 migrations, adds only the delivery columns, and rolls back and forward cleanly', function () {
+it('is the 63rd of 66 migrations, adds only the delivery columns, and rolls back and forward cleanly', function () {
     $files = glob(database_path('migrations/*.php'));
 
-    expect($files)->toHaveCount(65)
-        ->and(basename($files[count($files) - 3]))->toBe('2026_09_09_000101_add_reminder_delivery_to_reminders_and_messages.php')
+    expect($files)->toHaveCount(66)
+        ->and(basename($files[count($files) - 4]))->toBe('2026_09_09_000101_add_reminder_delivery_to_reminders_and_messages.php')
         ->and(Schema::hasColumn('reminders', 'claim_token'))->toBeTrue()
         ->and(Schema::hasColumn('reminders', 'claimed_at'))->toBeTrue()
         ->and(Schema::hasColumn('reminders', 'dispatched_at'))->toBeTrue()
@@ -35,9 +35,14 @@ it('is the 63rd of 65 migrations, adds only the delivery columns, and rolls back
     // The Sprint-0 columns this phase finally gives a writer are untouched.
     $columns = collect(Schema::getColumns('reminders'))->pluck('name')->all();
     sort($columns);
+    // The recurrence phase later added the three OCCURRENCE-IDENTITY columns, all
+    // nullable and all NULL for a one-time reminder — which is the whole reason
+    // one-time delivery behaves identically: an occurrence is an ordinary
+    // reminder, and a one-time reminder is simply one with no series.
     expect($columns)->toBe([
         'attempts', 'channel', 'claim_token', 'claimed_at', 'created_at', 'dispatched_at', 'id',
-        'last_error', 'remind_at', 'sent_at', 'source_message_id', 'status', 'task_id', 'timezone',
+        'last_error', 'occurrence_key', 'occurrence_local_at', 'remind_at', 'reminder_schedule_id',
+        'sent_at', 'source_message_id', 'status', 'task_id', 'timezone',
         'title', 'updated_at', 'user_id',
     ]);
 
@@ -51,7 +56,7 @@ it('is the 63rd of 65 migrations, adds only the delivery columns, and rolls back
         'status' => ReminderStatus::Pending->value,
     ]);
 
-    Artisan::call('migrate:rollback', ['--step' => 3, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 4, '--force' => true]);
 
     expect(Schema::hasColumn('reminders', 'claim_token'))->toBeFalse()
         ->and(Schema::hasColumn('reminders', 'claimed_at'))->toBeFalse()
@@ -71,7 +76,7 @@ it('is the 63rd of 65 migrations, adds only the delivery columns, and rolls back
         ->and(Schema::hasColumn('reminders', 'claimed_at'))->toBeTrue()
         ->and(Schema::hasIndex('messages', 'messages_reminder_id_unique'))->toBeTrue()
         ->and(DB::table('reminders')->count())->toBe(1)
-        ->and(DB::table('migrations')->count())->toBe(65);
+        ->and(DB::table('migrations')->count())->toBe(66);
 });
 
 it('enforces at most one outbound message per reminder at the database level', function () {

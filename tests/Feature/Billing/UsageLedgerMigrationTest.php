@@ -31,10 +31,11 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
     // migration (app_settings), the two C0 migrations (audit context, permission
     // tables), the four B2 migrations (pricing refs, model_prices, ai_models,
     // ai_providers) and the two B1 migrations (usage_charges, ledger).
-    // +1: the reminder-delivery migration now sits on top of all of them, and
-    // +1 again for the voice-transcription columns. The boundary migration
-    // itself is unchanged; only the distance to it grew.
-    Artisan::call('migrate:rollback', ['--step' => 45, '--force' => true]);
+    // +1: the reminder-delivery migration now sits on top of all of them, +1
+    // again for the voice-transcription columns, and +1 for the recurring-reminder
+    // schedules. The boundary migration itself is unchanged; only the distance to
+    // it grew.
+    Artisan::call('migrate:rollback', ['--step' => 46, '--force' => true]);
 
     expect(Schema::hasTable('tool_consents'))->toBeFalse()
         ->and(Schema::hasTable('finance_period_close_inputs'))->toBeFalse()

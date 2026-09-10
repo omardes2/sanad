@@ -24,10 +24,10 @@ uses(RefreshDatabase::class);
  * came from speech — and two authoritative copies of one sentence drift until
  * the copy the AI reads disagrees with the copy the admin shows.
  */
-it('is the 65th and last migration, adds only the voice columns, and rolls back and forward cleanly', function () {
+it('is the 65th of 66 migrations, adds only the voice columns, and rolls back and forward cleanly', function () {
     $files = glob(database_path('migrations/*.php'));
 
-    expect($files)->toHaveCount(65)
+    expect($files)->toHaveCount(66)
         ->and(basename($files[64]))->toBe('2026_09_11_000101_add_voice_transcription_to_messages_table.php')
         ->and(Schema::hasColumn('messages', 'voice_media_id'))->toBeTrue()
         ->and(Schema::hasColumn('messages', 'transcription_status'))->toBeTrue()
@@ -53,7 +53,7 @@ it('is the 65th and last migration, adds only the voice columns, and rolls back 
     [$user, $account] = voiceSubscriber();
     $message = voiceNote($user, $account, ['text_content' => 'رسالة قبل التراجع']);
 
-    Artisan::call('migrate:rollback', ['--step' => 1, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 2, '--force' => true]);
 
     expect(Schema::hasColumn('messages', 'voice_media_id'))->toBeFalse()
         ->and(Schema::hasColumn('messages', 'transcription_status'))->toBeFalse()
@@ -69,7 +69,7 @@ it('is the 65th and last migration, adds only the voice columns, and rolls back 
 
     expect(Schema::hasColumn('messages', 'voice_media_id'))->toBeTrue()
         ->and(Schema::hasIndex('messages', 'messages_transcription_status_claimed_idx'))->toBeTrue()
-        ->and(DB::table('migrations')->count())->toBe(65)
+        ->and(DB::table('migrations')->count())->toBe(66)
         // A message that pre-dates the columns is simply not a voice note.
         ->and(DB::table('messages')->where('id', $message->id)->value('transcription_status'))->toBeNull();
 });

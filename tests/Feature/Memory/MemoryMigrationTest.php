@@ -20,10 +20,10 @@ uses(RefreshDatabase::class);
  * columns and two indexes on a table that has existed since Sprint 0, and
  * nothing in E0–E5, F1–F4 or the reminder-delivery phase touched.
  */
-it('is the 64th of 65 migrations, adds only the two memory columns, and rolls back and forward cleanly', function () {
+it('is the 64th of 66 migrations, adds only the two memory columns, and rolls back and forward cleanly', function () {
     $files = glob(database_path('migrations/*.php'));
 
-    expect($files)->toHaveCount(65)
+    expect($files)->toHaveCount(66)
         ->and(basename($files[63]))->toBe('2026_09_10_000101_add_memory_fingerprint_and_provenance.php')
         ->and(Schema::hasColumn('memories', 'fingerprint'))->toBeTrue()
         ->and(Schema::hasColumn('memories', 'provenance'))->toBeTrue()
@@ -41,7 +41,7 @@ it('is the 64th of 65 migrations, adds only the two memory columns, and rolls ba
     $user = User::factory()->create();
     Memory::factory()->create(['user_id' => $user->id, 'content' => 'ذاكرة قبل التراجع']);
 
-    Artisan::call('migrate:rollback', ['--step' => 2, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 3, '--force' => true]);
 
     expect(Schema::hasColumn('memories', 'fingerprint'))->toBeFalse()
         ->and(Schema::hasColumn('memories', 'provenance'))->toBeFalse()
@@ -62,7 +62,7 @@ it('is the 64th of 65 migrations, adds only the two memory columns, and rolls ba
         // A row that pre-dates the columns gets the default provenance and no
         // fingerprint — which is exactly "no active duplicate slot claimed".
         ->and(DB::table('memories')->value('provenance'))->toBe(MemoryProvenance::Explicit->value)
-        ->and(DB::table('migrations')->count())->toBe(65);
+        ->and(DB::table('migrations')->count())->toBe(66);
 });
 
 it('lets the DATABASE decide that one memory is one memory, per subscriber and per category', function () {

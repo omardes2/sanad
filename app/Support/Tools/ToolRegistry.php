@@ -5,11 +5,15 @@ declare(strict_types=1);
 namespace App\Support\Tools;
 
 use App\Enums\MemoryCategory;
+use App\Enums\ReminderCancelScope;
+use App\Enums\ReminderPattern;
+use App\Enums\ReminderScheduleStatus;
 use App\Enums\ToolCapability;
 use App\Enums\ToolFieldType;
 use App\Enums\ToolSideEffect;
 use App\Exceptions\Tools\ToolDefinitionException;
 use App\Services\Memory\MemoryService;
+use App\Services\Reminders\ReminderScheduleService;
 
 /**
  * Every tool the platform knows, DECLARED IN CODE (Phase F1) — the same shape
@@ -267,6 +271,107 @@ class ToolRegistry
                 ]),
                 requiresApproval: true,
                 rateLimitPerHour: 20,
+            ),
+            /*
+             * RECURRENCE IS ITS OWN OBJECT, with its own tools. `reminder.create@2`
+             * stays exactly as it is — a one-time reminder is not a degenerate
+             * series — and a `schedule_id` is never interchangeable with a
+             * `reminder_id`: one names a definition, the other names a single
+             * occurrence that can be claimed, delivered and cancelled on its own.
+             */
+            ToolDefinition::of(
+                key: 'reminder_schedule.create', version: 1,
+                title: 'إنشاء تذكير متكرِّر',
+                summary: 'يجدول سلسلة تذكيرات متكرِّرة للمشترك نفسه بنمط يومي أو أسبوعي أو شهري بوقت محلي. الجدولة كتابة محلية؛ كل مرّة تُسلَّم لاحقًا كتذكير مستقل.',
+                capability: ToolCapability::RemindersWrite,
+                // A local, reversible definition row. It sends nothing and even
+                // creates no occurrence — materialisation does that separately —
+                // which is the same reasoning that made `reminder.create@2` a
+                // `write` where the frozen `@1` was an `external_write`.
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    ToolField::of('title', ToolFieldType::String, required: true, max: 120),
+                    ToolField::of('pattern', ToolFieldType::Enum, required: true, options: ReminderPattern::values()),
+                    // A LOCAL wall clock, `HH:MM`. Not a datetime: the whole point
+                    // of a recurring schedule is that it has no single instant.
+                    ToolField::of('local_time', ToolFieldType::String, required: true, max: 5),
+                    // ISO weekdays as `1,4` — a bounded string, because a tool
+                    // field is a closed scalar and a list of integers is not one.
+                    // Parsed and refused in the domain, never half-understood here.
+                    ToolField::of('weekdays', ToolFieldType::String, required: false, max: 20),
+                    ToolField::of('day_of_month', ToolFieldType::Integer, required: false, max: 31),
+                    ToolField::of('starts_on', ToolFieldType::Date, required: false),
+                    ToolField::of('ends_on', ToolFieldType::Date, required: false),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('schedule_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    ToolField::of('pattern', ToolFieldType::Enum, required: true, options: ReminderPattern::values()),
+                    ToolField::of('recurrence', ToolFieldType::String, required: true, max: 120),
+                    // The subscriber's own wall clock — the only form that means
+                    // anything to them, and computed by the same planner that
+                    // will materialise it rather than a second formula.
+                    ToolField::of('next_occurrence_local', ToolFieldType::String, required: true, max: 20),
+                ]),
+                rateLimitPerHour: 20,
+            ),
+            ToolDefinition::of(
+                key: 'reminder_schedule.list', version: 1,
+                title: 'عرض التذكيرات المتكرِّرة',
+                summary: 'يعيد سلاسل التذكيرات المتكرِّرة الفعّالة للمشترك نفسه ضمن حدّ معلن. قراءة فقط: لا يكتب ولا يرسل شيئًا.',
+                // A SEPARATE capability from writing: listing what already exists
+                // is a narrower permission than creating more.
+                capability: ToolCapability::RemindersRead,
+                sideEffect: ToolSideEffect::Read,
+                input: ToolSchema::of([
+                    ToolField::of('limit', ToolFieldType::Integer, required: false, max: ReminderScheduleService::LIST_MAX),
+                    ToolField::of('include_terminated', ToolFieldType::Boolean, required: false),
+                ]),
+                /*
+                 * WHY THIS TOOL IS REQUIRED FOR V1. Days after setting a series
+                 * up, a subscriber says «وقف تذكير الدوا اليومي». Without a
+                 * bounded, subscriber-owned way to discover which series that is,
+                 * the model would have to remember a `schedule_id` from an old
+                 * turn or invent one — and an invented id is a cancellation of
+                 * someone's real reminder. The ids here come from the
+                 * subscriber's own rows and from nowhere else.
+                 */
+                output: ToolSchema::of([
+                    ToolField::of('schedules', ToolFieldType::ListOfRows, required: true, max: ReminderScheduleService::LIST_MAX, items: ToolSchema::of([
+                        ToolField::of('schedule_id', ToolFieldType::Integer, required: true, max: 999999999),
+                        ToolField::of('title', ToolFieldType::String, required: true, max: 120),
+                        ToolField::of('pattern', ToolFieldType::Enum, required: true, options: ReminderPattern::values()),
+                        ToolField::of('recurrence', ToolFieldType::String, required: true, max: 120),
+                        ToolField::of('status', ToolFieldType::Enum, required: true, options: ReminderScheduleStatus::values()),
+                        ToolField::of('next_occurrence_local', ToolFieldType::String, required: false, max: 20),
+                    ])),
+                    ToolField::of('truncated', ToolFieldType::Boolean, required: true),
+                ]),
+                maxRetries: 2,
+            ),
+            ToolDefinition::of(
+                key: 'reminder_schedule.cancel', version: 1,
+                title: 'إلغاء تذكير متكرِّر',
+                summary: 'يوقف سلسلة تذكيرات متكرِّرة للمشترك نفسه، ويلغي مرّاتها غير المُرسَلة. لا يمسّ مرّة قيد الإرسال أو أُرسلت أو فشلت.',
+                capability: ToolCapability::RemindersWrite,
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    ToolField::of('schedule_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    /*
+                     * TWO SCOPES ONLY. Cancelling ONE occurrence is not here
+                     * because an occurrence is an ordinary reminder and
+                     * `reminder.cancel@1` already cancels one by `reminder_id`.
+                     * Keeping it out is what keeps the identities clean — and
+                     * stops a model that meant "skip tonight" from ending a
+                     * series.
+                     */
+                    ToolField::of('scope', ToolFieldType::Enum, required: true, options: ReminderCancelScope::values()),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('schedule_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    ToolField::of('scope', ToolFieldType::Enum, required: true, options: ReminderCancelScope::values()),
+                    ToolField::of('cancelled_occurrences', ToolFieldType::Integer, required: true, max: 999999),
+                    ToolField::of('terminated', ToolFieldType::Boolean, required: true),
+                ]),
             ),
             ToolDefinition::of(
                 key: 'reminder.create', version: 2,

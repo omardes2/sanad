@@ -40,6 +40,18 @@ enum ToolCapability: string
     case RemindersWrite = 'reminders.write';
 
     /**
+     * Reading the subscriber's own recurring schedules so the model can tell
+     * WHICH series they mean days later («وقف تذكير الدوا اليومي»).
+     *
+     * A SEPARATE capability from RemindersWrite, and for the same reason memory
+     * splits read from write: a subscriber may be happy for Sanad to list what
+     * it already scheduled without letting it schedule anything new, and one
+     * consent must never quietly grant the other. It is also the narrower of
+     * the two, so a deployment can offer discovery without offering creation.
+     */
+    case RemindersRead = 'reminders.read';
+
+    /**
      * The only operator permissions a capability may ever map to (Phase F1:
      * administering a subscriber's consent is subscriber management). A
      * mapping outside this list fails the registry contract test.
@@ -52,7 +64,8 @@ enum ToolCapability: string
     public function operatorPermission(): Permission
     {
         return match ($this) {
-            self::MemoryRead, self::MemoryWrite, self::TasksWrite, self::RemindersWrite => Permission::SubscribersManage,
+            self::MemoryRead, self::MemoryWrite, self::TasksWrite,
+            self::RemindersWrite, self::RemindersRead => Permission::SubscribersManage,
         };
     }
 
@@ -63,6 +76,7 @@ enum ToolCapability: string
             self::MemoryWrite => 'حفظ الذاكرة وتعديلها',
             self::TasksWrite => 'إنشاء المهام وتعديلها',
             self::RemindersWrite => 'إنشاء التذكيرات وتعديلها',
+            self::RemindersRead => 'قراءة تذكيرات المشترك المتكرِّرة',
         };
     }
 
