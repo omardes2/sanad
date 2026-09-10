@@ -11,6 +11,7 @@ use App\Services\Launch\Checks\FeatureChecks;
 use App\Services\Launch\Checks\MemoryChecks;
 use App\Services\Launch\Checks\PlatformChecks;
 use App\Services\Launch\Checks\ReminderChecks;
+use App\Services\Launch\Checks\VoiceChecks;
 use App\Services\Launch\Checks\WhatsAppChecks;
 use App\Services\Launch\LaunchReadiness;
 use App\Services\Platform\InfrastructureHealth;
@@ -174,19 +175,40 @@ it('reports the queue unavailable as a blocker but an unknown worker as NOT OBSE
 |--------------------------------------------------------------------------
 */
 
-it('reports voice transcription as NOT IMPLEMENTED and invents no provider', function () {
-    $outcome = FeatureChecks::voiceTranscription();
+/*
+ | Voice transcription is IMPLEMENTED as of this phase, so its gate reports
+ | configuration instead of declaring absence. What it must never do is invent
+ | a provider: every name it prints has to come from the catalog that actually
+ | resolved, which is why the disabled and unroutable cases print none at all.
+ */
+it('reports voice transcription as NOT READY when the feature is switched off', function () {
+    config()->set('voice.enabled', false);
+
+    $outcome = VoiceChecks::transcription();
     $text = $outcome->summary.' '.implode(' ', array_map(static fn ($d): string => $d->value, $outcome->details));
 
-    expect($outcome->state)->toBe(LaunchGateState::NotImplemented)
+    expect($outcome->state)->toBe(LaunchGateState::NotReady)
         ->and($outcome->state->blocksLaunch())->toBeTrue()
-        ->and($text)->toContain('لم يُحدَّد')
-        // No provider name is guessed anywhere in the row.
-        ->and(strtolower($text))->not->toContain('openai')
-        ->and(strtolower($text))->not->toContain('whisper')
-        ->and(strtolower($text))->not->toContain('deepgram')
-        ->and(strtolower($text))->not->toContain('google')
-        ->and(strtolower($text))->not->toContain('azure');
+        // Off does not mean the voice note vanishes — that is the whole point.
+        ->and($text)->toContain('بصمت')
+        ->and(strtolower($text))->not->toContain('groq')
+        ->and(strtolower($text))->not->toContain('whisper');
+});
+
+it('reports voice transcription as NOT READY with no routable transcription model', function () {
+    config()->set('voice.enabled', true);
+    config()->set('ai.catalog', []);
+    config()->set('ai.providers.groq.transcription_model', null);
+    config()->set('ai.providers.openai.transcription_model', null);
+    config()->set('whatsapp.enabled', true);
+    config()->set('whatsapp.access_token', 'test-token');
+    config()->set('whatsapp.phone_number_id', '123456');
+    config()->set('ai.catalog_source', 'config');
+
+    $outcome = VoiceChecks::transcription();
+
+    expect($outcome->state)->toBe(LaunchGateState::NotReady)
+        ->and($outcome->state->blocksLaunch())->toBeTrue();
 });
 
 it('reports the other unbuilt V1 features as NOT IMPLEMENTED', function (callable $check) {
@@ -214,7 +236,9 @@ it('proves the codebase really has no implementation for the features it calls u
 
     expect(trim((string) $hits))->toBe('');
 })->with([
-    'transcription' => ['class .*Transcrib|interface .*Transcrib|function transcribe'],
+    // `transcription` was here until it was built. Removing a pattern from this
+    // list is the deliberate, visible act of saying "this now exists" — and it
+    // is only legitimate alongside a gate that reports rather than declares.
     'recurrence' => ['class .*Recurrence|interface .*Recurring|rrule'],
     'follow-up' => ['class .*FollowUp|function followUp'],
     'morning brief' => ['class .*MorningBrief|class .*DailyBrief'],

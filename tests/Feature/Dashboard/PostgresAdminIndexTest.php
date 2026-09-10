@@ -208,7 +208,8 @@ it('serves the exact idempotency-key lookup from its unique index', function () 
 it('confirms this phase adds no migration at all', function () {
     $files = glob(database_path('migrations/*.php'));
 
-    // 64 was the count when Durable Personal Memory closed. The admin surface
-    // reads existing columns and indexes only.
-    expect($files)->toHaveCount(64);
+    // 65 is the count as of the voice-notes phase, which added exactly one.
+    // The admin surface itself still adds none: it reads existing columns and
+    // indexes only, and this assertion is what would catch it slipping one in.
+    expect($files)->toHaveCount(65);
 });

@@ -7,7 +7,7 @@ use App\Data\Ai\AiRequest;
 use App\Data\Ai\AiResponse;
 use App\Enums\AiOperation;
 use App\Exceptions\Ai\AiConfigurationException;
-use App\Providers\Ai\GroqChatProvider;
+use App\Providers\Ai\GroqProvider;
 use App\Providers\Ai\OpenAIProvider;
 use App\Services\Ai\AiManager;
 
@@ -16,7 +16,7 @@ it('resolves the configured provider by name', function () {
 
     $provider = app(AiManager::class)->provider();
 
-    expect($provider)->toBeInstanceOf(GroqChatProvider::class)
+    expect($provider)->toBeInstanceOf(GroqProvider::class)
         ->and($provider->name())->toBe('groq');
 });
 

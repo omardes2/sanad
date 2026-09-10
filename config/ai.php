@@ -192,12 +192,31 @@ return [
     | Keys/models come from the environment only — never committed.
     */
     'providers' => [
+        /*
+        | `transcription_model` is a CATALOG SOURCE, not a domain setting.
+        |
+        | It exists on EVERY provider entry, is read in exactly one generic loop
+        | (ConfigCatalogSource::fromProviders, over all providers alike), and
+        | derives a bootstrap catalog row so a deployment can enable
+        | transcription with one environment variable instead of hand-writing a
+        | catalog. NOTHING in the voice pipeline reads it: the transcription job
+        | takes the model from the route the router resolved, so switching
+        | provider is a catalog change with no code change — and a
+        | database-backed catalog makes these keys irrelevant entirely.
+        |
+        | DELIBERATELY UNSET by default, for every provider: with no
+        | transcription model catalogued, `transcription` has no route at all and
+        | the voice path refuses with a bounded reason instead of spending money
+        | on a model no operator chose. Never default one here.
+        */
+
         // Primary provider of the platform. organization/project are optional
         // scoping headers for accounts that have several.
         'openai' => [
             'base_url' => env('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
             'api_key' => env('OPENAI_API_KEY'),
             'model' => env('OPENAI_MODEL', 'gpt-4.1-mini'),
+            'transcription_model' => env('OPENAI_TRANSCRIPTION_MODEL'),
             'organization' => env('OPENAI_ORGANIZATION'),
             'project' => env('OPENAI_PROJECT'),
         ],
@@ -207,6 +226,7 @@ return [
             'base_url' => env('GROQ_BASE_URL', 'https://api.groq.com/openai/v1'),
             'api_key' => env('GROQ_API_KEY'),
             'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+            'transcription_model' => env('GROQ_TRANSCRIPTION_MODEL'),
         ],
 
         // Extension points (implement the provider class when enabling). Gemini
@@ -235,6 +255,26 @@ return [
     |
     |   ['provider' => 'openai', 'model' => 'gpt-4.1-mini',
     |    'capabilities' => ['chat'], 'enabled' => true, 'priority' => 100],
+    |
+    | Capabilities other than 'chat' are catalogued the same way — a voice note
+    | is transcribed by whatever model is catalogued with ['transcription'],
+    | which is why no transcription model name appears anywhere in the code.
+    | SEVERAL providers may offer it, and the router picks among them exactly as
+    | it does for chat:
+    |
+    |   ['provider' => 'openai', 'model' => '<a transcription model>',
+    |    'capabilities' => ['transcription'], 'enabled' => true, 'priority' => 100],
+    |   ['provider' => 'groq',   'model' => '<a transcription model>',
+    |    'capabilities' => ['transcription'], 'enabled' => true, 'priority' => 50],
+    |
+    | Transcription is its OWN row, never a second capability on a chat row: a
+    | chat model cannot transcribe and a transcription model cannot hold a
+    | conversation, so one row claiming both would route audio to a model that
+    | would refuse it.
+    |
+    | When this list is empty, each provider's `transcription_model` (above), if
+    | set, derives the same entry — so a deployment can enable transcription
+    | with one environment variable and no catalog edit.
     |
     | This is not the long-term home of the catalog: providers, models, pricing
     | and routing rules become database-backed and managed from Sanad Admin in a

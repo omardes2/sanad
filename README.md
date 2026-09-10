@@ -72,6 +72,7 @@ npm run build            # بناء الأصول
 - [docs/DATABASE.md](docs/DATABASE.md) — نموذج البيانات والجداول والعلاقات
 - [docs/MESSAGE_PIPELINE.md](docs/MESSAGE_PIPELINE.md) — مسار الرسائل والمحاكي المحلي
 - [docs/WHATSAPP_INTEGRATION.md](docs/WHATSAPP_INTEGRATION.md) — تكامل واتساب النصّي (Webhook + إرسال)
+- [docs/VOICE_NOTES.md](docs/VOICE_NOTES.md) — الرسائل الصوتية والتفريغ
 - [docs/DASHBOARD.md](docs/DASHBOARD.md) — لوحة تحكّم المشغّل والمصادقة
 - [docs/AI_ORCHESTRATOR.md](docs/AI_ORCHESTRATOR.md) — طبقة الذكاء الاصطناعي (المزوّدون والمنسّق)
 - [docs/SUBSCRIPTIONS.md](docs/SUBSCRIPTIONS.md) — الاشتراكات والباقات ومحرّك الاستخدام

@@ -18,6 +18,14 @@ use App\Services\Ai\Routing\RoutingPreference;
  * per configured provider from config('ai.providers'), ranking the preferred
  * provider (config('ai.provider')) first. That keeps today's deployments
  * routing exactly as before (e.g. Groq) with no config change.
+ *
+ * A provider that also names a `transcription_model` derives a SECOND, separate
+ * entry for AiOperation::Transcription. Separate rather than a second capability
+ * on the chat entry, because they are different external models: a chat model
+ * cannot transcribe and a transcription model cannot hold a conversation, so one
+ * spec claiming both would route audio to a model that would refuse it. With no
+ * `transcription_model` set nothing is derived and `transcription` has no route
+ * at all — the fail-closed default.
  */
 final class ConfigCatalogSource implements CatalogSource
 {
@@ -90,18 +98,33 @@ final class ConfigCatalogSource implements CatalogSource
 
         foreach ((array) config('ai.providers', []) as $key => $config) {
             $model = is_array($config) ? trim((string) ($config['model'] ?? '')) : '';
+            $transcription = is_array($config) ? trim((string) ($config['transcription_model'] ?? '')) : '';
 
-            if ($model === '') {
+            if ($model === '' && $transcription === '') {
                 continue;
             }
 
-            $specs[] = new ModelSpec(
-                provider: (string) $key,
-                model: $model,
-                capabilities: [AiOperation::Chat],
-                enabled: true,
-                priority: (string) $key === $preferred ? self::PREFERRED_PRIORITY : self::DEFAULT_PRIORITY,
-            );
+            $priority = (string) $key === $preferred ? self::PREFERRED_PRIORITY : self::DEFAULT_PRIORITY;
+
+            if ($model !== '') {
+                $specs[] = new ModelSpec(
+                    provider: (string) $key,
+                    model: $model,
+                    capabilities: [AiOperation::Chat],
+                    enabled: true,
+                    priority: $priority,
+                );
+            }
+
+            if ($transcription !== '') {
+                $specs[] = new ModelSpec(
+                    provider: (string) $key,
+                    model: $transcription,
+                    capabilities: [AiOperation::Transcription],
+                    enabled: true,
+                    priority: $priority,
+                );
+            }
         }
 
         return $specs;

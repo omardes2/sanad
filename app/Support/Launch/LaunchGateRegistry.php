@@ -11,6 +11,7 @@ use App\Services\Launch\Checks\MemoryChecks;
 use App\Services\Launch\Checks\PaymentChecks;
 use App\Services\Launch\Checks\PlatformChecks;
 use App\Services\Launch\Checks\ReminderChecks;
+use App\Services\Launch\Checks\VoiceChecks;
 use App\Services\Launch\Checks\WhatsAppChecks;
 use InvalidArgumentException;
 
@@ -71,7 +72,7 @@ final class LaunchGateRegistry
             'owner' => LaunchGateOwner::Sanad,
             'required' => true,
             'why' => 'نطاق V1 يشترط أن يرسل المستخدم رسالة صوتية ويحصل على فهم ورد.',
-            'check' => [FeatureChecks::class, 'voiceTranscription'],
+            'check' => [VoiceChecks::class, 'transcription'],
         ],
         [
             'key' => 'reminders.recurring',

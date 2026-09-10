@@ -54,3 +54,16 @@ Schedule::command('sanad:reminders:sweep')
     ->everyMinute()
     ->withoutOverlapping()
     ->when(static fn (): bool => (bool) config('reminders.enabled', true));
+
+/*
+| Voice-note transcription recovery. Correctness does not depend on this run:
+| a voice note reaches transcription from ingestion, and the retry after an
+| unproven provider outcome is dispatched by the job itself. The sweep is the
+| backstop for the cases a process cannot schedule for itself — a worker killed
+| mid-claim, a job lost before it claimed — and it only RE-QUEUES. Every rule
+| about ownership, budget and settlement lives in the claim, under a row lock.
+*/
+Schedule::command('sanad:voice:sweep')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->when(static fn (): bool => (bool) config('voice.enabled', true));

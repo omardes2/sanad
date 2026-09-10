@@ -17,25 +17,16 @@ use App\Data\Launch\GateOutcome;
  * the gate still claims `not_implemented`. That is what stops this file from
  * quietly becoming a lie once the work lands.
  *
- * No provider name is invented anywhere here. Which transcription provider
- * Sanad will use is not decided in this repository, and guessing it on a
- * readiness screen would be inventing a fact.
+ * No capability is invented anywhere here, and no name is guessed for something
+ * that does not exist — a readiness screen that fills in a plausible detail is
+ * worse than one that says nothing.
+ *
+ * Voice transcription used to live here and no longer does: it is implemented,
+ * so its gate moved to VoiceChecks and REPORTS rather than declares. That
+ * migration is the intended lifecycle of every method in this file.
  */
 final class FeatureChecks
 {
-    public static function voiceTranscription(): GateOutcome
-    {
-        return GateOutcome::notImplemented(
-            'الرسائل الصوتية تُستقبَل وتُخزَّن كنوع `audio`، ولا يوجد أي تفريغ صوتي في المستودع.',
-            [
-                GateDetail::bad('التنفيذ', 'لا يوجد منفِّذ تفريغ في app/'),
-                GateDetail::plain('الموجود اليوم', 'مفردات فقط: MessageType::Audio · AiOperation::Transcription · UsageDimension::VoiceMessage'),
-                GateDetail::plain('المطلوب', 'منفذ تفريغ + ربطه بمسار الرسائل الواردة + قياس الاستخدام'),
-                GateDetail::plain('المزوّد', 'لم يُحدَّد بعد — لا يُخمَّن هنا'),
-            ],
-        );
-    }
-
     public static function recurringReminders(): GateOutcome
     {
         return GateOutcome::notImplemented(

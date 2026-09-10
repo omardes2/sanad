@@ -48,7 +48,7 @@ Channel Adapter (WhatsApp | Sanad App | Web | Voice)
 مبادئ ثابتة منذ Sprint 0: UTC داخليًا (`APP_TIMEZONE=UTC`) والعرض بتوقيت المستخدم
 (الافتراضي `Asia/Hebron`)، `decimal` للأموال، PHP Backed Enums، cascade للبيانات الشخصية
 و`nullOnDelete` للسجلّات المحفوظة. تفاصيل: [DATABASE.md](DATABASE.md)،
-[MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md)، [WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md)،
+[MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md)، [WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md)، [VOICE_NOTES.md](VOICE_NOTES.md)،
 [SUBSCRIPTIONS.md](SUBSCRIPTIONS.md).
 
 ## 4) طبقة الذكاء الاصطناعي — Provider abstraction + Router (Phase A)

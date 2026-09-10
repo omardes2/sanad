@@ -26,9 +26,13 @@ use Throwable;
  *   received → processing → processed | failed
  *
  * Walks every entry[] → changes[] → value, handling all messages[] and
- * statuses[] (not just the first). Text messages are handed to the existing
- * MessageProcessor (no pipeline logic is duplicated); non-text messages are
+ * statuses[] (not just the first). Text and audio messages are handed to the
+ * existing MessageProcessor (no pipeline logic is duplicated); other types are
  * acknowledged and ignored. Status updates advance delivery state monotonically.
+ *
+ * An audio message is stored like any other and its transcription is decided
+ * downstream — every refusal (plan, format, size, length, configuration) is a
+ * bounded reason recorded ON the message, never a silent drop at the door.
  *
  * Resilience: a single structurally-corrupt element (a non-array entry, change,
  * message or status) is skipped with a safe log so it never blocks the other,
@@ -159,8 +163,16 @@ class ProcessWhatsAppWebhook implements ShouldBeUnique, ShouldQueue
     ): void {
         $type = (string) ($message['type'] ?? '');
 
-        // Text only in this sprint; anything else is acknowledged and ignored.
-        if ($type !== 'text') {
+        // Text and audio are ingested. Everything else is still acknowledged
+        // and ignored — accepting a type the pipeline cannot answer would
+        // leave the subscriber waiting for a reply that never comes.
+        //
+        // Audio is INGESTED, not answered here: it becomes a real message row
+        // whose text is produced by transcription. That is the whole point of
+        // storing it — before this phase a voice note was dropped before any
+        // row existed, so nothing could report what happened to it, not even
+        // to say it was refused.
+        if ($type !== 'text' && $type !== 'audio') {
             Log::info('sanad.whatsapp.unsupported_message', [
                 'event_id' => $eventId,
                 'type' => $type,

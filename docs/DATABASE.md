@@ -57,6 +57,20 @@
   في Sprint 0C). علاقتا Eloquent: `inReplyTo()` و`reply()`.
 - `text_content?` · `media_path?` · `metadata? json` · `processing_status` enum `MessageProcessingStatus` · `processed_at?`
 - index: (`conversation_id`,`created_at`)، (`direction`,`processing_status`).
+- **الرسالة الصوتية (مرحلة الصوت):** `voice_media_id?` (مرجع الوسائط لدى المزوّد) ·
+  `voice_mime_type?` · `voice_bytes?` · `voice_duration_ms?` (**مقيسة من البايتات** قبل
+  الطلب المدفوع) · `transcription_status?` enum `TranscriptionStatus` ·
+  `transcription_provider?` · `transcription_model?` · `transcription_attempts`
+  (طلبات **فعلية**، 0..2) · `transcription_claim_token?` · `transcription_claimed_at?` ·
+  `transcription_dispatched_at?` · `transcription_failure_reason?` enum
+  `TranscriptionFailureReason` · `transcribed_at?`؛
+  index: (`transcription_status`,`transcription_claimed_at`).
+  وعلى PostgreSQL قيود CHECK تُبقي الصفّ متماسكًا مهما كتبه: الحالة من الـenum،
+  و`transcribed` تستلزم `transcribed_at`، و`failed` تستلزم سببًا، والمحاولات ضمن 0..2.
+  > **لا عمود transcript.** النصّ المُفرَّغ يذهب إلى `text_content` نفسه، لأن
+  > `type = audio` يقول أصلًا إن الكلام منطوق — ونسختان موثوقتان من الجملة نفسها
+  > تنحرفان. و`media_path` يبقى `null` للرسائل الصوتية: الصوت يُحذف بعد ثوانٍ،
+  > وعمود يشير إلى ملف نحذفه عمدًا أسوأ من عمود فارغ (ADR-0047).
 
 ### `tasks`
 - `user_id` → `users` (**cascade**) · `source_message_id?` → `messages` (**nullOnDelete**)
