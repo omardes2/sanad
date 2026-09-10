@@ -214,7 +214,6 @@ it('reports voice transcription as NOT READY with no routable transcription mode
 it('reports the other unbuilt V1 features as NOT IMPLEMENTED', function (callable $check) {
     expect($check()->state)->toBe(LaunchGateState::NotImplemented);
 })->with([
-    'follow-up until done' => [fn () => FeatureChecks::followUpUntilDone()],
     'morning brief' => [fn () => FeatureChecks::morningBrief()],
     'rate limiting' => [fn () => AiChecks::rateLimiting()],
 ]);
@@ -235,11 +234,10 @@ it('proves the codebase really has no implementation for the features it calls u
 
     expect(trim((string) $hits))->toBe('');
 })->with([
-    // `transcription` and `recurrence` were here until they were built. Removing a
-    // pattern from this list is the deliberate, visible act of saying "this now
-    // exists" — and it is only legitimate alongside a gate that reports rather
-    // than declares.
-    'follow-up' => ['class .*FollowUp|function followUp'],
+    // `transcription`, `recurrence` and `follow-up` were each here until they
+    // were built. Removing a pattern from this list is the deliberate, visible
+    // act of saying "this now exists" — and it is only legitimate alongside a
+    // gate that reports rather than declares.
     'morning brief' => ['class .*MorningBrief|class .*DailyBrief'],
 ]);
 

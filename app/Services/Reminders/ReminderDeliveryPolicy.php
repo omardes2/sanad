@@ -65,7 +65,7 @@ final class ReminderDeliveryPolicy
             return ReminderDeliveryPlan::freeForm();
         }
 
-        $template = $this->configuredTemplate();
+        $template = $this->configuredTemplate($reminder);
 
         return $template === null
             ? ReminderDeliveryPlan::refused(ReminderFailureReason::TemplateRequired)
@@ -76,7 +76,16 @@ final class ReminderDeliveryPolicy
             ));
     }
 
-    private function insideFreeFormWindow(ReminderRecipient $recipient): bool
+    /**
+     * Is the customer-service window currently open for this account?
+     *
+     * PUBLIC so the follow-up materialiser can ask the same question with the
+     * same answer. It decides, BEFORE creating an ask, whether that ask would
+     * need an approved template — and a second copy of this rule living in the
+     * follow-up domain is exactly how two subsystems start disagreeing about
+     * whether a message is permitted.
+     */
+    public function insideFreeFormWindow(ReminderRecipient $recipient): bool
     {
         $hours = max(0, (int) config('reminders.whatsapp.free_form_window_hours', 24));
 
@@ -101,21 +110,43 @@ final class ReminderDeliveryPolicy
     }
 
     /**
-     * The approved template, or null while none is configured. No template name
-     * is ever invented here: `ready` stays false and `name` stays empty until a
-     * real one has been approved on the provider side and put in the
-     * environment.
+     * The approved template for THIS reminder, or null while none is configured.
+     *
+     * TWO TEMPLATE IDENTITIES, NOT ONE. A follow-up ask is a QUESTION — «دفعت
+     * الفاتورة؟» — and Meta approves templates one at a time: the reminder
+     * template is not semantically approved for asking a question, and sending it
+     * anyway would put unapproved words in front of a subscriber. So a follow-up
+     * ask reads its own configuration identity, and an ordinary reminder reads
+     * exactly what it always read.
+     *
+     * No template name is ever invented here, for either kind: `ready` stays
+     * false and `name` stays empty until a real one has been approved on the
+     * provider side and put in the environment.
      *
      * @return array{name: string, language: string}|null
      */
-    private function configuredTemplate(): ?array
+    private function configuredTemplate(Reminder $reminder): ?array
     {
-        if (! (bool) config('reminders.whatsapp.template.ready', false)) {
+        return $reminder->isFollowUpAsk()
+            ? self::template('follow_ups.whatsapp.template')
+            : self::template('reminders.whatsapp.template');
+    }
+
+    /** Is an approved FOLLOW-UP template configured? Read by the materialiser and the launch gate. */
+    public function hasFollowUpTemplate(): bool
+    {
+        return self::template('follow_ups.whatsapp.template') !== null;
+    }
+
+    /** @return array{name: string, language: string}|null */
+    private static function template(string $prefix): ?array
+    {
+        if (! (bool) config($prefix.'.ready', false)) {
             return null;
         }
 
-        $name = trim((string) config('reminders.whatsapp.template.name', ''));
-        $language = trim((string) config('reminders.whatsapp.template.language', ''));
+        $name = trim((string) config($prefix.'.name', ''));
+        $language = trim((string) config($prefix.'.language', ''));
 
         return $name === '' || $language === '' ? null : ['name' => $name, 'language' => $language];
     }

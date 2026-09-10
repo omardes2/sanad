@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Support\Tools;
 
+use App\Enums\FollowUpAnswer;
+use App\Enums\FollowUpStatus;
 use App\Enums\MemoryCategory;
 use App\Enums\ReminderCancelScope;
 use App\Enums\ReminderPattern;
@@ -12,6 +14,7 @@ use App\Enums\ToolCapability;
 use App\Enums\ToolFieldType;
 use App\Enums\ToolSideEffect;
 use App\Exceptions\Tools\ToolDefinitionException;
+use App\Services\FollowUps\FollowUpService;
 use App\Services\Memory\MemoryService;
 use App\Services\Reminders\ReminderScheduleService;
 
@@ -370,6 +373,122 @@ class ToolRegistry
                     ToolField::of('schedule_id', ToolFieldType::Integer, required: true, max: 999999999),
                     ToolField::of('scope', ToolFieldType::Enum, required: true, options: ReminderCancelScope::values()),
                     ToolField::of('cancelled_occurrences', ToolFieldType::Integer, required: true, max: 999999),
+                    ToolField::of('terminated', ToolFieldType::Boolean, required: true),
+                ]),
+            ),
+            /*
+             * FOLLOW-UP IS ITS OWN OBJECT, with its own tools and its own
+             * capability. A reminder is a message the subscriber asked for at a
+             * time they chose; a follow-up is Sanad coming BACK to an unanswered
+             * question of its own accord, up to a bounded number of times. A
+             * `follow_up_id` is never interchangeable with a `reminder_id`: one
+             * names a loop, the other names a single ask that can be claimed,
+             * delivered and cancelled on its own.
+             */
+            ToolDefinition::of(
+                key: 'follow_up.create', version: 1,
+                title: 'متابعة حتى الإنجاز',
+                summary: 'يفتح متابعة على أمر لم يُحسم بعد، ويسأل المشترك عنه في وقت طلبه هو. لا يُنفَّذ إلا إذا طلب المشترك المتابعة صريحًا وحدَّد وقتًا؛ وإن لم يحدِّد وقتًا فاسأله ولا تفترض.',
+                capability: ToolCapability::FollowUpsWrite,
+                // A local, reversible definition row. It sends nothing and creates
+                // no ask — materialisation does that separately — the same
+                // reasoning that made `reminder_schedule.create@1` a `write`.
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    // What is being followed up on, in the subscriber's words.
+                    ToolField::of('question', ToolFieldType::String, required: true, max: 200),
+                    /*
+                     * REQUIRED, ABSOLUTE, AND THE SUBSCRIBER'S OWN. The schema
+                     * cannot be satisfied without a time, and the domain refuses
+                     * unless the subscriber's message actually carried one — so
+                     * there is no path by which a default (tomorrow, +24h, "after
+                     * the expected outcome") becomes a proactive message at an
+                     * hour nobody chose.
+                     */
+                    ToolField::of('first_ask_at', ToolFieldType::DateTime, required: true),
+                    // An optional link: completing that task closes the loop
+                    // without asking the subscriber what they have already done.
+                    ToolField::of('task_id', ToolFieldType::Integer, required: false, max: 999999999),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('follow_up_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    // The subscriber's own wall clock, and the bound they are
+                    // inside — both facts they may reasonably be told.
+                    ToolField::of('first_ask_local', ToolFieldType::String, required: true, max: 20),
+                    ToolField::of('max_asks', ToolFieldType::Integer, required: true, max: 20),
+                ]),
+                rateLimitPerHour: 20,
+            ),
+            ToolDefinition::of(
+                key: 'follow_up.list', version: 1,
+                title: 'عرض المتابعات المفتوحة',
+                summary: 'يعيد متابعات المشترك نفسه المفتوحة ضمن حدّ معلن. قراءة فقط: لا يكتب ولا يرسل شيئًا.',
+                // A SEPARATE capability from writing: listing what already exists
+                // is narrower than licensing Sanad to ask again.
+                capability: ToolCapability::FollowUpsRead,
+                sideEffect: ToolSideEffect::Read,
+                input: ToolSchema::of([
+                    ToolField::of('limit', ToolFieldType::Integer, required: false, max: FollowUpService::LIST_MAX),
+                    ToolField::of('include_closed', ToolFieldType::Boolean, required: false),
+                ]),
+                /*
+                 * WHY THIS TOOL IS REQUIRED FOR V1. Days later the subscriber says
+                 * «شو الأشياء اللي لسا بتتابع معي عليها؟» or «وقف متابعة البنك».
+                 * Without a bounded, subscriber-owned way to discover which loop
+                 * that is, the model would have to remember an id from an old turn
+                 * or invent one — and an invented id cancels someone's real loop.
+                 * The ids here come from the subscriber's own rows and nowhere else.
+                 */
+                output: ToolSchema::of([
+                    ToolField::of('follow_ups', ToolFieldType::ListOfRows, required: true, max: FollowUpService::LIST_MAX, items: ToolSchema::of([
+                        ToolField::of('follow_up_id', ToolFieldType::Integer, required: true, max: 999999999),
+                        ToolField::of('question', ToolFieldType::String, required: true, max: 200),
+                        ToolField::of('status', ToolFieldType::Enum, required: true, options: FollowUpStatus::values()),
+                        ToolField::of('asks_used', ToolFieldType::Integer, required: true, max: 20),
+                        ToolField::of('max_asks', ToolFieldType::Integer, required: true, max: 20),
+                        ToolField::of('next_ask_local', ToolFieldType::String, required: false, max: 20),
+                    ])),
+                    ToolField::of('truncated', ToolFieldType::Boolean, required: true),
+                ]),
+                maxRetries: 2,
+            ),
+            ToolDefinition::of(
+                key: 'follow_up.resolve', version: 1,
+                title: 'إنهاء متابعة بجواب المشترك',
+                summary: 'يسجّل جواب المشترك على سؤال متابعة: أُنجز فتُغلَق، أو لسا فتبقى مفتوحة. لا يُنفَّذ إلا إذا كان كلام المشترك نفسه يدعم الجواب ومرتبطًا بالسؤال.',
+                capability: ToolCapability::FollowUpsWrite,
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    ToolField::of('follow_up_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    /*
+                     * The model may PROPOSE one of two outcomes; the server decides
+                     * whether the subscriber's correlated message supports it.
+                     * `cancel` is deliberately NOT proposable here — stopping a
+                     * loop is `follow_up.cancel@1`, so one tool does not quietly
+                     * serve two very different intentions.
+                     */
+                    ToolField::of('outcome', ToolFieldType::Enum, required: true, options: FollowUpAnswer::proposable()),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('follow_up_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    ToolField::of('status', ToolFieldType::Enum, required: true, options: FollowUpStatus::values()),
+                    ToolField::of('resolved', ToolFieldType::Boolean, required: true),
+                ]),
+            ),
+            ToolDefinition::of(
+                key: 'follow_up.cancel', version: 1,
+                title: 'إيقاف متابعة',
+                summary: 'يوقف متابعة للمشترك نفسه ويلغي سؤالها غير المُرسَل. لا يمسّ سؤالًا قيد الإرسال أو أُرسل.',
+                capability: ToolCapability::FollowUpsWrite,
+                sideEffect: ToolSideEffect::Write,
+                input: ToolSchema::of([
+                    ToolField::of('follow_up_id', ToolFieldType::Integer, required: true, max: 999999999),
+                ]),
+                output: ToolSchema::of([
+                    ToolField::of('follow_up_id', ToolFieldType::Integer, required: true, max: 999999999),
+                    ToolField::of('cancelled_asks', ToolFieldType::Integer, required: true, max: 999999),
+                    // Honest about an idempotent repeat: the loop is stopped, and
+                    // this call is not the one that stopped it.
                     ToolField::of('terminated', ToolFieldType::Boolean, required: true),
                 ]),
             ),

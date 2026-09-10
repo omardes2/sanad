@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support\Tools;
 
 use App\Models\Message;
+use App\Support\FollowUps\ExplicitFollowUpIntent;
 use App\Support\Memory\ExplicitMemoryIntent;
 
 /**
@@ -38,6 +39,15 @@ final class ToolIntentRequirements
         // («بطلت أحب القهوة») as permission would archive a fact nobody asked it
         // to touch.
         'memory.forget@1' => [ExplicitMemoryIntent::class, 'forgetPresent'],
+        /*
+         * A follow-up is a LICENCE TO SPEAK LATER, unprompted and more than once.
+         * The model proposing one is a suggestion, not authority: «بكرا بدفع
+         * الفاتورة» must not become days of messages because the model judged it
+         * helpful. Ending a loop is deliberately NOT gated — stopping unsolicited
+         * messages is the safe direction, and a subscriber who phrases it oddly
+         * must still be able to stop them.
+         */
+        'follow_up.create@1' => [ExplicitFollowUpIntent::class, 'present'],
     ];
 
     public static function required(ToolKey $key): bool

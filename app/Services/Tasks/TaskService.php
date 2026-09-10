@@ -8,6 +8,7 @@ use App\Enums\TaskStatus;
 use App\Exceptions\Tools\ToolDomainException;
 use App\Models\Task;
 use App\Models\User;
+use App\Services\FollowUps\FollowUpService;
 use Carbon\CarbonImmutable;
 
 /**
@@ -52,6 +53,8 @@ final class TaskService
         return ['task_id' => (int) $task->getKey()];
     }
 
+    public function __construct(private readonly FollowUpService $followUps) {}
+
     /**
      * Mark the subscriber's own task complete.
      *
@@ -86,6 +89,18 @@ final class TaskService
 
         $now = CarbonImmutable::now('UTC');
         $task->forceFill(['status' => TaskStatus::Completed->value, 'completed_at' => $now])->save();
+
+        /*
+         * A FOLLOW-UP ATTACHED TO THIS TASK IS NOW ANSWERED BY ACTION.
+         *
+         * The subscriber completed the thing, so asking «خلصت؟» afterwards would
+         * be asking a question they have already answered — and the ask would cost
+         * an approved-template message to say nothing. Idempotent and silent when
+         * nothing is linked, which is the overwhelmingly common case: it closes
+         * only loops whose `task_id` is THIS task and whose owner is this
+         * subscriber, and closing an already-closed loop does nothing.
+         */
+        $this->followUps->resolveByTask($subscriber, (int) $task->getKey());
 
         return self::result($task->getKey(), $now);
     }

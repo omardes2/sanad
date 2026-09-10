@@ -26,6 +26,19 @@ enum PlanFeature: string
     case Voice = 'voice';
     case Images = 'images';
     case Reminders = 'reminders';
+
+    /**
+     * Following up until a loop closes (Phase H3).
+     *
+     * A SEPARATE entitlement from `Reminders`, and deliberately so: a reminder
+     * fires at a time the subscriber chose and is finished when it is sent, while
+     * a follow-up is Sanad asking — repeatedly, within a bound — about something
+     * whose outcome it does not know. That is a distinct product capability, it
+     * carries its own external template dependency, and it must be packageable on
+     * its own rather than riding in on reminders.
+     */
+    case FollowUp = 'follow_up';
+
     case Tasks = 'tasks';
     case Calls = 'calls';
     case Priority = 'priority';
@@ -40,6 +53,7 @@ enum PlanFeature: string
             self::Voice => 'الرسائل الصوتية',
             self::Images => 'الصور',
             self::Reminders => 'التذكيرات',
+            self::FollowUp => 'المتابعة حتى الإنجاز',
             self::Tasks => 'المهام',
             self::Calls => 'المكالمات',
             self::Priority => 'الأولوية',

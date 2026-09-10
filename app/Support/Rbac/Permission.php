@@ -100,6 +100,17 @@ enum Permission: string
     case MessagesContentView = 'messages.content.view';
 
     /** Subscriber tasks. */
+    /**
+     * Follow-up METADATA: which loops exist, their state, how much of the ask
+     * budget is spent, when the next ask is due.
+     *
+     * It deliberately does NOT carry the subscriber-authored question text. The
+     * metadata answers the operational questions ("why did Sanad ask twice?",
+     * "why is this loop held?") without reading what the subscriber said, which is
+     * the same split `conversations.view` and `messages.content.view` already draw.
+     */
+    case FollowUpsView = 'follow_ups.view';
+
     case TasksView = 'tasks.view';
 
     /** Operating expenses. */
@@ -148,6 +159,7 @@ enum Permission: string
             self::RemindersDeliveryView => 'عرض تفاصيل تسليم التذكيرات',
             self::ConversationsView => 'عرض بيانات المحادثات الوصفية',
             self::MessagesContentView => 'عرض محتوى الرسائل',
+            self::FollowUpsView => 'عرض المتابعات (بيانات وصفية بلا نصّ سؤال المشترك)',
             self::TasksView => 'عرض المهام',
             self::ExpensesView => 'عرض المصروفات',
             self::WhatsAppStatusView => 'عرض حالة واتساب والطوابير',

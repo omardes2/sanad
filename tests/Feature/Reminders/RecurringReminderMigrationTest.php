@@ -22,10 +22,10 @@ uses(RefreshDatabase::class);
  * delivery path cannot tell the difference — which is exactly why the dispatcher
  * needed no change.
  */
-it('is the 66th and last migration, adds only the recurrence columns, and rolls back and forward cleanly', function () {
+it('is the 66th migration, adds only the recurrence columns, and rolls back and forward cleanly', function () {
     $files = glob(database_path('migrations/*.php'));
 
-    expect($files)->toHaveCount(66)
+    expect($files)->toHaveCount(67)
         ->and(basename($files[65]))->toBe('2026_09_12_000101_create_reminder_schedules_and_occurrences.php')
         ->and(Schema::hasTable('reminder_schedules'))->toBeTrue()
         ->and(Schema::hasColumn('reminders', 'reminder_schedule_id'))->toBeTrue()
@@ -56,11 +56,14 @@ it('is the 66th and last migration, adds only the recurrence columns, and rolls 
 
     expect($occurrences)->toBeGreaterThan(0);
 
-    Artisan::call('migrate:rollback', ['--step' => 1, '--force' => true]);
+    // TWO steps: the follow-up migration now sits on top of the recurrence one,
+    // and it is the recurrence one this test is about.
+    Artisan::call('migrate:rollback', ['--step' => 2, '--force' => true]);
 
     expect(Schema::hasTable('reminder_schedules'))->toBeFalse()
         ->and(Schema::hasColumn('reminders', 'reminder_schedule_id'))->toBeFalse()
         ->and(Schema::hasColumn('reminders', 'occurrence_key'))->toBeFalse()
+        ->and(Schema::hasColumn('reminders', 'follow_up_id'))->toBeFalse()
         // Every earlier phase survives, and so do the reminder rows themselves.
         ->and(Schema::hasTable('reminders'))->toBeTrue()
         ->and(Schema::hasColumn('reminders', 'claim_token'))->toBeTrue()
@@ -73,7 +76,7 @@ it('is the 66th and last migration, adds only the recurrence columns, and rolls 
 
     expect(Schema::hasTable('reminder_schedules'))->toBeTrue()
         ->and(Schema::hasIndex('reminders', 'reminders_schedule_occurrence_unique'))->toBeTrue()
-        ->and(DB::table('migrations')->count())->toBe(66)
+        ->and(DB::table('migrations')->count())->toBe(67)
         // Rows that pre-date the columns are simply not occurrences.
         ->and(DB::table('reminders')->whereNull('reminder_schedule_id')->count())->toBe($occurrences);
 });

@@ -28,17 +28,6 @@ use App\Data\Launch\GateOutcome;
  */
 final class FeatureChecks
 {
-    public static function followUpUntilDone(): GateOutcome
-    {
-        return GateOutcome::notImplemented(
-            'المتابعة حتى الإنجاز (Follow-Up Until Done) غير منفَّذة.',
-            [
-                GateDetail::bad('التنفيذ', 'لا يوجد مسار متابعة في app/'),
-                GateDetail::plain('المطلوب', 'سياسة متابعة محدودة بلا إزعاج + شرط توقّف صريح'),
-            ],
-        );
-    }
-
     public static function morningBrief(): GateOutcome
     {
         return GateOutcome::notImplemented(

@@ -7,6 +7,7 @@ namespace App\Support\Launch;
 use App\Enums\LaunchGateOwner;
 use App\Services\Launch\Checks\AiChecks;
 use App\Services\Launch\Checks\FeatureChecks;
+use App\Services\Launch\Checks\FollowUpChecks;
 use App\Services\Launch\Checks\MemoryChecks;
 use App\Services\Launch\Checks\PaymentChecks;
 use App\Services\Launch\Checks\PlatformChecks;
@@ -87,8 +88,23 @@ final class LaunchGateRegistry
             'title' => 'المتابعة حتى الإنجاز',
             'owner' => LaunchGateOwner::Sanad,
             'required' => true,
-            'why' => 'نطاق V1 يشترط متابعة تعمل بلا إزعاج.',
-            'check' => [FeatureChecks::class, 'followUpUntilDone'],
+            'why' => 'نطاق V1 يشترط متابعة تعمل بلا إزعاج: سؤال محدود بميزانية، وإغلاق بجواب المشترك لا بالصمت.',
+            'check' => [FollowUpChecks::class, 'followUp'],
+        ],
+        [
+            /*
+             * A SEPARATE external dependency from `reminders.template`. A
+             * follow-up ask is a question and Meta approves templates one at a
+             * time, so the reminder template being live says nothing about whether
+             * Sanad may ask «دفعت الفاتورة؟». Collapsing the two would hide which
+             * approval is actually missing.
+             */
+            'key' => 'follow_up.template',
+            'title' => 'قالب واتساب للمتابعة',
+            'owner' => LaunchGateOwner::Meta,
+            'required' => true,
+            'why' => 'سؤال المتابعة يحين بعد صمت المحادثة، فالآلية المسموح بها قالب معتمَد — وقالب التذكيرات ليس معتمَدًا لسؤال.',
+            'check' => [FollowUpChecks::class, 'template'],
         ],
         [
             'key' => 'brief.morning',

@@ -40,6 +40,7 @@
             ['route' => 'dashboard.messages', 'label' => 'الرسائل', 'icon' => '✉️', 'can' => 'messages.content.view', 'legacy' => true],
             ['route' => 'dashboard.tasks', 'label' => 'المهام', 'icon' => '✅', 'can' => 'tasks.view', 'legacy' => true],
             ['route' => 'dashboard.reminders', 'label' => 'التذكيرات', 'icon' => '⏰', 'can' => 'reminders.view', 'legacy' => true],
+            ['route' => 'dashboard.follow_ups', 'label' => 'المتابعات', 'icon' => '🔁', 'can' => 'follow_ups.view', 'legacy' => true],
             ['route' => 'dashboard.memory', 'label' => 'الذاكرة الدائمة', 'icon' => '🧩', 'can' => 'memory.operations.view'],
         ],
         'المالية' => [

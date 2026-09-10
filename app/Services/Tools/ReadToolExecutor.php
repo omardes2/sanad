@@ -18,6 +18,7 @@ use App\Exceptions\Tools\ToolRuleException;
 use App\Models\Message;
 use App\Models\ToolInvocation;
 use App\Models\User;
+use App\Services\FollowUps\FollowUpService;
 use App\Services\Memory\MemoryService;
 use App\Services\Reminders\ReminderScheduleService;
 use App\Services\Tasks\TaskReader;
@@ -71,6 +72,9 @@ final class ReadToolExecutor
         // Discovery, not content: which recurring series the subscriber owns, so
         // the model can tell which one they mean days after creating it.
         'reminder_schedule.list@1' => [ReminderScheduleService::class, 'list'],
+        // Discovery, so «وقف متابعة البنك» can name a real loop instead of an id
+        // the model remembered or invented.
+        'follow_up.list@1' => [FollowUpService::class, 'list'],
     ];
 
     public function __construct(

@@ -148,7 +148,10 @@ it('reads a forget instruction only from an instruction, never from a contradict
 });
 
 it('requires an intent only where a tool declares one, and every other tool is untouched', function () {
-    expect(ToolIntentRequirements::keys())->toBe(['memory.write@1', 'memory.forget@1'])
+    // Phase H3 added a third: a follow-up is a licence to speak later, unprompted
+    // and more than once, so creating one declares an intent of its own — with a
+    // DISJOINT phrase set, which the follow-up intent test proves separately.
+    expect(ToolIntentRequirements::keys())->toBe(['memory.write@1', 'memory.forget@1', 'follow_up.create@1'])
         ->and(ToolIntentRequirements::required(ToolKey::of('memory.write', 1)))->toBeTrue()
         ->and(ToolIntentRequirements::required(ToolKey::of('memory.forget', 1)))->toBeTrue();
 

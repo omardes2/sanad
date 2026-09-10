@@ -86,3 +86,23 @@ Schedule::command('sanad:reminders:materialise')
     ->withoutOverlapping()
     ->when(static fn (): bool => (bool) config('reminders.enabled', true)
         && (bool) config('reminders.recurrence.enabled', true));
+
+/*
+| Follow-Up Until Done: ASK CREATION AND STATE ADVANCE ONLY.
+|
+| It creates the ask a due loop owes, moves a loop to `awaiting_answer` once
+| reminder truth says an ask left the platform, holds a loop whose approved
+| follow-up template is missing, and retires one whose ask budget is spent. It
+| never delivers, claims, settles or resolves: an ask is an ordinary reminder, so
+| `dispatch` and `sweep` above handle it without knowing follow-ups exist.
+|
+| Correctness does not depend on `withoutOverlapping`: two concurrent runs cannot
+| duplicate an ask (UNIQUE (follow_up_id, ask_index) decides that) and cannot
+| create one after a loop is resolved or cancelled (status and version are
+| re-read under a row lock). The guard is there to save work, not to be right.
+*/
+Schedule::command('sanad:follow-ups:materialise')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->when(static fn (): bool => (bool) config('reminders.enabled', true)
+        && (bool) config('follow_ups.enabled', true));

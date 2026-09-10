@@ -8,6 +8,7 @@ use App\Data\Tools\ToolCallRequest;
 use App\Data\Tools\ToolClaim;
 use App\Data\Tools\ToolInvocationResult;
 use App\Enums\ChannelType;
+use App\Enums\FollowUpAnswer;
 use App\Enums\ReminderCancelScope;
 use App\Enums\ToolInvocationFailureKind;
 use App\Enums\ToolInvocationRefusalReason;
@@ -18,6 +19,7 @@ use App\Exceptions\Tools\ToolRuleException;
 use App\Models\Conversation;
 use App\Models\ToolInvocation;
 use App\Models\User;
+use App\Services\FollowUps\FollowUpService;
 use App\Services\Memory\MemoryService;
 use App\Services\Reminders\ReminderScheduleService;
 use App\Services\Reminders\ReminderService;
@@ -69,6 +71,9 @@ final class WriteToolExecutor
         'reminder.cancel@1' => [ReminderService::class, 'cancel'],
         'reminder_schedule.create@1' => [ReminderScheduleService::class, 'create'],
         'reminder_schedule.cancel@1' => [ReminderScheduleService::class, 'cancel'],
+        'follow_up.create@1' => [FollowUpService::class, 'create'],
+        'follow_up.resolve@1' => [FollowUpService::class, 'resolve'],
+        'follow_up.cancel@1' => [FollowUpService::class, 'cancel'],
     ];
 
     public function __construct(
@@ -201,6 +206,21 @@ final class WriteToolExecutor
                 (int) $values['schedule_id'],
                 ReminderCancelScope::from((string) $values['scope']),
             ),
+            /*
+             * These two receive the MESSAGE ITSELF, not just its id, and that is
+             * deliberate: their authority is stored evidence in the subscriber's
+             * own words — that a definite time was given, and that a reply
+             * actually says what the model claims it says. An id would force the
+             * domain to re-fetch the row it is about to reason over.
+             */
+            'follow_up.create@1' => $service->{$method}($subscriber, $values, $this->channel($request), $request->message),
+            'follow_up.resolve@1' => $service->{$method}(
+                $subscriber,
+                (int) $values['follow_up_id'],
+                FollowUpAnswer::from((string) $values['outcome']),
+                $request->message,
+            ),
+            'follow_up.cancel@1' => $service->{$method}($subscriber, (int) $values['follow_up_id']),
         };
     }
 

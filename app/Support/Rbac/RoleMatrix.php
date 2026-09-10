@@ -65,6 +65,7 @@ final class RoleMatrix
                 Permission::MemoryOperationsView,
                 Permission::RemindersView,
                 Permission::RemindersDeliveryView,
+                Permission::FollowUpsView,
                 Permission::ConversationsView,
                 Permission::MessagesContentView,
                 Permission::TasksView,
@@ -103,6 +104,9 @@ final class RoleMatrix
                 // The reminder's schedule and status, so Support can answer
                 // "did my reminder go out?" — WITHOUT the delivery internals.
                 Permission::RemindersView,
+                // "Why did Sanad ask me about this twice?" is a support question,
+                // and the metadata answers it without the question text.
+                Permission::FollowUpsView,
                 // Conversation metadata only. Message BODIES are deliberately
                 // withheld: see the class docblock.
                 Permission::ConversationsView,
