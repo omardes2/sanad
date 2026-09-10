@@ -201,11 +201,13 @@ return [
             'connection' => 'redis',
             // All application queues Horizon must drain automatically. The
             // WhatsApp webhook pipeline uses "webhooks" (envelope processing)
-            // and "messages" (reply delivery); without them listed here Horizon
-            // silently ignores those queues and jobs pile up unconsumed. Order
-            // is priority order: inbound webhooks first, then replies, then the
-            // catch-all default.
-            'queue' => ['webhooks', 'messages', 'default'],
+            // and "messages" (reply delivery); "voice" carries transcription,
+            // which waits on two external services and would otherwise delay
+            // every subscriber's reply from behind one slow voice note.
+            // Without a queue listed here Horizon silently ignores it and jobs
+            // pile up unconsumed. Order is priority order: inbound webhooks
+            // first, then replies, then transcription, then the catch-all.
+            'queue' => ['webhooks', 'messages', 'voice', 'default'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 1,

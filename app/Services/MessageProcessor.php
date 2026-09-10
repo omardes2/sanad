@@ -9,8 +9,11 @@ use App\Data\ProcessResult;
 use App\Enums\ConversationStatus;
 use App\Enums\MessageDirection;
 use App\Enums\MessageProcessingStatus;
+use App\Enums\MessageType;
 use App\Enums\ProcessOutcome;
+use App\Enums\TranscriptionStatus;
 use App\Jobs\ProcessInboundMessage;
+use App\Jobs\TranscribeVoiceNote;
 use App\Models\ChannelAccount;
 use App\Models\Conversation;
 use App\Models\Message;
@@ -65,7 +68,7 @@ class MessageProcessor
                     'media_path' => $data->media['path'] ?? null,
                     'metadata' => $data->metadata,
                     'processing_status' => MessageProcessingStatus::Queued,
-                ]);
+                ] + $this->voiceAttributes($data));
 
                 $conversation->forceFill(['last_message_at' => $message->created_at])->save();
 
@@ -86,9 +89,18 @@ class MessageProcessor
         if ($result->accepted() && $result->message !== null) {
             // Dispatch only after the transaction has committed so the worker
             // never races ahead of the row it needs.
-            ProcessInboundMessage::dispatch($result->message->id)
-                ->onQueue('messages')
-                ->afterCommit();
+            //
+            // A voice note has no text yet, so it goes to transcription FIRST
+            // and reaches the ordinary reply path only once it has words. It is
+            // the same message row throughout — the transcript is not a second
+            // message, and the subscriber gets exactly one answer either way.
+            if ($result->message->isVoiceNote()) {
+                TranscribeVoiceNote::dispatch($result->message->id)->afterCommit();
+            } else {
+                ProcessInboundMessage::dispatch($result->message->id)
+                    ->onQueue('messages')
+                    ->afterCommit();
+            }
 
             Log::info('sanad.inbound.accepted', $this->logContext($data) + [
                 'message_id' => $result->message->id,
@@ -98,6 +110,47 @@ class MessageProcessor
         }
 
         return $result;
+    }
+
+    /**
+     * The voice-note columns for an inbound audio message.
+     *
+     * Only the FACTS the channel reported are recorded here — the provider's
+     * media reference, the MIME type it declared, and `pending`. Not one policy
+     * decision is made: whether this audio may be transcribed at all depends on
+     * the subscriber's plan, the configured limits and the bytes themselves,
+     * and all of that belongs in one place (the transcription job) with one
+     * bounded vocabulary of reasons. Ingestion's only job is that the message
+     * EXISTS, so whatever is decided later can be recorded against it.
+     *
+     * `media_path` is deliberately not set: nothing has been downloaded, and
+     * what eventually is gets deleted seconds later.
+     *
+     * @return array<string, mixed>
+     */
+    private function voiceAttributes(InboundMessageData $data): array
+    {
+        if ($data->type !== MessageType::Audio) {
+            return [];
+        }
+
+        $mediaId = trim((string) ($data->media['id'] ?? ''));
+
+        if ($mediaId === '') {
+            // Audio with no retrievable reference. There is nothing to fetch
+            // and nothing to transcribe, so it is not marked pending — that
+            // would queue work that could never succeed.
+            return [];
+        }
+
+        $mimeType = $data->media['mime_type'] ?? null;
+
+        return [
+            'voice_media_id' => $mediaId,
+            'voice_mime_type' => is_string($mimeType) && $mimeType !== '' ? $mimeType : null,
+            'transcription_status' => TranscriptionStatus::Pending,
+            'transcription_attempts' => 0,
+        ];
     }
 
     private function resolveConversation(ChannelAccount $account): Conversation

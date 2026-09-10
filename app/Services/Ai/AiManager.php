@@ -6,7 +6,7 @@ namespace App\Services\Ai;
 
 use App\Contracts\Ai\AiProvider;
 use App\Exceptions\Ai\AiConfigurationException;
-use App\Providers\Ai\GroqChatProvider;
+use App\Providers\Ai\GroqProvider;
 use App\Providers\Ai\OpenAIProvider;
 use App\Services\Ai\Routing\RoutingPreference;
 use App\Services\Credentials\ProviderRuntimeConfigFactory;
@@ -97,7 +97,7 @@ class AiManager
 
         return match ($name) {
             'openai' => new OpenAIProvider($name, $config),
-            'groq' => new GroqChatProvider($name, $config),
+            'groq' => new GroqProvider($name, $config),
             // 'gemini' => new GeminiChatProvider($name, $config),
             // 'ollama' => new OllamaChatProvider($name, $config),
             default => throw AiConfigurationException::unknownProvider($name),

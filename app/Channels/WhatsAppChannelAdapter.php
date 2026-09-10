@@ -68,18 +68,66 @@ class WhatsAppChannelAdapter implements ChannelAdapter
             externalUserId: $e164,
             type: $type,
             text: $text !== null ? (string) $text : null,
-            media: null,
+            media: $type === MessageType::Audio ? $this->audioMedia($message) : null,
             metadata: [
                 'provider' => 'whatsapp',
                 'phone_number_id' => $metadata['phone_number_id'] ?? null,
                 'waba_id' => $payload['waba_id'] ?? null,
                 'profile_name' => $this->profileName($contacts, $from),
                 'wa_timestamp' => $message['timestamp'] ?? null,
+                // WhatsApp's own distinction between something the subscriber
+                // SPOKE and an audio file they attached. It lives in metadata
+                // rather than in the media descriptor because metadata is what
+                // is persisted verbatim with the message, and the decision that
+                // needs this fact is taken much later, in another process.
+                'voice' => $type === MessageType::Audio ? $this->isVoiceNote($message) : null,
             ],
             receivedAt: isset($message['timestamp'])
                 ? CarbonImmutable::createFromTimestamp((int) $message['timestamp'])
                 : CarbonImmutable::now(),
         );
+    }
+
+    /**
+     * The NORMALIZED descriptor for an inbound audio message.
+     *
+     * WhatsApp hands over a media REFERENCE, not bytes: an id to be exchanged
+     * for a short-lived download URL later. That reference is all the pipeline
+     * stores, and `path` is deliberately absent — nothing has been downloaded
+     * yet, and by the time transcription is done the audio is gone again.
+     *
+     * @param  array<string, mixed>  $message
+     * @return array<string, mixed>|null
+     */
+    private function audioMedia(array $message): ?array
+    {
+        $audio = is_array($message['audio'] ?? null) ? $message['audio'] : [];
+        $id = trim((string) ($audio['id'] ?? ''));
+
+        if ($id === '') {
+            return null;    // An audio message with no reference is unusable.
+        }
+
+        return [
+            'id' => $id,
+            'mime_type' => trim((string) ($audio['mime_type'] ?? '')) ?: null,
+        ];
+    }
+
+    /**
+     * Whether WhatsApp flagged this audio as a recorded voice note.
+     *
+     * Passed through as a FACT, never interpreted here: whether a non-voice
+     * audio message is refused is a policy question, and policy does not belong
+     * in a transport adapter.
+     *
+     * @param  array<string, mixed>  $message
+     */
+    private function isVoiceNote(array $message): bool
+    {
+        $audio = is_array($message['audio'] ?? null) ? $message['audio'] : [];
+
+        return filter_var($audio['voice'] ?? false, FILTER_VALIDATE_BOOL);
     }
 
     /**

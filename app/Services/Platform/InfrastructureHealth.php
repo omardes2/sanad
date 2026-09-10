@@ -30,7 +30,7 @@ use Throwable;
 class InfrastructureHealth
 {
     /** The queues this platform actually dispatches onto. */
-    public const QUEUES = ['webhooks', 'messages', 'default'];
+    public const QUEUES = ['webhooks', 'messages', 'voice', 'default'];
 
     /** 'running' | 'inactive' | 'unavailable' — never throws. */
     public function horizon(): string

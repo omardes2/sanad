@@ -202,11 +202,16 @@ return [
             'project' => env('OPENAI_PROJECT'),
         ],
 
-        // Optional / fallback provider (OpenAI-compatible endpoint).
+        // Optional / fallback provider (OpenAI-compatible endpoint), and the
+        // first transcription provider. `transcription_model` is DELIBERATELY
+        // unset by default: with no model catalogued, `transcription` has no
+        // route and the voice path refuses with a bounded reason instead of
+        // spending money on a model no operator chose. Never default it here.
         'groq' => [
             'base_url' => env('GROQ_BASE_URL', 'https://api.groq.com/openai/v1'),
             'api_key' => env('GROQ_API_KEY'),
             'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+            'transcription_model' => env('GROQ_TRANSCRIPTION_MODEL'),
         ],
 
         // Extension points (implement the provider class when enabling). Gemini
@@ -235,6 +240,17 @@ return [
     |
     |   ['provider' => 'openai', 'model' => 'gpt-4.1-mini',
     |    'capabilities' => ['chat'], 'enabled' => true, 'priority' => 100],
+    |
+    | Capabilities other than 'chat' are catalogued the same way — a voice note
+    | is transcribed by whatever model is catalogued with ['transcription'],
+    | which is why no transcription model name appears anywhere in the code:
+    |
+    |   ['provider' => 'groq', 'model' => '<a transcription model>',
+    |    'capabilities' => ['transcription'], 'enabled' => true, 'priority' => 100],
+    |
+    | When this list is empty, a provider's `transcription_model` (above), if
+    | set, derives the same entry — so a deployment can enable transcription
+    | with one environment variable and no catalog edit.
     |
     | This is not the long-term home of the catalog: providers, models, pricing
     | and routing rules become database-backed and managed from Sanad Admin in a

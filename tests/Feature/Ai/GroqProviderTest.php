@@ -9,13 +9,13 @@ use App\Exceptions\Ai\AiRateLimitException;
 use App\Exceptions\Ai\AiRequestException;
 use App\Exceptions\Ai\AiServerException;
 use App\Exceptions\Ai\AiTimeoutException;
-use App\Providers\Ai\GroqChatProvider;
+use App\Providers\Ai\GroqProvider;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 
-function groqProvider(array $config = []): GroqChatProvider
+function groqProvider(array $config = []): GroqProvider
 {
-    return new GroqChatProvider('groq', array_merge([
+    return new GroqProvider('groq', array_merge([
         'base_url' => 'https://api.groq.com/openai/v1',
         'api_key' => 'test-groq-key',
         'model' => 'llama-3.3-70b-versatile',
