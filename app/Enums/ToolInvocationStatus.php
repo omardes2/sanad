@@ -59,4 +59,33 @@ enum ToolInvocationStatus: string
     {
         return array_map(static fn (self $c): string => $c->value, self::cases());
     }
+
+    public function label(): string
+    {
+        return match ($this) {
+            self::Planned => 'مخطَّط',
+            self::Authorized => 'مُصرَّح',
+            self::Running => 'قيد التنفيذ',
+            self::Succeeded => 'نجح',
+            self::Failed => 'فشل',
+            self::Refused => 'مرفوض',
+            self::TimedOut => 'انتهت مهلته',
+        };
+    }
+
+    /**
+     * Options for an admin dropdown: value => label.
+     *
+     * @return array<string, string>
+     */
+    public static function options(): array
+    {
+        $options = [];
+
+        foreach (self::cases() as $case) {
+            $options[$case->value] = $case->label();
+        }
+
+        return $options;
+    }
 }

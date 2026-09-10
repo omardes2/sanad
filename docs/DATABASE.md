@@ -272,3 +272,29 @@ php artisan db:seed --class=DemoDataSeeder
 
 النماذج في `app/Models`، الـEnums في `app/Enums`، الـFactories في `database/factories`،
 والبيانات التجريبية في `database/seeders/DemoDataSeeder.php`.
+
+## لوحة المشغّل — قراءة فقط، بلا مخطَّط جديد
+
+مرحلة **مواءمة لوحة V1** لم تُضِف أي جدول ولا عمود ولا فهرس: **64 migration كما هي**.
+كل ما تعرضه اللوحة أعمدة موجودة منذ مراحلها، وكل استعلام يستعمل فهرسًا قائمًا:
+
+| القراءة الإدارية | الفهرس المستعمَل (موجود منذ F2) |
+|---|---|
+| استدعاءات الأدوات حسب الحالة ضمن نافذة | `tool_invocations_status_created_idx` |
+| استدعاءات مشترك ضمن نافذة | `tool_invocations_subscriber_created_idx` |
+| بحث بمفتاح التكرار (مطابقة تامة) | `tool_invocations_idempotency_key_unique` |
+| مصفوفة الموافقات حسب القدرة والحالة | `tool_consents_capability_status_idx` |
+| ذاكرات مشترك (بيانات وصفية فقط) | `memories_user_active_importance_idx` |
+
+الدليل في `tests/Feature/Dashboard/PostgresAdminIndexTest.php`: `EXPLAIN (ANALYZE)` على جدول
+واقعي (٤٠ مشتركًا × ٦٠ استدعاءً) يُظهر `Bitmap Index Scan` و`Index Scan` ولا يُظهر
+`Seq Scan on tool_invocations` — ولذلك **لم يُنشَأ migration 65**: فهرس لم يُثبَت أنه لازم
+هو تغيير مخطَّط بلا سبب.
+
+`reminders.last_error` يبقى `text` حرًّا كما هو من Sprint 0. الكاتب الوحيد
+(`ReminderDispatcher`) لا يكتب فيه إلا قيم `ReminderFailureReason`، لكن القراءة تتمّ عبر
+مُلحِق `failureReason()` بـ`tryFrom` **لا cast على النموذج**: الـcast كان سيرمي استثناءً على
+أي صفّ قديم حمل نصًّا حرًّا، وصفحة إدارية يجب ألّا تكون هي ما ينهار على بيانات تاريخية.
+
+**لا يُعرض من هذه الجداول أبدًا:** `memories.content` · `memories.fingerprint` ·
+`reminders.claim_token` · أي مفتاح أو رمز أو سرّ.

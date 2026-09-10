@@ -34,15 +34,23 @@ use App\Livewire\Dashboard\Finance\Reconciliation as FinanceReconciliation;
 use App\Livewire\Dashboard\Finance\ReconciliationScopeDetail as FinanceReconciliationScopeDetail;
 use App\Livewire\Dashboard\Finance\RefundDetail as FinanceRefundDetail;
 use App\Livewire\Dashboard\Finance\Refunds as FinanceRefunds;
+use App\Livewire\Dashboard\LaunchReadiness;
+use App\Livewire\Dashboard\Memory\Operations as MemoryOperations;
+use App\Livewire\Dashboard\Memory\SubscriberMemory;
 use App\Livewire\Dashboard\Messages;
 use App\Livewire\Dashboard\Overview;
 use App\Livewire\Dashboard\Persona;
 use App\Livewire\Dashboard\Plans;
+use App\Livewire\Dashboard\ReminderDetail;
 use App\Livewire\Dashboard\Reminders;
 use App\Livewire\Dashboard\Settings;
 use App\Livewire\Dashboard\SubscriberDetail;
 use App\Livewire\Dashboard\Subscribers;
 use App\Livewire\Dashboard\Tasks;
+use App\Livewire\Dashboard\Tools\ConsentDetail as ToolConsentDetail;
+use App\Livewire\Dashboard\Tools\Consents as ToolConsents;
+use App\Livewire\Dashboard\Tools\InvocationDetail as ToolInvocationDetail;
+use App\Livewire\Dashboard\Tools\Invocations as ToolInvocations;
 use App\Livewire\Dashboard\Usage;
 use App\Livewire\Dashboard\WhatsAppStatus;
 use App\Livewire\Dev\Chat;
@@ -68,12 +76,34 @@ Route::middleware(['auth', 'admin'])
     ->prefix('dashboard')
     ->group(function () {
         Route::get('/', Overview::class)->name('dashboard');
-        Route::get('/conversations', Conversations::class)->name('dashboard.conversations');
-        Route::get('/messages', Messages::class)->name('dashboard.messages');
-        Route::get('/tasks', Tasks::class)->name('dashboard.tasks');
-        Route::get('/reminders', Reminders::class)->name('dashboard.reminders');
-        Route::get('/expenses', Expenses::class)->name('dashboard.expenses');
-        Route::get('/whatsapp', WhatsAppStatus::class)->name('dashboard.whatsapp');
+
+        // Subscriber-facing operational pages. These PRE-DATE RBAC, so they use
+        // `permission.legacy:` — a legacy is_admin account keeps its access
+        // exactly as before, while a role account needs the named permission.
+        // Conversation METADATA and message CONTENT are separate permissions on
+        // purpose: Support may see that a subscriber wrote in, not what they said.
+        Route::get('/conversations', Conversations::class)->middleware('permission.legacy:conversations.view')->name('dashboard.conversations');
+        Route::get('/messages', Messages::class)->middleware('permission.legacy:messages.content.view')->name('dashboard.messages');
+        Route::get('/tasks', Tasks::class)->middleware('permission.legacy:tasks.view')->name('dashboard.tasks');
+        Route::get('/reminders', Reminders::class)->middleware('permission.legacy:reminders.view')->name('dashboard.reminders');
+        Route::get('/reminders/{reminder}', ReminderDetail::class)->middleware('permission.legacy:reminders.view')->whereNumber('reminder')->name('dashboard.reminders.show');
+        Route::get('/expenses', Expenses::class)->middleware('permission.legacy:expenses.view')->name('dashboard.expenses');
+        Route::get('/whatsapp', WhatsAppStatus::class)->middleware('permission.legacy:whatsapp.status.view')->name('dashboard.whatsapp');
+
+        // V1 launch readiness (read-only) and the tool/memory operational
+        // surfaces. These are POST-RBAC pages: strict `permission:`, no legacy
+        // bypass, fail closed.
+        Route::get('/launch-readiness', LaunchReadiness::class)->middleware('permission:launch.readiness.view')->name('dashboard.launch');
+
+        Route::get('/tools/invocations', ToolInvocations::class)->middleware('permission:tools.invocations.view')->name('dashboard.tools.invocations');
+        Route::get('/tools/invocations/{invocation}', ToolInvocationDetail::class)->middleware('permission:tools.invocations.view')->whereNumber('invocation')->name('dashboard.tools.invocations.show');
+        Route::get('/tools/consents', ToolConsents::class)->middleware('permission:tools.consents.view')->name('dashboard.tools.consents');
+        Route::get('/tools/consents/{consent}', ToolConsentDetail::class)->middleware('permission:tools.consents.view')->whereNumber('consent')->name('dashboard.tools.consents.show');
+
+        // Durable memory: OPERATIONAL METADATA ONLY. No route anywhere renders
+        // memory content, and no permission grants it.
+        Route::get('/memory', MemoryOperations::class)->middleware('permission:memory.operations.view')->name('dashboard.memory');
+        Route::get('/memory/{subscriber}', SubscriberMemory::class)->middleware('permission:memory.operations.view')->whereNumber('subscriber')->name('dashboard.memory.subscriber');
 
         // Subscriptions, plans & usage. These pages pre-date RBAC: a legacy
         // is_admin account keeps them, role accounts need the permission.

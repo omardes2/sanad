@@ -1099,6 +1099,9 @@ function f2Cleanup(User $subscriber): void
 
 use App\Enums\ToolCapability;
 use App\Enums\ToolConsentReason;
+use App\Enums\ToolConsentStatus;
+use App\Enums\ToolInvocationStatus;
+use App\Enums\ToolSideEffect;
 use App\Models\Reminder;
 use App\Models\Task;
 use App\Services\Tools\ToolConsentService;
@@ -1147,4 +1150,52 @@ function f3Cleanup(User $subscriber): void
     DB::table('reminders')->where('user_id', $subscriber->id)->delete();
     DB::table('tasks')->where('user_id', $subscriber->id)->delete();
     f2Cleanup($subscriber);
+}
+
+// ---- Admin surface (dashboard alignment) ---------------------------------
+
+/**
+ * Grant a consent the ONLY legal way: as the subscriber themself. Staff cannot
+ * create consent (`ToolAuthorization::assertMayGrantConsent`), so a test fixture
+ * must not pretend otherwise — it acts as the subscriber and then steps back out.
+ */
+function admConsent(User $subscriber, ToolCapability $capability, ToolConsentStatus $status = ToolConsentStatus::Granted): ToolConsent
+{
+    $previous = auth()->user();
+    auth()->setUser($subscriber);
+
+    $consent = app(ToolConsentService::class)->grant($subscriber->id, $capability, 0, ToolConsentReason::SubscriberRequest);
+
+    if ($status === ToolConsentStatus::Revoked) {
+        $consent = app(ToolConsentService::class)->revoke($subscriber->id, $capability, $consent->version, ToolConsentReason::SubscriberRequest);
+    }
+
+    $previous === null ? auth()->forgetUser() : auth()->setUser($previous);
+
+    return $consent->fresh();
+}
+
+/**
+ * One invocation row with defaults that satisfy the PostgreSQL check constraints
+ * (`version >= 1`, `call_index >= 1`, output only when succeeded).
+ */
+function admInvocation(User $subscriber, array $attrs = []): ToolInvocation
+{
+    static $slot = 0;
+    $slot++;
+
+    return ToolInvocation::query()->create(array_merge([
+        'subscriber_id' => $subscriber->id,
+        'tool_key' => 'memory.read',
+        'tool_version' => 2,
+        'capability' => ToolCapability::MemoryRead->value,
+        'side_effect' => ToolSideEffect::Read->value,
+        'idempotency_key' => 'adm:test:'.$slot.':'.uniqid(),
+        'input_hash' => hash('sha256', 'adm'.$slot),
+        'input' => [],
+        'input_fields' => ['query'],
+        'status' => ToolInvocationStatus::Planned->value,
+        'call_index' => 1,
+        'version' => 1,
+    ], $attrs));
 }

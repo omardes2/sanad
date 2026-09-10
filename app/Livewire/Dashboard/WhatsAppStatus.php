@@ -4,14 +4,11 @@ declare(strict_types=1);
 
 namespace App\Livewire\Dashboard;
 
+use App\Services\Platform\InfrastructureHealth;
 use App\Support\WhatsApp\WhatsAppConfig;
-use Illuminate\Support\Facades\Queue;
-use Illuminate\Support\Facades\Redis;
-use Laravel\Horizon\Contracts\MasterSupervisorRepository;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
-use Throwable;
 
 /**
  * Read-only operational view of the WhatsApp integration.
@@ -20,12 +17,16 @@ use Throwable;
  * app secret, verify token, or any credential value. Config presence is
  * reported through WhatsAppConfig's boolean capability checks; the raw
  * values are never read or rendered here.
+ *
+ * The Horizon / Redis / queue-depth probes moved to `InfrastructureHealth` so
+ * the readiness board and this page cannot drift apart about what "healthy"
+ * means.
  */
 #[Title('حالة واتساب | سَنَد')]
 #[Layout('components.layouts.dashboard')]
 class WhatsAppStatus extends Component
 {
-    public function render(WhatsAppConfig $config)
+    public function render(WhatsAppConfig $config, InfrastructureHealth $health)
     {
         return view('livewire.dashboard.whatsapp-status', [
             'enabled' => $config->enabled(),
@@ -40,55 +41,9 @@ class WhatsAppStatus extends Component
             ],
             'canSend' => $config->canSend(),
             'canReceive' => $config->enabled() && $config->canValidateSignature(),
-            'horizon' => $this->horizonStatus(),
-            'redisUp' => $this->redisUp(),
-            'queues' => $this->queueSizes(),
+            'horizon' => $health->horizon(),
+            'redisUp' => $health->redis(),
+            'queues' => $health->queueDepths(),
         ]);
-    }
-
-    /**
-     * 'running' | 'inactive' | 'unavailable' — never throws.
-     */
-    private function horizonStatus(): string
-    {
-        try {
-            $masters = app(MasterSupervisorRepository::class)->all();
-
-            return count($masters) > 0 ? 'running' : 'inactive';
-        } catch (Throwable) {
-            return 'unavailable';
-        }
-    }
-
-    private function redisUp(): bool
-    {
-        try {
-            Redis::connection()->ping();
-
-            return true;
-        } catch (Throwable) {
-            return false;
-        }
-    }
-
-    /**
-     * Pending job counts per known queue. Null means the size could not be read.
-     *
-     * @return array<string, int|null>
-     */
-    private function queueSizes(): array
-    {
-        $queues = ['webhooks', 'messages', 'default'];
-        $sizes = [];
-
-        foreach ($queues as $queue) {
-            try {
-                $sizes[$queue] = Queue::size($queue);
-            } catch (Throwable) {
-                $sizes[$queue] = null;
-            }
-        }
-
-        return $sizes;
     }
 }

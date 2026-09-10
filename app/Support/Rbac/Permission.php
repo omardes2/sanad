@@ -64,6 +64,50 @@ enum Permission: string
 
     case RbacManage = 'rbac.manage';
 
+    /** The V1 launch readiness board (read-only). */
+    case LaunchReadinessView = 'launch.readiness.view';
+
+    /** Tool invocation history: what the model proposed and what the server did. */
+    case ToolsInvocationsView = 'tools.invocations.view';
+
+    /**
+     * Tool consent state. Read-only: REVOKING a consent is authorised by
+     * `subscribers.manage` (ToolCapability::ALLOWED_OPERATOR_PERMISSIONS), and
+     * there is deliberately NO permission that grants consent — only the
+     * subscriber can create it, never staff.
+     */
+    case ToolsConsentsView = 'tools.consents.view';
+
+    /** Durable-memory OPERATIONAL METADATA. Never memory content — no permission grants that. */
+    case MemoryOperationsView = 'memory.operations.view';
+
+    /** Reminder rows and their schedule. */
+    case RemindersView = 'reminders.view';
+
+    /** Delivery internals: failure reason, claim/dispatch stamps, physical attempts. */
+    case RemindersDeliveryView = 'reminders.delivery.view';
+
+    /**
+     * Conversation METADATA — who, which channel, how many messages, when.
+     * Deliberately separate from `messages.content.view`: knowing that a
+     * subscriber wrote in yesterday is a support question; reading what they
+     * wrote is a different one, and least privilege means they are not the same
+     * grant.
+     */
+    case ConversationsView = 'conversations.view';
+
+    /** Message BODIES. Strictly narrower than `conversations.view`. */
+    case MessagesContentView = 'messages.content.view';
+
+    /** Subscriber tasks. */
+    case TasksView = 'tasks.view';
+
+    /** Operating expenses. */
+    case ExpensesView = 'expenses.view';
+
+    /** WhatsApp integration and queue health (presence booleans only). */
+    case WhatsAppStatusView = 'whatsapp.status.view';
+
     public function label(): string
     {
         return match ($this) {
@@ -96,6 +140,17 @@ enum Permission: string
             self::SubscribersView => 'عرض المشتركين',
             self::SubscribersManage => 'إدارة المشتركين',
             self::RbacManage => 'إدارة الأدوار والصلاحيات',
+            self::LaunchReadinessView => 'عرض جاهزية الإطلاق V1',
+            self::ToolsInvocationsView => 'عرض استدعاءات الأدوات',
+            self::ToolsConsentsView => 'عرض موافقات الأدوات',
+            self::MemoryOperationsView => 'عرض البيانات التشغيلية للذاكرة الدائمة',
+            self::RemindersView => 'عرض التذكيرات',
+            self::RemindersDeliveryView => 'عرض تفاصيل تسليم التذكيرات',
+            self::ConversationsView => 'عرض بيانات المحادثات الوصفية',
+            self::MessagesContentView => 'عرض محتوى الرسائل',
+            self::TasksView => 'عرض المهام',
+            self::ExpensesView => 'عرض المصروفات',
+            self::WhatsAppStatusView => 'عرض حالة واتساب والطوابير',
         };
     }
 
