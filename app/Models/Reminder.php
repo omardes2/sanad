@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\ChannelType;
+use App\Enums\ReminderFailureReason;
 use App\Enums\ReminderStatus;
 use Database\Factories\ReminderFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Reminder extends Model
 {
@@ -69,6 +71,49 @@ class Reminder extends Model
     public function sourceMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'source_message_id');
+    }
+
+    /**
+     * The message this reminder was actually delivered as, if any. `reminder_id`
+     * is UNIQUE on `messages`, so there is at most one.
+     *
+     * @return HasOne<Message, $this>
+     */
+    public function deliveredMessage(): HasOne
+    {
+        return $this->hasOne(Message::class, 'reminder_id');
+    }
+
+    /**
+     * `last_error` as the bounded code it actually holds.
+     *
+     * Deliberately an ACCESSOR and not an enum cast. `ReminderDispatcher` is the
+     * only writer and only ever writes `ReminderFailureReason` values, but the
+     * column is free-form `text` from Sprint 0 — so an enum cast would throw on
+     * any row that ever held prose, and an admin page must not be the thing that
+     * crashes on legacy data. Unknown values come back as null here and are
+     * rendered verbatim from `last_error` instead.
+     */
+    public function failureReason(): ?ReminderFailureReason
+    {
+        $value = $this->getAttribute('last_error');
+
+        return is_string($value) && $value !== '' ? ReminderFailureReason::tryFrom($value) : null;
+    }
+
+    /**
+     * Claimed, past its lease, and never settled — the shape a crashed worker
+     * leaves behind. The sweeper recovers these; the dashboard only reports them.
+     */
+    public function isStaleClaim(): bool
+    {
+        if ($this->status !== ReminderStatus::Processing || $this->claimed_at === null) {
+            return false;
+        }
+
+        $lease = max(60, (int) config('reminders.lease_seconds', 300));
+
+        return $this->claimed_at->copy()->addSeconds($lease)->isPast();
     }
 
     /**

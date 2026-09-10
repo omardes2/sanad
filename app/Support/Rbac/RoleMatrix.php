@@ -12,11 +12,29 @@ namespace App\Support\Rbac;
  *  super_admin  every permission (and every Gate ability via Gate::before)
  *  operations   providers/models/routing, test connection, health view, settings (not the
  *               billing/subscription keys nor the emergency switches), persona,
- *               usage (no costs), plans, subscribers (view) — NO credentials
+ *               usage (no costs), plans, subscribers (view) — NO credentials.
+ *               Plus the operational surfaces: launch readiness, tool invocations,
+ *               tool consents, memory metadata, reminders incl. delivery internals,
+ *               conversations, message content, tasks, WhatsApp status.
  *  finance      pricing, usage incl. costs and CSV export, finance (calculated
  *               financials + export), audit, providers (view), subscribers
- *               (view) — NO credentials
- *  support      subscribers (view/manage), usage (no costs) — NO credentials
+ *               (view), expenses, launch readiness — NO credentials
+ *  support      subscribers (view/manage), usage (no costs), tool consents (read),
+ *               reminders (schedule only), conversation METADATA, tasks —
+ *               NO credentials, NO message content, NO memory metadata,
+ *               NO tool invocations, NO delivery internals
+ *
+ * LEAST PRIVILEGE, and two lines of it are deliberate rather than incidental:
+ *
+ *  - Support gets `conversations.view` but NOT `messages.content.view`. Support
+ *    needs to know that a subscriber wrote in, on which channel, and when.
+ *    Reading what they actually said is a different question, and answering it
+ *    by default would hand every support account the contents of every private
+ *    conversation on the platform.
+ *  - NOBODY gets memory CONTENT, because no such permission exists. Support does
+ *    not even get memory metadata: the counts are an engineering signal, not a
+ *    support tool, and every row in that table is something a subscriber asked
+ *    Sanad to remember about them.
  */
 final class RoleMatrix
 {
@@ -41,6 +59,16 @@ final class RoleMatrix
                 Permission::UsageView,
                 Permission::PlansManage,
                 Permission::SubscribersView,
+                Permission::LaunchReadinessView,
+                Permission::ToolsInvocationsView,
+                Permission::ToolsConsentsView,
+                Permission::MemoryOperationsView,
+                Permission::RemindersView,
+                Permission::RemindersDeliveryView,
+                Permission::ConversationsView,
+                Permission::MessagesContentView,
+                Permission::TasksView,
+                Permission::WhatsAppStatusView,
             ],
 
             Role::Finance->value => [
@@ -58,6 +86,8 @@ final class RoleMatrix
                 Permission::FinanceFxManage,
                 Permission::AuditView,
                 Permission::SubscribersView,
+                Permission::ExpensesView,
+                Permission::LaunchReadinessView,
             ],
 
             Role::Support->value => [
@@ -65,6 +95,18 @@ final class RoleMatrix
                 Permission::SubscribersView,
                 Permission::SubscribersManage,
                 Permission::UsageView,
+                // Consent state, because "why did Sanad refuse to remember that?"
+                // is a support question. Revoking is separately authorised by
+                // subscribers.manage, which Support does hold; granting is not a
+                // permission at all — only the subscriber can create consent.
+                Permission::ToolsConsentsView,
+                // The reminder's schedule and status, so Support can answer
+                // "did my reminder go out?" — WITHOUT the delivery internals.
+                Permission::RemindersView,
+                // Conversation metadata only. Message BODIES are deliberately
+                // withheld: see the class docblock.
+                Permission::ConversationsView,
+                Permission::TasksView,
             ],
         ];
     }

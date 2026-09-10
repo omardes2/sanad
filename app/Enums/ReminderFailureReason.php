@@ -53,4 +53,61 @@ enum ReminderFailureReason: string
     {
         return $this !== self::Unknown;
     }
+
+    public function label(): string
+    {
+        return match ($this) {
+            self::TooLate => 'فات الأوان',
+            self::TemplateRequired => 'يحتاج قالبًا معتمَدًا',
+            self::NoRecipient => 'لا يوجد مستلِم واضح',
+            self::Rejected => 'رفضه المزوّد',
+            self::Unknown => 'نتيجة غير معروفة',
+            self::AttemptsExhausted => 'نفدت المحاولات',
+            self::DeliveryDisabled => 'التسليم معطّل',
+            self::ChannelUnsupported => 'القناة غير مدعومة',
+            self::Internal => 'خطأ داخلي',
+        };
+    }
+
+    /**
+     * The operator-facing explanation. `Unknown` gets the longest one on
+     * purpose: it is the reason most likely to be misread as a failure.
+     */
+    public function hint(): string
+    {
+        return match ($this) {
+            self::TooLate => 'تجاوز التذكير أقصى تأخّر مقبول، وتسليمه بعدها أسوأ من عدمه.',
+            self::TemplateRequired => 'رسالة استباقية خارج نافذة الخدمة بلا قالب معتمَد ومضبوط: فشل مغلق بلا طلب خارجي.',
+            self::NoRecipient => 'لا يوجد حساب قناة واحد نشط لا لبس فيه — ولا يُخمَّن المستلِم أبدًا.',
+            self::Rejected => 'رفض صريح من المزوّد: لم تُسلَّم الرسالة.',
+            self::Unknown => 'أُذِن بمحاولة فعلية وانقطعت المعرفة قبل التسوية. ليست فشلًا مؤكَّدًا، ولا تعني تكلفة صفرًا.',
+            self::AttemptsExhausted => 'استُهلكت المحاولتان الفعليّتان بلا إثبات تسليم.',
+            self::DeliveryDisabled => 'التسليم مطفأ بالإعداد، أو القناة غير مهيّأة للإرسال.',
+            self::ChannelUnsupported => 'لا يوجد مسار تسليم لهذه القناة في هذا الإصدار.',
+            self::Internal => 'خطأ داخلي، يُسجَّل بلا تفاصيل.',
+        };
+    }
+
+    /** @return list<string> */
+    public static function values(): array
+    {
+        return array_map(static fn (self $c): string => $c->value, self::cases());
+    }
+
+    /**
+     * Options for an admin dropdown: value => label. The filter is validated
+     * against this closed set, so an unknown reason can never become a LIKE.
+     *
+     * @return array<string, string>
+     */
+    public static function options(): array
+    {
+        $options = [];
+
+        foreach (self::cases() as $case) {
+            $options[$case->value] = $case->label();
+        }
+
+        return $options;
+    }
 }

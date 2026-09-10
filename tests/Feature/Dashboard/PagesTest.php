@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Enums\MessageDirection;
 use App\Livewire\Dashboard\Conversations;
 use App\Livewire\Dashboard\Expenses;
 use App\Livewire\Dashboard\Messages;
@@ -19,16 +20,24 @@ use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
-it('shows live counts on the overview', function () {
+it('shows a bounded operational board on the overview', function () {
     $user = User::factory()->create();
-    Conversation::factory()->for($user)->count(2)->create();
-    Task::factory()->for($user)->count(3)->create();
+    $conversation = Conversation::factory()->for($user)->create();
+    Message::factory()->for($user)->for($conversation)->count(2)->create([
+        'direction' => MessageDirection::Inbound,
+        'created_at' => now()->subHour(),
+    ]);
+    // Older than the 24h window: must NOT be counted.
+    Message::factory()->for($user)->for($conversation)->create([
+        'direction' => MessageDirection::Inbound,
+        'created_at' => now()->subDays(3),
+    ]);
 
     Livewire::actingAs($user)
         ->test(Overview::class)
         ->assertOk()
         ->assertSee('نظرة عامة')
-        ->assertViewHas('stats', fn (array $stats) => $stats['conversations'] === 2);
+        ->assertViewHas('today', fn (array $today) => $today['messages_in']['value'] === '2');
 });
 
 it('lists conversations', function () {

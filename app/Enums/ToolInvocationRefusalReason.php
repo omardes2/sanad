@@ -69,4 +69,37 @@ enum ToolInvocationRefusalReason: string
             || $this === self::ExplicitIntentMissing
             || $this === self::SideEffectNotExecutable;
     }
+
+    public function label(): string
+    {
+        return match ($this) {
+            self::NotGranted => 'لا توجد موافقة',
+            self::ConsentRevoked => 'سُحبت الموافقة أثناء التنفيذ',
+            self::UnknownTool => 'أداة غير معروفة',
+            self::UnknownVersion => 'إصدار غير معروف',
+            self::InvalidInput => 'مدخل غير صالح',
+            self::SideEffectNotExecutable => 'أثر جانبي غير قابل للتنفيذ',
+            self::ApprovalRequired => 'يحتاج موافقة',
+            self::SubscriberMissing => 'لا يوجد مشترك',
+            self::ExplicitIntentMissing => 'لا يوجد طلب صريح',
+        };
+    }
+
+    /** @return list<string> */
+    public static function values(): array
+    {
+        return array_map(static fn (self $c): string => $c->value, self::cases());
+    }
+
+    /** @return array<string, string> */
+    public static function options(): array
+    {
+        $options = [];
+
+        foreach (self::cases() as $case) {
+            $options[$case->value] = $case->label();
+        }
+
+        return $options;
+    }
 }

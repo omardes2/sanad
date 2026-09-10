@@ -59,4 +59,38 @@ enum ToolInvocationFailureKind: string
 
     /** An unexpected internal error (including the query guards tripping). */
     case Internal = 'internal';
+
+    public function label(): string
+    {
+        return match ($this) {
+            self::ToolError => 'خطأ داخل الأداة',
+            self::InvalidOutput => 'مخرَج لا يطابق العقد',
+            self::Timeout => 'انتهت المهلة',
+            self::NotFound => 'غير موجود',
+            self::Rule => 'مخالفة قاعدة نطاق',
+            self::SensitiveContent => 'محتوى حسّاس',
+            self::MemoryCapacityReached => 'بلغت الذاكرة سقفها',
+            self::Ambiguous => 'وصف ملتبس',
+            self::MemoryUnavailable => 'الذاكرة غير متاحة',
+            self::Internal => 'خطأ داخلي',
+        };
+    }
+
+    /** @return list<string> */
+    public static function values(): array
+    {
+        return array_map(static fn (self $c): string => $c->value, self::cases());
+    }
+
+    /** @return array<string, string> */
+    public static function options(): array
+    {
+        $options = [];
+
+        foreach (self::cases() as $case) {
+            $options[$case->value] = $case->label();
+        }
+
+        return $options;
+    }
 }
