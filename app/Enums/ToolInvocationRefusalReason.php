@@ -47,6 +47,15 @@ enum ToolInvocationRefusalReason: string
     case SubscriberMissing = 'subscriber_missing';
 
     /**
+     * Phase G — the tool requires a server-verifiable EXPLICIT instruction on
+     * the inbound message being processed, and there is none. A model proposing
+     * a memory write is a suggestion, not authority: «أنا بحب القهوة سادة» is a
+     * statement, «احفظ إني بحب القهوة سادة» is an instruction. Decided after
+     * the claim, so the attempt is recorded rather than lost.
+     */
+    case ExplicitIntentMissing = 'explicit_intent_missing';
+
+    /**
      * Is this reason decided after a claim, and therefore recorded on the
      * invocation? `side_effect_not_executable` appears on BOTH sides: it is the
      * pre-claim answer for a non-read candidate (no row at all), and the
@@ -57,6 +66,7 @@ enum ToolInvocationRefusalReason: string
     {
         return $this === self::NotGranted
             || $this === self::ConsentRevoked
+            || $this === self::ExplicitIntentMissing
             || $this === self::SideEffectNotExecutable;
     }
 }

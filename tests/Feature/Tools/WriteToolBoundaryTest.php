@@ -280,8 +280,11 @@ it('routes each class to its own executor and keeps the F2 read path intact', fu
             default => false,
         };
 
-        // Exactly the four write tools plus the one read tool are executable.
-        expect($executable)->toBe(in_array($key, ['memory.read@1', 'task.list@1', 'task.create@1', 'task.complete@1', 'reminder.create@2', 'reminder.cancel@1'], true), $key);
+        // Exactly the six write tools plus the three read tools are executable.
+        expect($executable)->toBe(in_array($key, [
+            'memory.read@1', 'memory.read@2', 'task.list@1',
+            'memory.write@1', 'memory.forget@1', 'task.create@1', 'task.complete@1', 'reminder.create@2', 'reminder.cancel@1',
+        ], true), $key);
     }
 
     // The read path still works through the router.

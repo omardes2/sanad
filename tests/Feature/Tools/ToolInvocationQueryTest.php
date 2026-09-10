@@ -47,7 +47,11 @@ function f2Queries(callable $fn): int
 }
 
 it('costs the same number of queries with 5 memories and with 500, and a replay costs strictly fewer', function () {
-    Memory::factory()->count(5)->create(['user_id' => $this->subscriber->id, 'content' => 'a note about coffee']);
+    // Distinct sentences: two memories with the same normalised text in one
+    // category are ONE memory, so a fixture that repeated itself could not exist.
+    for ($i = 0; $i < 5; $i++) {
+        Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => "a note {$i} about coffee"]);
+    }
 
     // One warm-up call so cold caches are not counted as invocation work.
     f2Executor()->call(f2Message($this->subscriber), 'memory.read@1', ['query' => 'coffee']);
@@ -58,6 +62,9 @@ it('costs the same number of queries with 5 memories and with 500, and a replay 
     for ($i = 0; $i < 495; $i++) {
         Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => "note {$i} about coffee"]);
     }
+
+    // The read is bounded by the subscriber's active-memory ceiling, so the
+    // work it does — including the decryption — cannot grow with the table.
 
     $message = f2Message($this->subscriber);
     $large = f2Queries(fn () => f2Executor()->call($message, 'memory.read@1', ['query' => 'coffee']));

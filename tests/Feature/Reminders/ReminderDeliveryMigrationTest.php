@@ -20,11 +20,11 @@ uses(RefreshDatabase::class);
  * token, two nullable timestamps and an index on `reminders`, one nullable
  * unique FK on `messages`, and nothing else in E0–E5 or F1–F4 touched.
  */
-it('is the 63rd and last migration, adds only the delivery columns, and rolls back and forward cleanly', function () {
+it('is the 63rd of 64 migrations, adds only the delivery columns, and rolls back and forward cleanly', function () {
     $files = glob(database_path('migrations/*.php'));
 
-    expect($files)->toHaveCount(63)
-        ->and(basename($files[62]))->toBe('2026_09_09_000101_add_reminder_delivery_to_reminders_and_messages.php')
+    expect($files)->toHaveCount(64)
+        ->and(basename($files[count($files) - 2]))->toBe('2026_09_09_000101_add_reminder_delivery_to_reminders_and_messages.php')
         ->and(Schema::hasColumn('reminders', 'claim_token'))->toBeTrue()
         ->and(Schema::hasColumn('reminders', 'claimed_at'))->toBeTrue()
         ->and(Schema::hasColumn('reminders', 'dispatched_at'))->toBeTrue()
@@ -51,7 +51,7 @@ it('is the 63rd and last migration, adds only the delivery columns, and rolls ba
         'status' => ReminderStatus::Pending->value,
     ]);
 
-    Artisan::call('migrate:rollback', ['--step' => 1, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 2, '--force' => true]);
 
     expect(Schema::hasColumn('reminders', 'claim_token'))->toBeFalse()
         ->and(Schema::hasColumn('reminders', 'claimed_at'))->toBeFalse()
@@ -71,7 +71,7 @@ it('is the 63rd and last migration, adds only the delivery columns, and rolls ba
         ->and(Schema::hasColumn('reminders', 'claimed_at'))->toBeTrue()
         ->and(Schema::hasIndex('messages', 'messages_reminder_id_unique'))->toBeTrue()
         ->and(DB::table('reminders')->count())->toBe(1)
-        ->and(DB::table('migrations')->count())->toBe(63);
+        ->and(DB::table('migrations')->count())->toBe(64);
 });
 
 it('enforces at most one outbound message per reminder at the database level', function () {

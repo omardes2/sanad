@@ -7,7 +7,7 @@ use App\Enums\ToolConsentReason;
 use App\Enums\ToolInvocationStatus;
 use App\Models\Memory;
 use App\Models\User;
-use App\Services\Tools\Readers\MemoryReader;
+use App\Services\Memory\MemoryService;
 use App\Services\Tools\ToolConsentService;
 use App\Support\Tools\ToolRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -38,10 +38,22 @@ function memoryRead(array $arguments)
 }
 
 it('reads the subscriber OWN active memories, counts them and says when the bound cut the answer short', function () {
-    Memory::factory()->count(3)->create(['user_id' => $this->subscriber->id, 'content' => 'يفضّل القهوة صباحًا']);
-    Memory::factory()->count(2)->create(['user_id' => $this->subscriber->id, 'content' => 'coffee with milk']);
-    Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => 'archived coffee note', 'archived_at' => now()]);
-    Memory::factory()->count(4)->create(['user_id' => User::factory()->create()->id, 'content' => 'someone else coffee']);
+    // Distinct sentences: two memories with the same normalised text in one
+    // category ARE one memory, so a fixture that repeated itself could not exist.
+    foreach (['يفضّل القهوة صباحًا', 'القهوة بلا سكر', 'القهوة بعد الغداء'] as $note) {
+        Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => $note]);
+    }
+
+    foreach (['coffee with milk', 'coffee at work'] as $note) {
+        Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => $note]);
+    }
+
+    Memory::factory()->archived()->create(['user_id' => $this->subscriber->id, 'content' => 'archived coffee note']);
+
+    $other = User::factory()->create();
+    foreach (['someone else coffee', 'their second coffee note'] as $note) {
+        Memory::factory()->create(['user_id' => $other->id, 'content' => $note]);
+    }
 
     // Case-insensitive substring, active rows only, this subscriber only. Each
     // distinct question is its own stored message, and therefore its own identity.
@@ -56,7 +68,11 @@ it('reads the subscriber OWN active memories, counts them and says when the boun
 
 it('cannot be pointed at another subscriber: ownership is the message, and there is no field to say otherwise', function () {
     $other = User::factory()->create();
-    Memory::factory()->count(5)->create(['user_id' => $other->id, 'content' => 'the other subscriber secret']);
+
+    for ($i = 0; $i < 5; $i++) {
+        Memory::factory()->create(['user_id' => $other->id, 'content' => "the other subscriber secret {$i}"]);
+    }
+
     Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => 'my own secret']);
 
     // Every shape of "read someone else's memories" is refused by the closed schema.
@@ -69,21 +85,25 @@ it('cannot be pointed at another subscriber: ownership is the message, and there
 
     // And the reader itself only ever sees the subscriber it was handed.
     expect(memoryRead(['query' => 'secret'])->output())->toBe(['matches' => 1, 'truncated' => false])
-        ->and(app(MemoryReader::class)->read($other, ['query' => 'secret']))->toBe(['matches' => 5, 'truncated' => false]);
+        ->and(app(MemoryService::class)->count($other, ['query' => 'secret']))->toBe(['matches' => 5, 'truncated' => false]);
 });
 
 it('treats the query as a literal substring, never as a pattern', function () {
     Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => 'plain note without wildcards']);
     Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => 'a 100% literal note']);
 
-    // `%` would match everything if it were a pattern; it matches one row because it is escaped.
+    // The match now happens in application memory over decrypted text rather
+    // than as SQL, so there is no LIKE pattern to escape at all — but the
+    // GUARANTEE the escaping existed for is unchanged and still pinned here:
+    // `%` matches the one memory that literally contains it, not everything.
     expect(memoryRead(['query' => '%'])->output())->toBe(['matches' => 1, 'truncated' => false])
         ->and(f2Executor()->call(f2Message($this->subscriber), 'memory.read@1', ['query' => '_'])->output())
         ->toBe(['matches' => 0, 'truncated' => false]);
 });
 
 it('is a read: it issues no write, and the invocation is the only thing the call changed', function () {
-    Memory::factory()->count(2)->create(['user_id' => $this->subscriber->id, 'content' => 'note about coffee']);
+    Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => 'note about coffee']);
+    Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => 'second note about coffee']);
 
     $memoriesBefore = DB::table('memories')->get()->toArray();
     $writes = [];
@@ -108,7 +128,10 @@ it('declares a counts-only output, so no memory content can travel through the t
 
     $output = memoryRead(['query' => 'coffee'])->output();
 
+    // `@1` is FROZEN: it counts, and a frozen version is never widened into
+    // returning content. `memory.read@2` is the version that does that.
     expect(array_keys($output))->toBe(['matches', 'truncated'])
         ->and(app(ToolRegistry::class)->require('memory.read', 1)->output->names())->toBe(['matches', 'truncated'])
-        ->and(json_encode($output))->not->toContain('private');
+        ->and(json_encode($output))->not->toContain('private')
+        ->and(app(ToolRegistry::class)->require('memory.read', 2)->output->names())->toBe(['memories', 'truncated']);
 });

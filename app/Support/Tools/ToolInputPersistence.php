@@ -38,6 +38,12 @@ final class ToolInputPersistence
         // `query` is the subscriber's own words; `limit` is theirs to ask for
         // and tells an operator nothing the output does not already say.
         'memory.read@1' => [],
+        'memory.read@2' => [],
+        // `content` is the memory itself and `query` is the subscriber's own
+        // words about it: storing either on the invocation row would put a
+        // plaintext copy beside the rows this phase encrypts.
+        'memory.write@1' => [],
+        'memory.forget@1' => [],
         'task.create@1' => [],
         'task.list@1' => [],
         'task.complete@1' => [],

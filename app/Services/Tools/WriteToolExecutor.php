@@ -17,9 +17,11 @@ use App\Exceptions\Tools\ToolRuleException;
 use App\Models\Conversation;
 use App\Models\ToolInvocation;
 use App\Models\User;
+use App\Services\Memory\MemoryService;
 use App\Services\Reminders\ReminderService;
 use App\Services\Tasks\TaskService;
 use App\Support\Tools\DomainWriteGuard;
+use App\Support\Tools\ToolIntentRequirements;
 use App\Support\Tools\ToolWriteTargets;
 use Throwable;
 
@@ -43,6 +45,13 @@ use Throwable;
  * change — arrives after `running`, so it is recorded as `failed` with a closed
  * kind (`not_found` / `rule`). `refused` stays reserved for what is decided
  * before execution starts.
+ *
+ * TWO INDEPENDENT AUTHORITIES, in this order (Phase G). Consent is durable and
+ * per capability: may Sanad ever do this for this subscriber. An INTENT
+ * requirement is per message: did they ask for it this time. Tools that persist
+ * personal data beyond the conversation declare one in `ToolIntentRequirements`
+ * and are refused with `explicit_intent_missing` without it — neither authority
+ * implies the other, and a model proposing the call is not either of them.
  */
 final class WriteToolExecutor
 {
@@ -50,6 +59,8 @@ final class WriteToolExecutor
      * @var array<string, array{0: class-string, 1: string}>
      */
     private const HANDLERS = [
+        'memory.write@1' => [MemoryService::class, 'remember'],
+        'memory.forget@1' => [MemoryService::class, 'forget'],
         'task.create@1' => [TaskService::class, 'create'],
         'task.complete@1' => [TaskService::class, 'complete'],
         'reminder.create@2' => [ReminderService::class, 'create'],
@@ -98,6 +109,16 @@ final class WriteToolExecutor
 
         if (! $this->consents->granted($subscriberId, $capability)) {
             return $this->result($claim, $this->store->refuse($invocation, ToolInvocationRefusalReason::NotGranted), executed: false);
+        }
+
+        // AUTHORITY FOR THIS PARTICULAR MESSAGE. Consent says Sanad MAY do this
+        // for this subscriber; a tool that persists personal data beyond the
+        // conversation also has to show they ASKED, in their own stored words.
+        // A model's proposal is never that evidence. Checked once, because the
+        // evidence is an immutable stored message and cannot change underneath
+        // us — unlike consent, which is re-read below.
+        if (! ToolIntentRequirements::satisfied($request->definition->key, $request->message)) {
+            return $this->result($claim, $this->store->refuse($invocation, ToolInvocationRefusalReason::ExplicitIntentMissing), executed: false);
         }
 
         $invocation = $this->store->authorize($invocation);
@@ -160,6 +181,8 @@ final class WriteToolExecutor
         $messageId = $request->message->getKey();
 
         return match ($request->toolKey()) {
+            'memory.write@1' => $service->{$method}($subscriber, $values, $messageId),
+            'memory.forget@1' => $service->{$method}($subscriber, $values),
             'task.create@1' => $service->{$method}($subscriber, $values, $messageId),
             'task.complete@1' => $service->{$method}($subscriber, (int) $values['task_id']),
             'reminder.create@2' => $service->{$method}($subscriber, $values, $this->channel($request), $messageId),

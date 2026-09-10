@@ -20,6 +20,8 @@ final class ToolWriteTargets
 {
     /** @var array<string, list<string>> `name@version` ⇒ the domain tables it may write */
     private const TARGETS = [
+        'memory.write@1' => ['memories'],
+        'memory.forget@1' => ['memories'],
         'task.create@1' => ['tasks'],
         'task.complete@1' => ['tasks'],
         'reminder.create@2' => ['reminders'],

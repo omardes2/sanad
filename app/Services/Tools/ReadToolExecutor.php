@@ -7,19 +7,22 @@ namespace App\Services\Tools;
 use App\Data\Tools\ToolCallRequest;
 use App\Data\Tools\ToolClaim;
 use App\Data\Tools\ToolInvocationResult;
+use App\Enums\ToolClaimOutcome;
 use App\Enums\ToolInvocationFailureKind;
 use App\Enums\ToolInvocationRefusalReason;
 use App\Enums\ToolInvocationStatus;
+use App\Enums\ToolReplayFailure;
 use App\Enums\ToolSideEffect;
 use App\Exceptions\Tools\ToolDefinitionException;
 use App\Exceptions\Tools\ToolRuleException;
 use App\Models\Message;
 use App\Models\ToolInvocation;
 use App\Models\User;
+use App\Services\Memory\MemoryService;
 use App\Services\Tasks\TaskReader;
-use App\Services\Tools\Readers\MemoryReader;
 use App\Support\Tools\ReadOnlyQueryGuard;
 use App\Support\Tools\ToolCallPlan;
+use App\Support\Tools\ToolOutputPersistence;
 use Throwable;
 
 /**
@@ -58,7 +61,11 @@ final class ReadToolExecutor
      * @var array<string, array{0: class-string, 1: string}>
      */
     private const HANDLERS = [
-        'memory.read@1' => [MemoryReader::class, 'read'],
+        // `memory.read@1` is FROZEN in meaning — how many memories match — and
+        // now answers it over encrypted rows, in application memory. `@2` is
+        // the version that returns the memories themselves.
+        'memory.read@1' => [MemoryService::class, 'count'],
+        'memory.read@2' => [MemoryService::class, 'recall'],
         'task.list@1' => [TaskReader::class, 'read'],
     ];
 
@@ -123,7 +130,15 @@ final class ReadToolExecutor
         $claim = $this->store->claim($request);
 
         if (! $claim->isClaimed()) {
-            return ToolInvocationResult::settled($claim->outcome, $claim->invocation, executed: false);
+            [$rehydrated, $rehydrationFailure] = $this->rehydrate($claim, $request);
+
+            return ToolInvocationResult::settled(
+                $claim->outcome,
+                $claim->invocation,
+                executed: false,
+                transientOutput: $rehydrated,
+                replayFailure: $rehydrationFailure,
+            );
         }
 
         $invocation = $claim->invocation;
@@ -155,12 +170,115 @@ final class ReadToolExecutor
             return $this->settledResult($claim, $invocation, executed: false);
         }
 
-        return $this->settledResult($claim, $this->run($request, $invocation), executed: true);
+        [$settled, $output] = $this->run($request, $invocation);
+
+        // The FULL result goes back to the caller for this turn; what the row
+        // kept is whatever `ToolOutputPersistence` allowed.
+        return $this->settledResult($claim, $settled, executed: true, transientOutput: $output);
     }
 
     // ------------------------------------------------------------------
 
-    private function run(ToolCallRequest $request, ToolInvocation $invocation): ToolInvocation
+    /**
+     * REPLAY OUTPUT REHYDRATION — not a second execution (Phase G).
+     *
+     * A tool whose result is deliberately NOT stored in full would otherwise
+     * lose its answer to an infrastructure retry: the queue re-processes the
+     * same inbound message, the same slot replays, and only the projection is
+     * left. The subscriber's reply must not depend on whether a provider call
+     * happened to fail, so the read is re-derived from live data instead.
+     *
+     * It runs only when ALL of these hold, and the first four are already
+     * PROVEN by the claim itself — `observe()` answers CONFLICT rather than
+     * REPLAY unless the tool, the version and the canonical input hash all
+     * match the slot:
+     *
+     *   - the outcome is REPLAY of this exact invocation slot;
+     *   - the recorded invocation SUCCEEDED;
+     *   - the side-effect class is `read` (this executor runs nothing else, and
+     *     re-deriving a write would BE a second write);
+     *   - the tool declares itself rehydratable (`ToolOutputPersistence`);
+     *   - CONSENT IS STILL GRANTED. It is re-read here for the same reason it is
+     *     re-read before an execution: a subscriber who revoked between the two
+     *     attempts must not have their data handed to a provider again.
+     *
+     * NOTHING is written: no invocation, no transition, no event, no audit, no
+     * usage row. The stored record of the original execution stays exactly as
+     * it was, and `executed` remains false.
+     *
+     * HONEST CAVEAT: the re-derived result reflects the CURRENT committed state.
+     * If the subscriber's memories changed between the two attempts, the retry
+     * sees the newer set. That is the correct trade: the alternative is either
+     * a stale plaintext copy on the row, or no answer at all.
+     *
+     * WHEN IT CANNOT HAPPEN THERE IS NO RESULT — not a thinner one. The stored
+     * projection (`{memories_count, truncated}`) is audit metadata, and handing
+     * it back as a successful `memory.read@2` would claim memories were returned
+     * when none were, and would disclose how many exist to a caller that may no
+     * longer be allowed to know. So the failure is explicit and bounded
+     * (`ToolReplayFailure`), the model is told Sanad cannot reach what it
+     * remembers, and nothing is written either way.
+     *
+     * @return array{0: array<string, mixed>|null, 1: ToolReplayFailure|null}
+     */
+    private function rehydrate(ToolClaim $claim, ToolCallRequest $request): array
+    {
+        $definition = $request->definition;
+
+        if ($claim->outcome !== ToolClaimOutcome::Replay
+            || $claim->invocation->status !== ToolInvocationStatus::Succeeded
+            || $definition->sideEffect !== ToolSideEffect::Read
+            || ! ToolOutputPersistence::rehydratableOnReplay($definition->key)
+            || ! array_key_exists($request->toolKey(), self::HANDLERS)) {
+            // Not a rehydratable replay at all: ordinary replay semantics apply
+            // and the stored output IS this tool's whole result.
+            return [null, null];
+        }
+
+        if (! $this->consents->granted((int) $request->subscriber->getKey(), $definition->capability)) {
+            // The same answer a first-attempt refusal gives, and it discloses
+            // nothing: not the content, not the count, not the earlier output.
+            return [null, ToolReplayFailure::NotGranted];
+        }
+
+        if (! $this->rehydrationIsSafe($request)) {
+            return [null, ToolReplayFailure::RehydrationUnavailable];
+        }
+
+        [$class, $method] = self::HANDLERS[$request->toolKey()];
+
+        try {
+            $raw = $this->guard->run(fn (): mixed => app($class)->{$method}($request->subscriber, $request->input->values));
+
+            return [$definition->output->validate(is_array($raw) ? $raw : []), null];
+        } catch (Throwable) {
+            // The reader threw, or produced something its declared schema
+            // refuses. Either way this call has no answer to give.
+            return [null, ToolReplayFailure::RehydrationUnavailable];
+        }
+    }
+
+    /**
+     * Can the underlying domain reconstruct this read completely?
+     *
+     * Declared per tool in code, for the same reason the handler map is: the
+     * executor must not infer a domain precondition. For memory it means the
+     * keys are configured AND every row in the subscriber's bounded active set
+     * opens — because a replay that silently came back short would tell the model
+     * a memory does not exist when the truth is that Sanad cannot read it.
+     */
+    private function rehydrationIsSafe(ToolCallRequest $request): bool
+    {
+        return match ($request->toolKey()) {
+            'memory.read@2' => app(MemoryService::class)->readable($request->subscriber),
+            default => true,
+        };
+    }
+
+    /**
+     * @return array{0: ToolInvocation, 1: array<string, mixed>|null}
+     */
+    private function run(ToolCallRequest $request, ToolInvocation $invocation): array
     {
         $definition = $request->definition;
         [$class, $method] = self::HANDLERS[$request->toolKey()];
@@ -169,9 +287,9 @@ final class ReadToolExecutor
         try {
             $raw = $this->guard->run(fn (): mixed => app($class)->{$method}($request->subscriber, $request->input->values));
         } catch (ToolRuleException $e) {
-            return $this->store->fail($invocation, $e->rule === 'read_only' ? ToolInvocationFailureKind::Internal : ToolInvocationFailureKind::ToolError, self::elapsed($startedAt));
+            return [$this->store->fail($invocation, $e->rule === 'read_only' ? ToolInvocationFailureKind::Internal : ToolInvocationFailureKind::ToolError, self::elapsed($startedAt)), null];
         } catch (Throwable) {
-            return $this->store->fail($invocation, ToolInvocationFailureKind::ToolError, self::elapsed($startedAt));
+            return [$this->store->fail($invocation, ToolInvocationFailureKind::ToolError, self::elapsed($startedAt)), null];
         }
 
         $elapsed = self::elapsed($startedAt);
@@ -182,21 +300,24 @@ final class ReadToolExecutor
         try {
             $output = $definition->output->validate(is_array($raw) ? $raw : []);
         } catch (ToolRuleException) {
-            return $this->store->fail($invocation, ToolInvocationFailureKind::InvalidOutput, $elapsed);
+            return [$this->store->fail($invocation, ToolInvocationFailureKind::InvalidOutput, $elapsed), null];
         }
 
         // The timeout is a property of this immutable tool version; nothing is
         // duplicated onto the row, only what actually happened.
         if ($elapsed > $definition->timeoutMs) {
-            return $this->store->timeOut($invocation, $elapsed);
+            return [$this->store->timeOut($invocation, $elapsed), null];
         }
 
-        return $this->store->succeed($invocation, $output, $elapsed);
+        return [$this->store->succeed($invocation, $output, $elapsed), $output];
     }
 
-    private function settledResult(ToolClaim $claim, ToolInvocation $invocation, bool $executed): ToolInvocationResult
+    /**
+     * @param  array<string, mixed>|null  $transientOutput
+     */
+    private function settledResult(ToolClaim $claim, ToolInvocation $invocation, bool $executed, ?array $transientOutput = null): ToolInvocationResult
     {
-        return ToolInvocationResult::settled($claim->outcome, $invocation, $executed);
+        return ToolInvocationResult::settled($claim->outcome, $invocation, $executed, $transientOutput);
     }
 
     private static function elapsed(int $startedAt): int

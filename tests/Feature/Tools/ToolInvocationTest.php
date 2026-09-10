@@ -17,7 +17,7 @@ use App\Models\Message;
 use App\Models\ToolInvocation;
 use App\Models\ToolInvocationEvent;
 use App\Models\User;
-use App\Services\Tools\Readers\MemoryReader;
+use App\Services\Memory\MemoryService;
 use App\Services\Tools\ReadToolExecutor;
 use App\Services\Tools\ToolConsentService;
 use App\Support\Audit\AuditActions;
@@ -132,7 +132,11 @@ it('canonicalises input to stable bytes: key order, explicit null vs absent, Uni
 });
 
 it('walks planned → authorized → running → succeeded, one event per transition, and keeps the projection and history identical', function () {
-    Memory::factory()->count(3)->create(['user_id' => $this->subscriber->id, 'content' => 'likes coffee in the morning']);
+    // Distinct sentences: two memories with the same normalised text in one
+    // category ARE one memory, so a fixture that repeated itself could not exist.
+    for ($i = 0; $i < 3; $i++) {
+        Memory::factory()->create(['user_id' => $this->subscriber->id, 'content' => "likes coffee in the morning #{$i}"]);
+    }
     f2Consent($this->subscriber);
 
     $result = f2Call();
@@ -308,7 +312,7 @@ it('refuses an unknown tool, an unknown version, an input the schema rejects and
     f2Consent($this->subscriber, ToolCapability::TasksWrite);
 
     $cases = [
-        [['key' => 'memory.write@1', 'args' => ['query' => 'x']], ToolInvocationRefusalReason::UnknownTool],
+        [['key' => 'memory.purge@1', 'args' => ['query' => 'x']], ToolInvocationRefusalReason::UnknownTool],
         [['key' => 'memory.read@9', 'args' => ['query' => 'x']], ToolInvocationRefusalReason::UnknownTool],
         [['key' => 'memory.read', 'args' => ['query' => 'x']], ToolInvocationRefusalReason::UnknownTool],
         [['key' => 'memory.read@1', 'args' => []], ToolInvocationRefusalReason::InvalidInput],
@@ -347,9 +351,9 @@ it('discards a result the declared OUTPUT schema refuses and records it as inval
     f2Consent($this->subscriber);
 
     // A reader that returns a field the contract never promised.
-    app()->bind(MemoryReader::class, fn () => new class
+    app()->bind(MemoryService::class, fn () => new class
     {
-        public function read(User $subscriber, array $input): array
+        public function count(User $subscriber, array $input): array
         {
             return ['matches' => 1, 'truncated' => false, 'content' => 'the memory itself'];
         }
@@ -368,9 +372,9 @@ it('discards a result the declared OUTPUT schema refuses and records it as inval
 it('fails a read that tries to write, and never lets the write stand', function () {
     f2Consent($this->subscriber);
 
-    app()->bind(MemoryReader::class, fn () => new class
+    app()->bind(MemoryService::class, fn () => new class
     {
-        public function read(User $subscriber, array $input): array
+        public function count(User $subscriber, array $input): array
         {
             Memory::factory()->create(['user_id' => $subscriber->id, 'content' => 'written by a read tool']);
 
