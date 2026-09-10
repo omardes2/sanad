@@ -169,16 +169,16 @@ final class LaunchGateRegistry
             'why' => 'نطاق V1 يشترط أن يدفع المستخدم فعليًا عبر بوابة البنك.',
             'check' => [PaymentChecks::class, 'cybersource'],
         ],
-
-        // ---- Declared, and NOT required for V1 -----------------------------
         [
             'key' => 'billing.enforcement',
             'title' => 'فرض الحصص والفوترة',
             'owner' => LaunchGateOwner::Operations,
-            'required' => false,
-            'why' => 'مفتاح تشغيلي: بيتا قد تعمل بلا فرض عن قصد. يُعرَض لأن أثره على التكلفة كبير.',
+            'required' => true,
+            'why' => 'سَنَد V1 منتج قائم على الاشتراك: قياس الحصص بلا فرضها مقبول في التطوير والاختبار، ولا يُعدّ جاهزًا للإطلاق. تبقى `BILLING_ENFORCE=false` في التطوير، ويبقى البند **حاجزًا** حتى تُفعِّل تهيئة الإنتاج/البيتا الفرضَ صراحةً.',
             'check' => [PlatformChecks::class, 'billingEnforcement'],
         ],
+
+        // ---- Declared, and NOT required for V1 (deferred on purpose) -------
         [
             'key' => 'memory.implicit_extraction',
             'title' => 'الاستخراج الضمني للذاكرة',

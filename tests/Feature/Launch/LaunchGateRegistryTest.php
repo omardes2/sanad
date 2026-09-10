@@ -104,6 +104,7 @@ it('requires exactly the approved V1 items', function () {
 
     expect($required)->toBe([
         'ai.provider',
+        'billing.enforcement',
         'brief.morning',
         'infra.queue',
         'infra.scheduler_cron',
@@ -138,19 +139,53 @@ it('treats implicit extraction and semantic retrieval as POST-V1, never as block
         ->and($blockerKeys)->not->toContain('memory.semantic_retrieval');
 });
 
-it('does not make billing enforcement a launch blocker', function () {
+/*
+ | Sanad V1 is a SUBSCRIPTION product. Measuring quotas without enforcing them is
+ | fine in development and is not launch-ready, so this gate is required and
+ | simply reads as blocking until production/beta configuration enables
+ | enforcement. Leaving `BILLING_ENFORCE=false` locally is expected — it does not
+ | earn the gate an exemption.
+ */
+it('requires billing enforcement for V1 and blocks while it is off', function () {
     config()->set('billing.enforce', false);
 
     $registry = app(LaunchGateRegistry::class);
 
-    expect($registry->find('billing.enforcement')->requiredForV1)->toBeFalse();
+    expect($registry->find('billing.enforcement')->requiredForV1)->toBeTrue();
 
     $blockerKeys = array_map(
         static fn ($status): string => $status->gate->key,
         app(LaunchReadiness::class)->blockers(),
     );
 
-    expect($blockerKeys)->not->toContain('billing.enforcement');
+    expect($blockerKeys)->toContain('billing.enforcement');
+});
+
+it('stops blocking on billing only when enforcement is effective', function () {
+    config()->set('billing.enforce', true);
+    config()->set('ai.enabled', true);
+
+    $status = collect(app(LaunchReadiness::class)->evaluate())
+        ->firstWhere(fn ($s) => $s->gate->key === 'billing.enforcement');
+
+    expect($status->state)->toBe(LaunchGateState::Ready)
+        ->and($status->blocksLaunch())->toBeFalse();
+});
+
+it('reports billing as the effective state, not just the flag', function () {
+    // The flag alone enforces nothing: the metered orchestrator is only bound
+    // while AI is enabled, so the gate must read `ai.enabled && billing.enforce`.
+    config()->set('billing.enforce', true);
+    config()->set('ai.enabled', false);
+
+    $status = collect(app(LaunchReadiness::class)->evaluate())
+        ->firstWhere(fn ($s) => $s->gate->key === 'billing.enforcement');
+
+    $values = implode(' ', array_map(static fn ($d): string => $d->value, $status->details));
+
+    expect($status->state)->toBe(LaunchGateState::NotReady)
+        ->and($status->blocksLaunch())->toBeTrue()
+        ->and($values)->toContain('غير مفروض');
 });
 
 /*
@@ -221,6 +256,7 @@ it('mentions every V1 gate in the launch scope document', function () {
         'tools.rate_limiting' => 'Rate limiting / abuse protection',
         'infra.queue' => 'عامل الطابور',
         'payments.cybersource' => 'BANK_CYBERSOURCE_DETAILS',
+        'billing.enforcement' => 'فرض الحصص والفوترة',
     ];
 
     // `toContain` is VARIADIC in Pest — a second argument is another needle,

@@ -103,16 +103,29 @@ final class PlatformChecks
     }
 
     /**
-     * Billing enforcement is a composition, and reporting only half of it would
-     * mislead: quota is enforced only when the metered orchestrator is actually
-     * the one bound, which requires `ai.enabled` as well as `billing.enforce`.
+     * Billing enforcement, reported as its EFFECTIVE state.
+     *
+     * The effective rule is `ai.enabled && billing.enforce`, and reporting only
+     * half of it would mislead: quota is enforced only when the metered
+     * orchestrator is the one actually bound, and `AppServiceProvider` binds it
+     * only while AI is enabled. `BILLING_ENFORCE=true` with AI off enforces
+     * nothing at all.
+     *
+     * Sanad V1 is a SUBSCRIPTION product, so this gate is required for V1:
+     * measuring quotas without enforcing them is fine in development and is not
+     * launch-ready. Development stays `BILLING_ENFORCE=false` and simply reads
+     * as blocking on the board until production/beta configuration turns
+     * enforcement on — the gate reports the truth either way rather than being
+     * excused for being a development default.
      */
     public static function billingEnforcement(): GateOutcome
     {
         $enforce = (bool) config('billing.enforce', false);
         $aiEnabled = (bool) app(SettingsRepository::class)->get('ai.enabled');
+        $effective = $enforce && $aiEnabled;
 
         $details = [
+            GateDetail::boolean('الحالة الفعلية (ai.enabled && billing.enforce)', $effective, 'مفروض', 'غير مفروض'),
             GateDetail::boolean('billing.enforce', $enforce, 'مفعَّل', 'معطّل'),
             GateDetail::boolean('الذكاء الاصطناعي مفعَّل', $aiEnabled, 'مفعَّل', 'معطّل'),
             GateDetail::plain(
@@ -121,7 +134,7 @@ final class PlatformChecks
             ),
         ];
 
-        if ($enforce && $aiEnabled) {
+        if ($effective) {
             return GateOutcome::ready('فرض الحصص فعّال.', $details);
         }
 
@@ -131,8 +144,12 @@ final class PlatformChecks
                 ? 'الحصص محسوبة وغير مفروضة: لا يُرفض أي رد لتجاوز الحدّ'
                 : 'المساعد الحتمي البديل يعمل بلا قياس ولا فرض',
         );
+        $details[] = GateDetail::plain(
+            'ملاحظة',
+            'ترك الفرض معطّلًا في التطوير مقبول؛ ويبقى هذا البند حاجزًا حتى تُفعِّله تهيئة الإنتاج/البيتا صراحةً',
+        );
 
-        return GateOutcome::notReady('فرض الحصص غير فعّال.', $details);
+        return GateOutcome::notReady('فرض الحصص غير فعّال — وسَنَد V1 منتج اشتراك.', $details);
     }
 
     /**
