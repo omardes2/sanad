@@ -47,8 +47,12 @@ expect()->extend('toBeOne', function () {
 use App\Data\InboundMessageData;
 use App\Enums\ChannelType;
 use App\Enums\CostSource;
+use App\Enums\MessageDirection;
+use App\Enums\MessageProcessingStatus;
 use App\Enums\MessageType;
+use App\Enums\PlanFeature;
 use App\Enums\SubscriptionStatus;
+use App\Enums\TranscriptionStatus;
 use App\Enums\WebhookEventStatus;
 use App\Jobs\ProcessInboundMessage;
 use App\Jobs\ProcessWhatsAppWebhook;
@@ -62,6 +66,7 @@ use App\Models\WebhookEvent;
 use App\Services\Rbac\RbacSynchronizer;
 use App\Services\Settings\SettingsRepository;
 use App\Support\Rbac\Role;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Testing\TestResponse;
 
 /**
@@ -1197,5 +1202,142 @@ function admInvocation(User $subscriber, array $attrs = []): ToolInvocation
         'status' => ToolInvocationStatus::Planned->value,
         'call_index' => 1,
         'version' => 1,
+    ], $attrs));
+}
+
+// ---- Voice notes (Phase H) --------------------------------------------------
+
+/**
+ * Build a WhatsApp inbound AUDIO envelope.
+ *
+ * Shaped exactly like the platform's own: an audio message carries a media
+ * REFERENCE and a `voice` flag, never bytes and never a URL.
+ *
+ * @param  array<string, mixed>  $opts
+ * @return array<string, mixed>
+ */
+function whatsappVoiceEnvelope(string $wamid, string $from, array $opts = []): array
+{
+    $envelope = whatsappTextEnvelope($wamid, $from, '', $opts + ['type' => 'audio']);
+    $message = &$envelope['entry'][0]['changes'][0]['value']['messages'][0];
+
+    unset($message['text']);
+
+    $message['audio'] = array_filter([
+        'id' => $opts['media_id'] ?? 'media-'.str()->random(8),
+        'mime_type' => $opts['mime_type'] ?? 'audio/ogg; codecs=opus',
+        'sha256' => 'ZmFrZQ==',
+        'voice' => $opts['voice'] ?? true,
+    ], static fn ($v): bool => $v !== null);
+
+    return $envelope;
+}
+
+/** The bytes of the checked-in synthetic Ogg/Opus fixture (7.5 seconds). */
+function voiceFixtureBytes(): string
+{
+    return (string) file_get_contents(base_path('tests/Fixtures/voice/voice-note-7500ms.ogg'));
+}
+
+/**
+ * Fake both external services the voice path touches: WhatsApp media (metadata
+ * then bytes) and the transcription provider.
+ *
+ * @param  array<string, mixed>  $opts
+ */
+function voiceFakeHttp(array $opts = []): void
+{
+    $audio = $opts['audio'] ?? voiceFixtureBytes();
+
+    Http::fake([
+        'graph.facebook.com/v21.0/*' => $opts['metadata'] ?? Http::response([
+            'url' => 'https://lookaside.example/media/test',
+            'mime_type' => $opts['media_mime'] ?? 'audio/ogg; codecs=opus',
+            'file_size' => $opts['file_size'] ?? strlen((string) $audio),
+            'id' => 'media-1',
+        ], 200),
+        // A CLOSURE, not a shared Response: a streamed body is consumed once,
+        // and a second attempt at the same voice note must get its own bytes
+        // rather than find an exhausted stream.
+        'lookaside.example/*' => $opts['binary'] ?? static fn () => Http::response($audio, 200),
+        'api.groq.com/*' => $opts['transcription'] ?? Http::response([
+            'text' => $opts['text'] ?? 'مرحبا، هذه رسالة صوتية.',
+            'language' => 'ar',
+        ], 200),
+    ]);
+}
+
+/**
+ * Configure everything the voice path needs to actually run: WhatsApp media
+ * access, a routable transcription model, and a plan that includes voice.
+ *
+ * @param  array<string, mixed>  $overrides
+ */
+function voiceConfigure(array $overrides = []): void
+{
+    whatsappConfigure();
+
+    config(array_merge([
+        'whatsapp.enabled' => true,
+        'whatsapp.access_token' => 'TEST_ACCESS_TOKEN',
+        'whatsapp.phone_number_id' => 'PNID_123',
+        'whatsapp.graph_base_url' => 'https://graph.facebook.com',
+        'whatsapp.graph_version' => 'v21.0',
+        'voice.enabled' => true,
+        'voice.require_voice_flag' => true,
+        'voice.max_attempts' => 2,
+        'voice.lease_seconds' => 300,
+        'ai.catalog' => [],
+        'ai.catalog_source' => 'config',
+        'ai.provider' => 'groq',
+        'ai.providers.groq.base_url' => 'https://api.groq.com/openai/v1',
+        'ai.providers.groq.api_key' => 'test-groq-key',
+        'ai.providers.groq.transcription_model' => 'test-transcribe',
+    ], $overrides));
+}
+
+/**
+ * A subscriber on a plan that includes voice, with a WhatsApp account.
+ *
+ * @return array{0: User, 1: ChannelAccount}
+ */
+function voiceSubscriber(bool $withVoice = true, string $e164 = '+970599000001'): array
+{
+    $plan = billingPlan(['daily' => 100, 'monthly' => 1000, 'weight' => 1], [
+        'features' => [PlanFeature::Voice->value => $withVoice],
+    ]);
+
+    $user = billingSubscriber($plan);
+    $user->forceFill(['locale' => 'ar'])->save();
+
+    $account = ChannelAccount::factory()->for($user)->create([
+        'channel' => ChannelType::WhatsApp,
+        'external_identifier' => $e164,
+    ]);
+
+    return [$user->refresh(), $account];
+}
+
+/**
+ * A stored inbound voice-note message, exactly as ingestion writes one.
+ *
+ * @param  array<string, mixed>  $attrs
+ */
+function voiceNote(User $user, ChannelAccount $account, array $attrs = []): Message
+{
+    $conversation = Conversation::factory()->for($user)->create(['channel_account_id' => $account->id]);
+
+    return Message::factory()->for($user)->for($conversation)->create(array_merge([
+        'direction' => MessageDirection::Inbound,
+        'type' => MessageType::Audio,
+        'external_message_id' => 'wamid.'.str()->random(10),
+        'text_content' => null,
+        'media_path' => null,
+        'metadata' => ['provider' => 'whatsapp', 'voice' => true],
+        'processing_status' => MessageProcessingStatus::Queued,
+        'voice_media_id' => 'media-'.str()->random(8),
+        'voice_mime_type' => 'audio/ogg; codecs=opus',
+        'transcription_status' => TranscriptionStatus::Pending,
+        'transcription_attempts' => 0,
     ], $attrs));
 }

@@ -8,6 +8,7 @@ use App\Contracts\Ai\SupportsTranscription;
 use App\Data\Ai\Catalog\ResolvedRoute;
 use App\Data\Ai\TranscriptionRequest;
 use App\Data\Voice\TranscriptionOutcome;
+use App\Data\Voice\VoiceClaim;
 use App\Enums\AiOperation;
 use App\Enums\PlanFeature;
 use App\Enums\TranscriptionFailureReason;
@@ -73,7 +74,7 @@ class VoiceNoteTranscriber
     ) {}
 
     /**
-     * Run the pipeline once for this message.
+     * Claim this voice note and run the pipeline once.
      *
      * Returns what happened; it never throws for an ordinary refusal. A
      * RETRYABLE media failure is rethrown so the queue — not this service —
@@ -84,43 +85,67 @@ class VoiceNoteTranscriber
      */
     public function transcribe(int $messageId): TranscriptionOutcome
     {
-        $token = bin2hex(random_bytes(16));
-        $claimed = $this->claim($messageId, $token);
+        $claim = $this->claim($messageId);
 
-        if (is_string($claimed)) {
+        if (is_string($claim)) {
             // The budget was already spent and the claim step closed the row.
             // Reported as the terminal outcome it is, so the caller still tells
             // the subscriber something rather than going quiet.
-            return $claimed === 'attempts_exhausted'
+            return $claim === 'attempts_exhausted'
                 ? TranscriptionOutcome::failed(TranscriptionFailureReason::TranscriptionUnknown, providerRequested: true)
-                : TranscriptionOutcome::skipped($claimed);
+                : TranscriptionOutcome::skipped($claim);
+        }
+
+        return $this->transcribeUnderClaim($claim);
+    }
+
+    /**
+     * Do the work under a claim taken earlier.
+     *
+     * Separate from `claim()` on purpose: fencing is only meaningful if holding
+     * a claim and acting on it can come apart in time, which is exactly what
+     * happens when a worker stalls, its lease expires, and someone else takes
+     * over. Every step below re-proves the token before it does anything that
+     * cannot be undone.
+     *
+     * @throws MediaFetchException when the media could not be fetched and a retry may still work
+     */
+    public function transcribeUnderClaim(VoiceClaim $claim): TranscriptionOutcome
+    {
+        /** @var Message|null $message */
+        $message = Message::query()->with('user')->find($claim->messageId);
+
+        if ($message === null) {
+            return TranscriptionOutcome::skipped('not_a_voice_note');
         }
 
         try {
-            return $this->run($claimed, $token);
+            return $this->run($message, $claim->token);
         } catch (MediaFetchException $e) {
             throw $e;
         } catch (Throwable $e) {
             Log::error('sanad.voice.transcription_error', [
-                'message_id' => $messageId,
+                'message_id' => $claim->messageId,
                 'error' => SafeError::summarize($e),
             ]);
 
-            return $this->settle($claimed, $token, TranscriptionFailureReason::Internal, providerRequested: false);
+            return $this->settle($message, $claim->token, TranscriptionFailureReason::Internal, providerRequested: false);
         }
     }
 
     /**
      * Take exclusive ownership, or explain why not.
      *
-     * Returns the claimed message, or a short reason string. Everything that
-     * decides whether this voice note may be worked on at all is read INSIDE
-     * the row lock, so two workers arriving together cannot both conclude yes.
+     * Returns the claim, or a short reason string. Everything that decides
+     * whether this voice note may be worked on at all is read INSIDE the row
+     * lock, so two workers arriving together cannot both conclude yes.
      *
-     * @return Message|string
+     * @return VoiceClaim|string
      */
-    private function claim(int $messageId, string $token)
+    public function claim(int $messageId)
     {
+        $token = bin2hex(random_bytes(16));
+
         return DB::transaction(function () use ($messageId, $token) {
             /** @var Message|null $message */
             $message = Message::query()->whereKey($messageId)->lockForUpdate()->first();
@@ -171,7 +196,7 @@ class VoiceNoteTranscriber
                 'transcription_failure_reason' => null,
             ]);
 
-            return $message;
+            return new VoiceClaim($messageId, $token);
         });
     }
 

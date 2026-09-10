@@ -16,7 +16,8 @@ ProcessWhatsAppWebhook (Job)
    → يمرّ على كل entry[] / changes[] / value / messages[] / statuses[]
    → يتجاهل ما لا يخصّ Phone Number ID / WABA المهيّأين
    → الرسائل النصية → WhatsAppChannelAdapter::toInbound → MessageProcessor (نفس pipeline سَنَد)
-   → الرسائل غير النصية → acknowledged + تُسجّل unsupported، دون رد
+   → الرسائل الصوتية (audio) → تُخزَّن رسالةً حقيقية ثم TranscribeVoiceNote (docs/VOICE_NOTES.md)
+   → بقية الأنواع → acknowledged + تُسجّل unsupported، دون رد
    → statuses[] → تحديث حالة تسليم الرسالة الصادرة (monotonic)
 ```
 
@@ -121,7 +122,10 @@ php artisan horizon
 
 ## حدود Sprint 0D
 
-- **نصّ فقط.** الوسائط (صور/صوت/ملفات) تُقبل بـ200 وتُسجّل unsupported بدون رد.
+- **نصّ فقط** في هذا Sprint: الوسائط تُقبل بـ200 وتُسجّل unsupported بدون رد.
+  > **تجاوَزته مرحلة الصوت:** الرسائل الصوتية تُستقبَل وتُخزَّن ويُردّ عليها — بنصّها
+  > المُفرَّغ أو بسبب محدود. الصور والملفات ما تزال تُسجَّل unsupported.
+  > انظر `docs/VOICE_NOTES.md`.
 - **لا Templates**، لا إرسال استباقي.
 - الردّ يأتي من `PlaceholderAgentOrchestrator` (لا OpenAI بعد).
 - استقبال رسالة من رقم واتساب صالح غير معروف ⇒ **onboarding تلقائي**: يُنشأ مشترك
