@@ -80,6 +80,7 @@
 ### `reminders`
 - `user_id` → `users` (**cascade**) · `task_id?` → `tasks` (**nullOnDelete**) · `source_message_id?` → `messages` (**nullOnDelete**)
 - `title` · `remind_at` (UTC) · `timezone` · `channel` enum `ChannelType` · `status` enum `ReminderStatus` · `sent_at?` · `claim_token?` · `claimed_at?` · `dispatched_at?` · `attempts` (default 0) · `last_error?`
+- **سؤال متابعة (مرحلة المتابعة):** `follow_up_id?` → `follow_ups` (**nullOnDelete**) · `ask_index?` (1، 2، 3…) — مع **unique(`follow_up_id`,`ask_index`)** كهوية السؤال المنطقية، وCHECK على PostgreSQL أن الاثنين معًا `NULL` أو معًا مضبوطان. والعمودان `NULL` للتذكير المفرد ولمرّة السلسلة.
 - **المرّة من سلسلة (مرحلة التكرار):** `reminder_schedule_id?` → `reminder_schedules` (**cascade**) · `occurrence_key?` string(20) = الوقت المحلي الاسمي (`2026-09-11T09:00`) · `occurrence_local_at?` — مع **unique(`reminder_schedule_id`,`occurrence_key`)** وCHECK على PostgreSQL أن الاثنين معًا `NULL` أو معًا مضبوطان. والثلاثة `NULL` للتذكير المفرد، **فلم يتغيّر شيء له**.
 - **المرّة تذكير عاديّ، لا حالة داخل سلسلة**: `attempts` و`claim_token` و`dispatched_at` و`sent_at` و`last_error` كلها حقائق عن **تسليم واحد**، و`messages.reminder_id` فريد — فصفٌّ واحد يخدم عدّة تسليمات يعني عدّاد محاولات واحدًا ورسالة صادرة واحدة للسلسلة كلها. ولذلك لم يُلمَس المُوزِّع ولا الكانس ولا سياسة التسليم (ADR-0050).
 - **index (`status`,`remind_at`)** لخدمة الـScheduler في جلب التذكيرات المستحقة، + (`user_id`,`status`) + **(`status`,`claimed_at`)** لكنس المُعلَّق في `processing`.
@@ -96,6 +97,19 @@
 - **`materialised_through` مؤشّر وتحسين فقط**: يتقدّم في معاملة الإدراج ذاتها، فلا يسبق ما كُتب فعلًا؛ والسلطة تبقى `unique(reminder_schedule_id, occurrence_key)` على `reminders` مع `status`/`version`. والجولة تمشي دائمًا من «الآن» لا من المؤشّر، فلا يستطيع المؤشّر أن يتخطّى مرّة.
 - قيود CHECK على PostgreSQL: النمط والحالة من قائمتيهما · `(status='terminated') = (terminated_at IS NOT NULL)` · `local_time` بصيغة `HH:MM` · `day_of_month` بين 1 و31 · `ends_on >= starts_on`.
 - **لا تعديل في V1**: التغيير إنهاءُ سلسلة وإنشاء غيرها، فتبقى كل مرّة منسوبة إلى التعريف الذي أنتجها (ADR-0050).
+
+### `follow_ups`
+حلقة متابعة مفتوحة — **ولا شيء عن التسليم**: كل سؤال صفّ `reminders` عاديّ، فالمطالبة والمحاولات وحالة الإرسال حقائق عنه لا عن الحلقة.
+- `user_id` → `users` (**cascade**) · `source_message_id?` → `messages` (**nullOnDelete**) · `task_id?` → `tasks` (**nullOnDelete**)
+- `question` string(200) — **كلام المشترك**، لا بيانات وصفية: لا تقرؤه خدمة الاستعلام الإدارية أصلًا · `channel` · `timezone` · `status` enum `FollowUpStatus` · `max_asks` (لقطة عند الإنشاء) · `next_ask_at?` (UTC) · `resolved_by_message_id?` → `messages` (**nullOnDelete**) · `resolved_at?` · `terminated_at?` · `blocked_reason?` enum `FollowUpBlockReason` · `blocked_at?` · `version`
+- index: (`status`,`next_ask_at`) لجولة التوليد + (`user_id`,`status`) للسرد وللسقف ولفحص «هل هناك حلقة واحدة تنتظر جوابًا؟».
+- **لا عمود `asks_sent` ولا أي عدّاد**: ميزانية الأسئلة **مشتَقّة من حقيقة التسليم** — `count(*)` على صفوف الأسئلة التي حالتها `sent`. و`attempts` **ليست** حقيقةَ تسليم: المُوزِّع يزيدها في المعاملة المُثبَّتة **قبل** الطلب الشبكي، فـ`attempts = 1` قد تكون عاملًا مات قبل الإرسال ولم يُسأل معها أحدٌ شيئًا. فالمطالبة لا تستهلك، والمحاولة المُؤذَن بها لا تستهلك، والمرفوض قبل الإرسال لا يستهلك، والمنتهي بلا «أُرسل» لا يستهلك بل **يَحجِز** الحلقة — ولا عدّاد يمكن أن يُزاد مرّتين تحت التزامن (ADR-0052).
+- **لا عمود `expires_at`**: V1 بلا موعد نهائي وبلا حالة `expired`؛ الميزانية المحدودة هي قاعدة التوقّف الوحيدة، وعمودٌ لا يكتبه شيء وعدٌ لا يفي به المخطط.
+- **`next_ask_at` سلطةٌ هنا** بخلاف مؤشّر التكرار، لأن **المشترك** أعطاه: لا تُفتح حلقة بلا وقت قاله هو، ولا يوجد افتراض في الكود. و`NULL` تعني بالضبط «لا سؤال مجدول».
+- **`version` سياج**: الإغلاق والإلغاء يرفعانه تحت قفل الصفّ، فمُوَلِّدٌ قرأ الحلقة حيّةً قبل لحظة لا يستطيع إنشاء سؤال بعد إغلاقها.
+- `blocked` حالة **تشغيلية** لا نجاح ولا فشل: بلا قالب متابعة معتمَد والسؤال خارج نافذة الخدمة لا يُنشأ سؤال إطلاقًا، فلا تُستهلَك ميزانية ولا تتكرّر تسليمات فاشلة؛ والاستعادة أمر تشغيلي صريح (ADR-0053).
+- قيود CHECK على PostgreSQL: الحالة والسبب من قائمتيهما · `(status='blocked') = (blocked_reason IS NOT NULL AND blocked_at IS NOT NULL)` · الحالة النهائية ⇔ `terminated_at` · الحالة المُنجَزة ⇔ `resolved_at` · لا `next_ask_at` بعد الانتهاء · `max_asks >= 1`.
+- **ملاحظة على الحذف:** حذف صفّ حلقة مباشرةً يفشل على PostgreSQL (مثل `reminder_schedules`) لأن `nullOnDelete` يُفرِّغ `follow_up_id` ويترك `ask_index`، فيخالف قيد الاقتران. ولا أثر لذلك عمليًّا: **لا شيء في المنتج يحذف حلقة** — الإيقاف تغييرُ حالة (`cancelled`) يحفظ سجلّ ما سُئل — وحذف حساب المشترك يعمل لأن صفوف التذكيرات تُحذف بتتالي `user_id`.
 
 ### `memories`
 - `user_id` → `users` (**cascade**) · `source_message_id?` → `messages` (**nullOnDelete**)
@@ -260,7 +274,7 @@ User 1─* UsageEvent (nullable)   User 1─* AuditLog (nullable)
 
 | الجدول | عند حذف المستخدم |
 |--------|-------------------|
-| channel_accounts, conversations, messages, tasks, reminders, reminder_schedules, memories, expenses | **يُحذف** (cascade) |
+| channel_accounts, conversations, messages, tasks, reminders, reminder_schedules, follow_ups, memories, expenses | **يُحذف** (cascade) |
 | usage_events, audit_logs | **يبقى**، ويصبح `user_id = null` |
 | tasks/reminders/memories/expenses.`source_message_id` عند حذف الرسالة | يصبح `null` (السجل يبقى) |
 

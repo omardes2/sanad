@@ -33,6 +33,13 @@ final class ToolWriteTargets
         // Cancelling touches both: the definition is terminated and its own
         // pending occurrences are cancelled, in one transaction.
         'reminder_schedule.cancel@1' => ['reminder_schedules', 'reminders'],
+        // Opening a loop touches the DEFINITION only. The ask rows are written by
+        // the materialiser, which is not a tool and is not reachable from a model
+        // turn at all.
+        'follow_up.create@1' => ['follow_ups'],
+        // Resolving closes the loop and cancels the ask that is no longer needed.
+        'follow_up.resolve@1' => ['follow_ups', 'reminders'],
+        'follow_up.cancel@1' => ['follow_ups', 'reminders'],
     ];
 
     /** @return list<string> */

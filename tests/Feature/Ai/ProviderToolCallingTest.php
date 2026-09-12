@@ -111,6 +111,7 @@ it('offers only the tools the server decided to expose, translated for the provi
         'memory_read__v1', 'memory_read__v2', 'memory_write__v1', 'memory_forget__v1',
         'task_create__v1', 'task_list__v1', 'task_complete__v1', 'reminder_cancel__v1',
         'reminder_schedule_create__v1', 'reminder_schedule_list__v1', 'reminder_schedule_cancel__v1',
+        'follow_up_create__v1', 'follow_up_list__v1', 'follow_up_resolve__v1', 'follow_up_cancel__v1',
         'reminder_create__v2',
     ])
         // The frozen external-write contract is never described to a model.

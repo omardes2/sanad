@@ -208,9 +208,8 @@ it('serves the exact idempotency-key lookup from its unique index', function () 
 it('confirms this phase adds no migration at all', function () {
     $files = glob(database_path('migrations/*.php'));
 
-    // 66 is the count as of the recurring-reminders phase, which added exactly
-    // one. The admin surface itself still adds none: it reads existing columns
-    // and indexes only, and this assertion is what would catch it slipping one
-    // in.
-    expect($files)->toHaveCount(66);
+    // 67 is the count as of the follow-up phase, which added exactly one. The
+    // admin surface itself still adds none: it reads existing columns and indexes
+    // only, and this assertion is what would catch it slipping one in.
+    expect($files)->toHaveCount(67);
 });

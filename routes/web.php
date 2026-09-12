@@ -34,6 +34,7 @@ use App\Livewire\Dashboard\Finance\Reconciliation as FinanceReconciliation;
 use App\Livewire\Dashboard\Finance\ReconciliationScopeDetail as FinanceReconciliationScopeDetail;
 use App\Livewire\Dashboard\Finance\RefundDetail as FinanceRefundDetail;
 use App\Livewire\Dashboard\Finance\Refunds as FinanceRefunds;
+use App\Livewire\Dashboard\FollowUps;
 use App\Livewire\Dashboard\LaunchReadiness;
 use App\Livewire\Dashboard\Memory\Operations as MemoryOperations;
 use App\Livewire\Dashboard\Memory\SubscriberMemory;
@@ -86,6 +87,9 @@ Route::middleware(['auth', 'admin'])
         Route::get('/messages', Messages::class)->middleware('permission.legacy:messages.content.view')->name('dashboard.messages');
         Route::get('/tasks', Tasks::class)->middleware('permission.legacy:tasks.view')->name('dashboard.tasks');
         Route::get('/reminders', Reminders::class)->middleware('permission.legacy:reminders.view')->name('dashboard.reminders');
+        // Metadata only: the page's query service cannot select the question text,
+        // so this permission cannot reveal it.
+        Route::get('/follow-ups', FollowUps::class)->middleware('permission.legacy:follow_ups.view')->name('dashboard.follow_ups');
         Route::get('/reminders/{reminder}', ReminderDetail::class)->middleware('permission.legacy:reminders.view')->whereNumber('reminder')->name('dashboard.reminders.show');
         Route::get('/expenses', Expenses::class)->middleware('permission.legacy:expenses.view')->name('dashboard.expenses');
         Route::get('/whatsapp', WhatsAppStatus::class)->middleware('permission.legacy:whatsapp.status.view')->name('dashboard.whatsapp');

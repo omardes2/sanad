@@ -23,7 +23,7 @@ uses(RefreshDatabase::class);
 it('is the 61st and 62nd migration, creates both tables with their identity and indexes, and rolls back and forward cleanly', function () {
     $files = glob(database_path('migrations/*.php'));
 
-    expect($files)->toHaveCount(66)
+    expect($files)->toHaveCount(67)
         ->and(basename($files[60]))->toBe('2026_09_08_000101_create_tool_invocations_table.php')
         ->and(basename($files[61]))->toBe('2026_09_08_000102_create_tool_invocation_events_table.php')
         ->and(Schema::hasTable('tool_invocations'))->toBeTrue()
@@ -63,7 +63,7 @@ it('is the 61st and 62nd migration, creates both tables with their identity and 
         ->and(DB::table('tool_invocation_events')->where('tool_invocation_id', $row->id)->count())->toBe(4);
 
     // Three steps: the reminder-delivery migration sits on top of the two F2 ones.
-    Artisan::call('migrate:rollback', ['--step' => 6, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 7, '--force' => true]);
 
     expect(Schema::hasTable('tool_invocations'))->toBeFalse()
         ->and(Schema::hasTable('tool_invocation_events'))->toBeFalse()
@@ -81,7 +81,7 @@ it('is the 61st and 62nd migration, creates both tables with their identity and 
         ->and(Schema::hasIndex('tool_invocations', 'tool_invocations_idempotency_key_unique'))->toBeTrue()
         ->and(DB::table('tool_invocations')->count())->toBe(0)
         ->and(DB::table('tool_invocation_events')->count())->toBe(0)
-        ->and(DB::table('migrations')->count())->toBe(66);
+        ->and(DB::table('migrations')->count())->toBe(67);
 
     // The same call is claimable again after the round trip.
     expect(f2Executor()->call(f2Message($subscriber), 'memory.read@1', ['query' => 'coffee'])->invocation->status->value)->toBe('succeeded');

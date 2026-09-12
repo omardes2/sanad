@@ -29,6 +29,8 @@ class Reminder extends Model
         'reminder_schedule_id',
         'occurrence_key',
         'occurrence_local_at',
+        'follow_up_id',
+        'ask_index',
         'title',
         'remind_at',
         'timezone',
@@ -56,6 +58,7 @@ class Reminder extends Model
             'channel' => ChannelType::class,
             'status' => ReminderStatus::class,
             'attempts' => 'integer',
+            'ask_index' => 'integer',
         ];
     }
 
@@ -94,6 +97,30 @@ class Reminder extends Model
     public function isOccurrence(): bool
     {
         return $this->reminder_schedule_id !== null;
+    }
+
+    /**
+     * The follow-up loop this row is ONE ASK of, or null for an ordinary
+     * reminder.
+     *
+     * @return BelongsTo<FollowUp, $this>
+     */
+    public function followUp(): BelongsTo
+    {
+        return $this->belongsTo(FollowUp::class, 'follow_up_id');
+    }
+
+    /**
+     * Is this row one ask of a follow-up loop?
+     *
+     * As with `isOccurrence()`, nothing in the delivery path asks this — an ask
+     * is an ordinary reminder and the dispatcher, sweeper and policy treat it as
+     * one. The one exception is which approved WhatsApp TEMPLATE applies, because
+     * a question is not a reminder and Meta approves templates one at a time.
+     */
+    public function isFollowUpAsk(): bool
+    {
+        return $this->follow_up_id !== null;
     }
 
     /** @return BelongsTo<Message, $this> */

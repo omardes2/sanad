@@ -35,7 +35,7 @@ it('back-fills derived ledger columns for rows that pre-date the ledger and stay
     // again for the voice-transcription columns, and +1 for the recurring-reminder
     // schedules. The boundary migration itself is unchanged; only the distance to
     // it grew.
-    Artisan::call('migrate:rollback', ['--step' => 46, '--force' => true]);
+    Artisan::call('migrate:rollback', ['--step' => 47, '--force' => true]);
 
     expect(Schema::hasTable('tool_consents'))->toBeFalse()
         ->and(Schema::hasTable('finance_period_close_inputs'))->toBeFalse()

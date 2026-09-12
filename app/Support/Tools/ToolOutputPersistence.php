@@ -50,7 +50,7 @@ final class ToolOutputPersistence
      *
      * @var list<string>
      */
-    private const REHYDRATABLE = ['memory.read@2', 'reminder_schedule.list@1'];
+    private const REHYDRATABLE = ['memory.read@2', 'reminder_schedule.list@1', 'follow_up.list@1'];
 
     /**
      * @var array<string, list<string>>
@@ -68,6 +68,9 @@ final class ToolOutputPersistence
          * titles, and a listing is not the record of what was then acted on.
          */
         'reminder_schedule.list@1' => ['truncated'],
+        // The questions are the subscriber's own words, so the row keeps the
+        // SHAPE and the content is re-derived on replay.
+        'follow_up.list@1' => ['truncated'],
     ];
 
     /** Does this tool store something other than its full declared output? */

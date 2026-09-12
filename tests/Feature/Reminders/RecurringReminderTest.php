@@ -26,6 +26,19 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    /*
+     * TIME IS FROZEN AT A FIXED LOCAL HOUR, and that is not incidental.
+     *
+     * A daily series at 09:00 over a 30-day horizon produces 30 occurrences when
+     * today's 09:00 has already passed and 31 when it has not — so a count
+     * asserted against the wall clock is a test that passes in the evening and
+     * fails after local midnight. (It does: Asia/Hebron is UTC+3 in September, so
+     * a CI run at 21:10 UTC is already tomorrow for the subscriber.) Freezing at
+     * 12:00 local makes every count below a fact about the horizon rather than
+     * about the hour the suite happened to run.
+     */
+    test()->travelTo(CarbonImmutable::parse('2026-09-15 12:00', 'Asia/Hebron'));
+
     whatsappConfigure();
     config([
         'reminders.enabled' => true,

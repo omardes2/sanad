@@ -52,6 +52,23 @@ enum ToolCapability: string
     case RemindersRead = 'reminders.read';
 
     /**
+     * Creating and ending a follow-up loop (Phase H3) — a LICENCE TO ASK LATER,
+     * which is why it is not `reminders.write`. A reminder is a message the
+     * subscriber asked for at a time they chose; a follow-up is Sanad returning
+     * to an unanswered question of its own accord, up to a bounded number of
+     * times. A subscriber may well want the first without the second.
+     */
+    case FollowUpsWrite = 'follow_ups.write';
+
+    /**
+     * Reading the subscriber's own open follow-ups, so «شو الأشياء اللي لسا
+     * بتتابع معي عليها؟» can be answered and «وقف متابعة البنك» can name a real
+     * loop instead of an invented id. Narrower than the write capability, and
+     * split from it for the same reason memory splits read from write.
+     */
+    case FollowUpsRead = 'follow_ups.read';
+
+    /**
      * The only operator permissions a capability may ever map to (Phase F1:
      * administering a subscriber's consent is subscriber management). A
      * mapping outside this list fails the registry contract test.
@@ -65,7 +82,8 @@ enum ToolCapability: string
     {
         return match ($this) {
             self::MemoryRead, self::MemoryWrite, self::TasksWrite,
-            self::RemindersWrite, self::RemindersRead => Permission::SubscribersManage,
+            self::RemindersWrite, self::RemindersRead,
+            self::FollowUpsWrite, self::FollowUpsRead => Permission::SubscribersManage,
         };
     }
 
@@ -77,6 +95,8 @@ enum ToolCapability: string
             self::TasksWrite => 'إنشاء المهام وتعديلها',
             self::RemindersWrite => 'إنشاء التذكيرات وتعديلها',
             self::RemindersRead => 'قراءة تذكيرات المشترك المتكرِّرة',
+            self::FollowUpsWrite => 'المتابعة حتى الإنجاز',
+            self::FollowUpsRead => 'قراءة متابعات المشترك المفتوحة',
         };
     }
 

@@ -53,6 +53,7 @@ use App\Data\Ai\TranscriptionRequest;
 use App\Data\Ai\TranscriptionResult;
 use App\Data\InboundMessageData;
 use App\Enums\AiOperation;
+use App\Enums\ChannelAccountStatus;
 use App\Enums\ChannelType;
 use App\Enums\CostSource;
 use App\Enums\MessageDirection;
@@ -65,6 +66,7 @@ use App\Enums\WebhookEventStatus;
 use App\Jobs\ProcessInboundMessage;
 use App\Jobs\ProcessWhatsAppWebhook;
 use App\Models\ChannelAccount;
+use App\Models\FollowUp;
 use App\Models\Plan;
 use App\Models\Reminder;
 use App\Models\ReminderSchedule;
@@ -74,6 +76,8 @@ use App\Models\UsageEvent;
 use App\Models\User;
 use App\Models\WebhookEvent;
 use App\Services\Ai\AiManager;
+use App\Services\FollowUps\FollowUpAskMaterialiser;
+use App\Services\FollowUps\FollowUpService;
 use App\Services\Rbac\RbacSynchronizer;
 use App\Services\Reminders\ReminderMaterialiser;
 use App\Services\Reminders\ReminderScheduleService;
@@ -1115,6 +1119,7 @@ function f2Cleanup(User $subscriber): void
 
 // ---- Write tools (Phase F3-V1) ---------------------------------------------------------
 
+use App\Enums\ReminderStatus;
 use App\Enums\ToolCapability;
 use App\Enums\ToolConsentReason;
 use App\Enums\ToolConsentStatus;
@@ -1506,4 +1511,157 @@ function recOccurrenceKeys(ReminderSchedule $schedule): array
         ->orderBy('remind_at')
         ->pluck('occurrence_key')
         ->all();
+}
+
+// ---- Follow-Up Until Done (Phase H3) ---------------------------------------
+
+/**
+ * Deterministic follow-up configuration. The template is READY by default so a
+ * test is about the loop rather than about the external dependency; the tests
+ * that are about the dependency turn it off explicitly.
+ *
+ * @param  array<string, mixed>  $overrides
+ */
+function fuConfigure(array $overrides = []): void
+{
+    config(array_merge([
+        'follow_ups.enabled' => true,
+        'follow_ups.max_open_per_subscriber' => 5,
+        'follow_ups.max_asks_per_follow_up' => 3,
+        'follow_ups.min_ask_interval_hours' => 24,
+        'follow_ups.answer_window_hours' => 72,
+        'follow_ups.list_limit' => 10,
+        'follow_ups.whatsapp.template.ready' => true,
+        'follow_ups.whatsapp.template.name' => 'sanad_follow_up_v1',
+        'follow_ups.whatsapp.template.language' => 'ar',
+        'reminders.enabled' => true,
+        'reminders.max_lateness_minutes' => 600,
+        'reminders.whatsapp.free_form_window_hours' => 24,
+        'whatsapp.enabled' => true,
+        'whatsapp.access_token' => 'TEST_ACCESS_TOKEN',
+        'whatsapp.phone_number_id' => 'PNID_123',
+        'whatsapp.graph_base_url' => 'https://graph.facebook.com',
+        'whatsapp.graph_version' => 'v21.0',
+    ], $overrides));
+}
+
+/**
+ * One subscriber entitled to follow-ups, with a WhatsApp account and a
+ * conversation.
+ *
+ * @return array{0: User, 1: ChannelAccount, 2: Conversation}
+ */
+function fuSubscriber(bool $entitled = true, string $timezone = 'Asia/Hebron'): array
+{
+    $plan = Plan::create([
+        'name' => 'Follow-Up Test',
+        'slug' => 'follow-up-test-'.bin2hex(random_bytes(5)),
+        'price' => 0,
+        'currency' => 'ILS',
+        'billing_period' => 'monthly',
+        'trial_days' => 0,
+        'limits' => ['ai_reply' => ['daily' => 1000, 'monthly' => 10000, 'weight' => 1]],
+        // The entitlement is its OWN feature: a plan with reminders but without
+        // this one must not be able to open a loop.
+        'features' => [PlanFeature::FollowUp->value => $entitled, PlanFeature::Reminders->value => true],
+        'is_active' => true,
+        'is_default' => false,
+        'sort_order' => 0,
+    ]);
+
+    $user = User::factory()->create(['is_admin' => false, 'timezone' => $timezone, 'locale' => 'ar']);
+
+    Subscription::create([
+        'subscriber_id' => $user->id,
+        'plan_id' => $plan->id,
+        'status' => SubscriptionStatus::Active,
+        'started_at' => now(),
+        'current_period_start' => now(),
+        'current_period_end' => now()->addMonth(),
+    ]);
+
+    $account = ChannelAccount::factory()->for($user)->create([
+        'channel' => ChannelType::WhatsApp,
+        'external_identifier' => '+97059'.random_int(1000000, 9999999),
+        'status' => ChannelAccountStatus::Active,
+    ]);
+
+    $conversation = Conversation::factory()->for($user)->create(['channel_account_id' => $account->id]);
+
+    return [$user->refresh(), $account, $conversation];
+}
+
+/** One inbound message — the only thing that is ever authority in this domain. */
+function fuInbound(User $user, Conversation $conversation, string $text, ?CarbonImmutable $at = null): Message
+{
+    return Message::factory()->for($user)->for($conversation)->create([
+        'direction' => MessageDirection::Inbound,
+        'type' => MessageType::Text,
+        'text_content' => $text,
+        'created_at' => $at ?? CarbonImmutable::now(),
+    ]);
+}
+
+/**
+ * Open one loop through the DOMAIN SERVICE — the same path the tool takes, so a
+ * test never exercises a shape the tool could not produce.
+ *
+ * @param  array<string, mixed>  $input
+ */
+function fuCreate(User $user, Conversation $conversation, array $input = [], ?Message $message = null): FollowUp
+{
+    $message ??= fuInbound($user, $conversation, 'تابع معي بكرا الساعة ٩ إذا دفعت الفاتورة');
+
+    $created = app(FollowUpService::class)->create(
+        $user,
+        array_merge([
+            'question' => 'دفعت فاتورة الكهربا؟',
+            'first_ask_at' => CarbonImmutable::now('UTC')->addHours(20)->format('Y-m-d\TH:i'),
+        ], $input),
+        ChannelType::WhatsApp,
+        $message,
+    );
+
+    return FollowUp::query()->findOrFail($created['follow_up_id']);
+}
+
+/** Advance one loop by at most one step, as the scheduled command would. */
+function fuAdvance(FollowUp $followUp): string
+{
+    return app(FollowUpAskMaterialiser::class)->advance($followUp);
+}
+
+/** The asks of one loop, in order. */
+function fuAsks(FollowUp $followUp): array
+{
+    return Reminder::query()
+        ->where('follow_up_id', $followUp->getKey())
+        ->orderBy('ask_index')
+        ->get()
+        ->all();
+}
+
+/**
+ * A loop that has already asked once and is waiting for the answer — the state
+ * most resolution tests need to start from.
+ */
+function fuAwaiting(User $user, Conversation $conversation, string $question = 'دفعت فاتورة الكهربا؟'): FollowUp
+{
+    $followUp = fuCreate($user, $conversation, ['question' => $question]);
+    $followUp->forceFill(['next_ask_at' => CarbonImmutable::now('UTC')->subMinute()])->save();
+
+    fuAdvance($followUp->fresh());
+
+    $asks = fuAsks($followUp);
+    $ask = end($asks);
+    $ask->forceFill([
+        'attempts' => 1,
+        'dispatched_at' => CarbonImmutable::now()->subHours(2),
+        'sent_at' => CarbonImmutable::now()->subHours(2),
+        'status' => ReminderStatus::Sent->value,
+    ])->save();
+
+    fuAdvance($followUp->fresh());
+
+    return $followUp->fresh();
 }
